@@ -483,7 +483,7 @@ protected:
         if (input.mode == QUGATE_MODE_SPLIT)
         {
             locals.totalRatio = 0;
-            for (locals.i = 0; locals.i < input.recipientCount; locals.i += 1)
+            for (locals.i = 0; locals.i < input.recipientCount; locals.i++)
             {
                 if (input.ratios.get(locals.i) > QUGATE_MAX_RATIO)
                 {
@@ -539,7 +539,7 @@ protected:
         locals.newGate.threshold = input.threshold;
         locals.newGate.roundRobinIndex = 0;
 
-        for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i += 1)
+        for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i++)
         {
             if (locals.i < input.recipientCount)
             {
@@ -553,7 +553,7 @@ protected:
             }
         }
 
-        for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i += 1)
+        for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i++)
         {
             if (locals.i < input.allowedSenderCount)
             {
@@ -609,13 +609,13 @@ protected:
         locals.gate = state._gates.get(input.gateIdx);
 
         locals.totalRatio = 0;
-        for (locals.i = 0; locals.i < locals.gate.recipientCount; locals.i += 1)
+        for (locals.i = 0; locals.i < locals.gate.recipientCount; locals.i++)
         {
             locals.totalRatio += locals.gate.ratios.get(locals.i);
         }
 
         locals.distributed = 0;
-        for (locals.i = 0; locals.i < locals.gate.recipientCount; locals.i += 1)
+        for (locals.i = 0; locals.i < locals.gate.recipientCount; locals.i++)
         {
             if (locals.i == locals.gate.recipientCount - 1)
             {
@@ -688,7 +688,7 @@ protected:
         output.forwarded = 0;
 
         locals.senderAllowed = 0;
-        for (locals.i = 0; locals.i < locals.gate.allowedSenderCount; locals.i += 1)
+        for (locals.i = 0; locals.i < locals.gate.allowedSenderCount; locals.i++)
         {
             if (locals.senderAllowed == 0 && locals.gate.allowedSenders.get(locals.i) == qpi.invocator())
             {
@@ -964,7 +964,7 @@ protected:
         if (locals.gate.mode == QUGATE_MODE_SPLIT)
         {
             locals.totalRatio = 0;
-            for (locals.i = 0; locals.i < input.recipientCount; locals.i += 1)
+            for (locals.i = 0; locals.i < input.recipientCount; locals.i++)
             {
                 if (input.ratios.get(locals.i) > QUGATE_MAX_RATIO)
                 {
@@ -1008,7 +1008,7 @@ protected:
         locals.gate.allowedSenderCount = input.allowedSenderCount;
 
         // Use locals.i, zero stale slots
-        for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i += 1)
+        for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i++)
         {
             if (locals.i < input.recipientCount)
             {
@@ -1065,7 +1065,7 @@ protected:
         output.createdEpoch = locals.gate.createdEpoch;
         output.lastActivityEpoch = locals.gate.lastActivityEpoch;  //
 
-        for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i += 1)
+        for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i++)
         {
             output.recipients.set(locals.i, locals.gate.recipients.get(locals.i));
             output.ratios.set(locals.i, locals.gate.ratios.get(locals.i));
@@ -1082,7 +1082,7 @@ protected:
     PUBLIC_FUNCTION_WITH_LOCALS(getGatesByOwner)
     {
         output.count = 0;
-        for (locals.i = 0; locals.i < state._gateCount && output.count < 16; locals.i += 1)
+        for (locals.i = 0; locals.i < state._gateCount && output.count < 16; locals.i++)
         {
             if (state._gates.get(locals.i).owner == input.owner)
             {
@@ -1095,7 +1095,7 @@ protected:
     // Batch gate query — fetch up to 32 gates in one call
     PUBLIC_FUNCTION_WITH_LOCALS(getGateBatch)
     {
-        for (locals.i = 0; locals.i < 32; locals.i += 1)
+        for (locals.i = 0; locals.i < 32; locals.i++)
         {
             if (input.gateIds.get(locals.i) == 0 || input.gateIds.get(locals.i) > state._gateCount)
             {
@@ -1110,7 +1110,7 @@ protected:
                 locals.entry.threshold = 0;
                 locals.entry.createdEpoch = 0;
                 locals.entry.lastActivityEpoch = 0;
-                for (locals.j = 0; locals.j < QUGATE_MAX_RECIPIENTS; locals.j += 1)
+                for (locals.j = 0; locals.j < QUGATE_MAX_RECIPIENTS; locals.j++)
                 {
                     locals.entry.recipients.set(locals.j, id::zero());
                     locals.entry.ratios.set(locals.j, 0);
@@ -1132,7 +1132,7 @@ protected:
                 locals.entry.createdEpoch = locals.gate.createdEpoch;
                 locals.entry.lastActivityEpoch = locals.gate.lastActivityEpoch;
 
-                for (locals.j = 0; locals.j < QUGATE_MAX_RECIPIENTS; locals.j += 1)
+                for (locals.j = 0; locals.j < QUGATE_MAX_RECIPIENTS; locals.j++)
                 {
                     locals.entry.recipients.set(locals.j, locals.gate.recipients.get(locals.j));
                     locals.entry.ratios.set(locals.j, locals.gate.ratios.get(locals.j));
@@ -1189,7 +1189,7 @@ protected:
     END_EPOCH_WITH_LOCALS()
     {
         // Expire inactive gates
-        for (locals.i = 0; locals.i < state._gateCount; locals.i += 1)
+        for (locals.i = 0; locals.i < state._gateCount; locals.i++)
         {
             locals.gate = state._gates.get(locals.i);
 
