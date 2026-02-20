@@ -15,9 +15,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_KEY = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_KEY = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
@@ -28,8 +28,8 @@ def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
     return r.stdout + r.stderr
 
-def get_identity(seed):
-    out = cli("-seed", seed, "-showkeys")
+def get_identity(key):
+    out = cli("-seed", key, "-showkeys")
     for line in out.splitlines():
         if "Identity:" in line:
             return line.split("Identity:")[1].strip()
@@ -127,9 +127,9 @@ def build_update_gate(gate_id, recipients_pk, ratios, threshold=0, allowed_sende
     assert len(data) == 608, f"Expected 608 bytes, got {len(data)}"
     return bytes(data)
 
-def send_contract_tx(seed, input_type, amount, input_data):
+def send_contract_tx(key, input_type, amount, input_data):
     hex_data = input_data.hex()
-    return cli("-seed", seed, "-sendcustomtransaction",
+    return cli("-seed", key, "-sendcustomtransaction",
                CONTRACT_ID, str(input_type), str(amount),
                str(len(input_data)), hex_data)
 
@@ -160,9 +160,9 @@ print()
 tick = get_tick()
 print(f"Node up at tick {tick}")
 
-ADDR_A = get_identity(ADDR_A_SEED)
-ADDR_B = get_identity(ADDR_B_SEED)
-ADDR_C = get_identity(ADDR_C_SEED)
+ADDR_A = get_identity(ADDR_A_KEY)
+ADDR_B = get_identity(ADDR_B_KEY)
+ADDR_C = get_identity(ADDR_C_KEY)
 PK_A = get_pubkey_from_identity(ADDR_A)
 PK_B = get_pubkey_from_identity(ADDR_B)
 PK_C = get_pubkey_from_identity(ADDR_C)
@@ -173,7 +173,7 @@ print("STEP 1: Create SPLIT gate (60/40 → Address B, Address C)")
 print(f"{'='*60}")
 
 create_data = build_create_gate(0, [PK_B, PK_C], [60, 40])
-out = send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, create_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, create_data)
 print(f"  Creating gate with ratios [60, 40]...")
 wait_ticks(15)
 
@@ -192,7 +192,7 @@ bal1_before = get_balance(ADDR_B)
 bal2_before = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_id)
-out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, send_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 10000, send_data)
 print(f"  Sent 10,000 QU...")
 wait_ticks(15)
 
@@ -211,7 +211,7 @@ print("STEP 3: UPDATE gate ratios to 20/80")
 print(f"{'='*60}")
 
 update_data = build_update_gate(gate_id, [PK_B, PK_C], [20, 80])
-out = send_contract_tx(ADDR_A_SEED, PROC_UPDATE_GATE, 0, update_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_UPDATE_GATE, 0, update_data)
 print(f"  Updating ratios from [60,40] to [20,80]...")
 wait_ticks(15)
 
@@ -231,7 +231,7 @@ print(f"{'='*60}")
 bal1_before = get_balance(ADDR_B)
 bal2_before = get_balance(ADDR_C)
 
-out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, send_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 10000, send_data)
 print(f"  Sent 10,000 QU...")
 wait_ticks(15)
 
@@ -259,7 +259,7 @@ print(f"{'='*60}")
 
 gate_before = query_gate(gate_id)
 update_data2 = build_update_gate(gate_id, [PK_B, PK_C], [99, 1])
-out = send_contract_tx(ADDR_C_SEED, PROC_UPDATE_GATE, 0, update_data2)
+out = send_contract_tx(ADDR_C_KEY, PROC_UPDATE_GATE, 0, update_data2)
 print(f"  Address C (non-owner) attempting to update ratios to [99,1]...")
 wait_ticks(15)
 
@@ -276,7 +276,7 @@ print("STEP 6: Update ratios again to 50/50")
 print(f"{'='*60}")
 
 update_data3 = build_update_gate(gate_id, [PK_B, PK_C], [50, 50])
-out = send_contract_tx(ADDR_A_SEED, PROC_UPDATE_GATE, 0, update_data3)
+out = send_contract_tx(ADDR_A_KEY, PROC_UPDATE_GATE, 0, update_data3)
 print(f"  Updating ratios to [50,50]...")
 wait_ticks(15)
 
@@ -295,7 +295,7 @@ print(f"{'='*60}")
 bal1_before = get_balance(ADDR_B)
 bal2_before = get_balance(ADDR_C)
 
-out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, send_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 10000, send_data)
 print(f"  Sent 10,000 QU...")
 wait_ticks(15)
 
@@ -316,7 +316,7 @@ print(f"\n{'='*60}")
 print("STEP 8: Close gate")
 print(f"{'='*60}")
 
-out = send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id))
+out = send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id))
 print(f"  Closing gate...")
 wait_ticks(15)
 

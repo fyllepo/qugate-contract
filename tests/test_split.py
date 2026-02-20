@@ -13,9 +13,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_KEY = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_KEY = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 # Input types
 PROC_CREATE_GATE = 1
@@ -26,8 +26,8 @@ def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
     return r.stdout + r.stderr
 
-def get_identity(seed):
-    out = cli("-seed", seed, "-showkeys")
+def get_identity(key):
+    out = cli("-seed", key, "-showkeys")
     for line in out.splitlines():
         if "Identity:" in line:
             return line.split("Identity:")[1].strip()
@@ -130,10 +130,10 @@ def build_send_to_gate(gate_id):
 def build_close_gate(gate_id):
     return struct.pack('<Q', gate_id)
 
-def send_contract_tx(seed, input_type, amount, input_data):
+def send_contract_tx(key, input_type, amount, input_data):
     """Send a transaction to the QuGate contract using qubic-cli"""
     hex_data = input_data.hex()
-    out = cli("-seed", seed, "-sendcustomtransaction",
+    out = cli("-seed", key, "-sendcustomtransaction",
               CONTRACT_ID, str(input_type), str(amount),
               str(len(input_data)), hex_data)
     return out
@@ -184,8 +184,8 @@ def restart_node():
     raise Exception("Failed to restart node")
 
 def print_balances():
-    for name, seed in [("Address A", ADDR_A_SEED), ("Address B", ADDR_B_SEED), ("Address C", ADDR_C_SEED)]:
-        identity = get_identity(seed)
+    for name, key in [("Address A", ADDR_A_KEY), ("Address B", ADDR_B_KEY), ("Address C", ADDR_C_KEY)]:
+        identity = get_identity(key)
         bal = get_balance(identity)
         print(f"    {name} ({identity[:12]}...): {bal:,} QU")
 
@@ -206,15 +206,15 @@ except:
     sys.exit(1)
 
 # Get identities and pubkeys
-ADDR_A = get_identity(ADDR_A_SEED)
-ADDR_B = get_identity(ADDR_B_SEED)
-ADDR_C = get_identity(ADDR_C_SEED)
+ADDR_A = get_identity(ADDR_A_KEY)
+ADDR_B = get_identity(ADDR_B_KEY)
+ADDR_C = get_identity(ADDR_C_KEY)
 PK_B = get_pubkey_from_identity(ADDR_B)
 PK_C = get_pubkey_from_identity(ADDR_C)
 
-print(f"Seed 0: {ADDR_A}")
-print(f"Seed 1: {ADDR_B}")
-print(f"Seed 2: {ADDR_C}")
+print(f"Address A: {ADDR_A}")
+print(f"Address B: {ADDR_B}")
+print(f"Address C: {ADDR_C}")
 print(f"Contract: {CONTRACT_ID}")
 
 # Initial state
@@ -233,7 +233,7 @@ print("="*50)
 input_data = build_create_gate(mode=0, recipients_pk=[PK_B, PK_C], ratios=[60, 40])
 print(f"  Input size: {len(input_data)} bytes")
 print(f"  Sending createGate tx (1000 QU fee)...")
-out = send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, input_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, input_data)
 print(f"  CLI: {out.strip()}")
 
 wait_ticks(15)
@@ -266,7 +266,7 @@ print(f"  Address C before: {bal_before_2:,} QU")
 
 input_data = build_send_to_gate(SPLIT_GATE_ID)
 print(f"  Sending 10,000 QU to gate #{SPLIT_GATE_ID}...")
-out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, input_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 10000, input_data)
 print(f"  CLI: {out.strip()}")
 
 wait_ticks(15)
@@ -300,7 +300,7 @@ bal_before_2 = get_balance(ADDR_C)
 
 input_data = build_send_to_gate(SPLIT_GATE_ID)
 print(f"  Sending 50,000 QU...")
-out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 50000, input_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 50000, input_data)
 print(f"  CLI: {out.strip()}")
 
 wait_ticks(15)
@@ -329,7 +329,7 @@ print("="*50)
 
 input_data = build_close_gate(SPLIT_GATE_ID)
 print(f"  Sending closeGate tx...")
-out = send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, input_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, input_data)
 print(f"  CLI: {out.strip()}")
 
 wait_ticks(15)

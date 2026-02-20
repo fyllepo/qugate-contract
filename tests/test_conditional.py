@@ -9,9 +9,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_KEY = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_KEY = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
@@ -22,8 +22,8 @@ def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
     return r.stdout + r.stderr
 
-def get_identity(seed):
-    out = cli("-seed", seed, "-showkeys")
+def get_identity(key):
+    out = cli("-seed", key, "-showkeys")
     for line in out.splitlines():
         if "Identity:" in line:
             return line.split("Identity:")[1].strip()
@@ -94,9 +94,9 @@ def build_create_gate(mode, recipients_pk, ratios, threshold=0, allowed_senders=
     data += struct.pack('<B', len(allowed_senders) if allowed_senders else 0)
     return bytes(data)
 
-def send_contract_tx(seed, input_type, amount, input_data):
+def send_contract_tx(key, input_type, amount, input_data):
     hex_data = input_data.hex()
-    return cli("-seed", seed, "-sendcustomtransaction",
+    return cli("-seed", key, "-sendcustomtransaction",
               CONTRACT_ID, str(input_type), str(amount),
               str(len(input_data)), hex_data)
 
@@ -123,9 +123,9 @@ print("╚═══════════════════════�
 tick = get_tick()
 print(f"Node up at tick {tick}\n")
 
-ADDR_A = get_identity(ADDR_A_SEED)
-ADDR_B = get_identity(ADDR_B_SEED)
-ADDR_C = get_identity(ADDR_C_SEED)
+ADDR_A = get_identity(ADDR_A_KEY)
+ADDR_B = get_identity(ADDR_B_KEY)
+ADDR_C = get_identity(ADDR_C_KEY)
 PK_A = get_pubkey_from_identity(ADDR_A)
 PK_B = get_pubkey_from_identity(ADDR_B)
 PK_C = get_pubkey_from_identity(ADDR_C)
@@ -145,7 +145,7 @@ input_data = build_create_gate(
     allowed_senders=[PK_A]
 )
 print(f"  Sending createGate tx (1000 QU fee)...")
-out = send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, input_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line:
         print(f"  {line.strip()}")
@@ -175,7 +175,7 @@ print(f"  Address A before: {bal0_before:,} QU")
 print(f"  Address B before: {bal1_before:,} QU")
 
 input_data = struct.pack('<Q', COND_GATE)
-out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, input_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 10000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line:
         print(f"  {line.strip()}")
@@ -206,7 +206,7 @@ print(f"  Address C before: {bal2_before:,} QU")
 print(f"  Address B before: {bal1_before2:,} QU")
 
 input_data = struct.pack('<Q', COND_GATE)
-out = send_contract_tx(ADDR_C_SEED, PROC_SEND_TO_GATE, 10000, input_data)
+out = send_contract_tx(ADDR_C_KEY, PROC_SEND_TO_GATE, 10000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line:
         print(f"  {line.strip()}")
@@ -241,7 +241,7 @@ print("="*50)
 bal1_before3 = get_balance(ADDR_B)
 
 input_data = struct.pack('<Q', COND_GATE)
-out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 5000, input_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 5000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line:
         print(f"  {line.strip()}")
@@ -260,7 +260,7 @@ if gain1_3 == 5000:
 # Close gate
 print("\n  Closing gate...")
 input_data = struct.pack('<Q', COND_GATE)
-send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, input_data)
+send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, input_data)
 wait_ticks(15)
 gate = query_gate(COND_GATE)
 if not gate['active']:

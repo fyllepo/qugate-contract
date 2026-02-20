@@ -2,7 +2,7 @@
 """
 QuGate V2 — Multi-Sender Convergence Test
 
-3 different seeds all send to the same SPLIT gate.
+3 different addresses all send to the same SPLIT gate.
 Verifies correct routing regardless of sender identity.
 """
 import os, shutil
@@ -14,9 +14,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_KEY = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_KEY = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
@@ -26,8 +26,8 @@ def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
     return r.stdout + r.stderr
 
-def get_identity(seed):
-    out = cli("-seed", seed, "-showkeys")
+def get_identity(key):
+    out = cli("-seed", key, "-showkeys")
     for line in out.splitlines():
         if "Identity:" in line:
             return line.split("Identity:")[1].strip()
@@ -98,9 +98,9 @@ def build_create_gate(mode, recipients_pk, ratios, threshold=0, allowed_senders=
     data += struct.pack('<B', len(allowed_senders) if allowed_senders else 0)
     return bytes(data)
 
-def send_contract_tx(seed, input_type, amount, input_data):
+def send_contract_tx(key, input_type, amount, input_data):
     hex_data = input_data.hex()
-    return cli("-seed", seed, "-sendcustomtransaction",
+    return cli("-seed", key, "-sendcustomtransaction",
                CONTRACT_ID, str(input_type), str(amount),
                str(len(input_data)), hex_data)
 
@@ -132,14 +132,14 @@ print()
 tick = get_tick()
 print(f"Node up at tick {tick}")
 
-ADDR_A = get_identity(ADDR_A_SEED)
-ADDR_B = get_identity(ADDR_B_SEED)
-ADDR_C = get_identity(ADDR_C_SEED)
+ADDR_A = get_identity(ADDR_A_KEY)
+ADDR_B = get_identity(ADDR_B_KEY)
+ADDR_C = get_identity(ADDR_C_KEY)
 PK_A = get_pubkey_from_identity(ADDR_A)
 PK_B = get_pubkey_from_identity(ADDR_B)
 PK_C = get_pubkey_from_identity(ADDR_C)
 
-# Use Address A and Address C as recipients so all 3 seeds can be senders
+# Use Address A and Address C as recipients so all 3 addresses can be senders
 # Gate: SPLIT 50/50 → Address A, Address C
 # Senders: Address A, Address B, Address C
 
@@ -160,7 +160,7 @@ print("STEP 1: Create SPLIT gate (50/50 → Address A, Address C)")
 print(f"{'='*60}")
 
 create_data = build_create_gate(0, [PK_A, PK_C], [50, 50])
-out = send_contract_tx(ADDR_B_SEED, PROC_CREATE_GATE, 1000, create_data)
+out = send_contract_tx(ADDR_B_KEY, PROC_CREATE_GATE, 1000, create_data)
 print(f"  Address B creates gate (1000 QU fee) — Address B is owner but NOT a recipient")
 wait_ticks(15)
 
@@ -179,7 +179,7 @@ bal0_before = get_balance(ADDR_A)
 bal2_before = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_id)
-out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, send_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 10000, send_data)
 print(f"  Address A sent 10,000 QU to gate #{gate_id}")
 wait_ticks(15)
 
@@ -204,7 +204,7 @@ print(f"{'='*60}")
 bal0_before = get_balance(ADDR_A)
 bal2_before = get_balance(ADDR_C)
 
-out = send_contract_tx(ADDR_B_SEED, PROC_SEND_TO_GATE, 20000, send_data)
+out = send_contract_tx(ADDR_B_KEY, PROC_SEND_TO_GATE, 20000, send_data)
 print(f"  Address B sent 20,000 QU to gate #{gate_id}")
 wait_ticks(15)
 
@@ -228,7 +228,7 @@ print(f"{'='*60}")
 bal0_before = get_balance(ADDR_A)
 bal2_before = get_balance(ADDR_C)
 
-out = send_contract_tx(ADDR_C_SEED, PROC_SEND_TO_GATE, 8000, send_data)
+out = send_contract_tx(ADDR_C_KEY, PROC_SEND_TO_GATE, 8000, send_data)
 print(f"  Address C sent 8,000 QU to gate #{gate_id}")
 wait_ticks(15)
 
@@ -250,7 +250,7 @@ print("STEP 5: Close gate")
 print(f"{'='*60}")
 
 # Only Address B (owner) can close
-out = send_contract_tx(ADDR_B_SEED, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id))
+out = send_contract_tx(ADDR_B_KEY, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id))
 print(f"  Address B (owner) closing gate...")
 wait_ticks(15)
 

@@ -13,9 +13,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_KEY = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_KEY = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
@@ -27,8 +27,8 @@ def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
     return r.stdout + r.stderr
 
-def get_identity(seed):
-    out = cli("-seed", seed, "-showkeys")
+def get_identity(key):
+    out = cli("-seed", key, "-showkeys")
     for line in out.splitlines():
         if "Identity:" in line:
             return line.split("Identity:")[1].strip()
@@ -104,9 +104,9 @@ def build_create_gate(mode, recipients_pk, ratios, threshold=0, allowed_senders=
     data += struct.pack('<B', len(allowed_senders) if allowed_senders else 0)
     return bytes(data)
 
-def send_contract_tx(seed, input_type, amount, input_data):
+def send_contract_tx(key, input_type, amount, input_data):
     hex_data = input_data.hex()
-    return cli("-seed", seed, "-sendcustomtransaction",
+    return cli("-seed", key, "-sendcustomtransaction",
                CONTRACT_ID, str(input_type), str(amount),
                str(len(input_data)), hex_data)
 
@@ -143,9 +143,9 @@ tick = get_tick()
 print(f"Node up at tick {tick}")
 print()
 
-ADDR_A = get_identity(ADDR_A_SEED)
-ADDR_B = get_identity(ADDR_B_SEED)
-ADDR_C = get_identity(ADDR_C_SEED)
+ADDR_A = get_identity(ADDR_A_KEY)
+ADDR_B = get_identity(ADDR_B_KEY)
+ADDR_C = get_identity(ADDR_C_KEY)
 PK_A = get_pubkey_from_identity(ADDR_A)
 PK_B = get_pubkey_from_identity(ADDR_B)
 PK_C = get_pubkey_from_identity(ADDR_C)
@@ -161,7 +161,7 @@ bal2_before = get_balance(ADDR_C)
 
 # Create gate as Address A
 create_data = build_create_gate(0, [PK_B], [100])  # SPLIT, 1 recipient
-out = send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, create_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, create_data)
 print(f"  Address A created gate (1000 QU fee)")
 wait_ticks(15)
 
@@ -171,7 +171,7 @@ print(f"  Gate #{gate_id} created, active={active}")
 
 # Try to close as Address C (not the owner)
 close_data = struct.pack('<Q', gate_id)
-out = send_contract_tx(ADDR_C_SEED, PROC_CLOSE_GATE, 0, close_data)
+out = send_contract_tx(ADDR_C_KEY, PROC_CLOSE_GATE, 0, close_data)
 print(f"  Address C attempted close...")
 wait_ticks(15)
 
@@ -180,7 +180,7 @@ record("Unauthorized close rejected", gate['active'] == 1,
        f"Gate still active={gate['active']}")
 
 # Now close properly as Address A
-send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, close_data)
+send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, close_data)
 wait_ticks(15)
 gate = query_gate(gate_id)
 record("Owner close succeeds", gate['active'] == 0,
@@ -195,7 +195,7 @@ print("=" * 50)
 
 bal0_before = get_balance(ADDR_A)
 send_data = struct.pack('<Q', 9999)
-out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 5000, send_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 5000, send_data)
 print(f"  Sent 5000 QU to gate #9999")
 wait_ticks(15)
 
@@ -214,7 +214,7 @@ print("=" * 50)
 
 bal0_before = get_balance(ADDR_A)
 send_data = struct.pack('<Q', gate_id)
-out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 5000, send_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 5000, send_data)
 print(f"  Sent 5000 QU to closed gate #{gate_id}")
 wait_ticks(15)
 
@@ -231,7 +231,7 @@ print("  Close already-closed gate again")
 print("=" * 50)
 
 bal0_before = get_balance(ADDR_A)
-out = send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id))
+out = send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id))
 print(f"  Sent second close for gate #{gate_id}")
 wait_ticks(15)
 
@@ -249,14 +249,14 @@ print("=" * 50)
 
 # Create fresh gate for this test
 create_data = build_create_gate(0, [PK_B], [100])
-send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, create_data)
+send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, create_data)
 wait_ticks(15)
 total2, _ = query_gate_count()
 gate_id2 = total2
 
 bal1_before = get_balance(ADDR_B)
 send_data = struct.pack('<Q', gate_id2)
-out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 0, send_data)
+out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 0, send_data)
 print(f"  Sent 0 QU to gate #{gate_id2}")
 wait_ticks(15)
 
@@ -266,7 +266,7 @@ record("Zero amount — no effect", gate['totalReceived'] == 0 and bal1_before =
        f"received={gate['totalReceived']}, Address B change={bal1_after - bal1_before}")
 
 # Clean up
-send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id2))
+send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id2))
 wait_ticks(15)
 print()
 
@@ -278,7 +278,7 @@ print("=" * 50)
 
 total_before, _ = query_gate_count()
 create_data = build_create_gate(0, [PK_B], [100])
-send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, create_data)
+send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, create_data)
 wait_ticks(15)
 total_after, active_after = query_gate_count()
 # If free-list works, total should stay same (slot reused) or increment by 1
@@ -287,7 +287,7 @@ record("Gate slot reuse", total_after <= total_before + 1,
        f"Before: total={total_before}, After: total={total_after}, active={active_after}")
 
 # Clean up
-send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, struct.pack('<Q', total_after))
+send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, struct.pack('<Q', total_after))
 wait_ticks(15)
 print()
 

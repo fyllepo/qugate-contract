@@ -8,12 +8,12 @@ RPC = "http://localhost:41841"
 CONTRACT_IDX = 24
 CONTRACT = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
-ADDR_A_SEED_ID = "SINUBYSBZKBSVEFQDZBQWUEJWRXCXOZNKPHIXDZWRBKXDSPJEHFAMBACXHUN"
-ADDR_B_SEED_ID = "KENGZYMYWOIHSCXMGBIXBGTKZYCCDITKSNBNILSLUFPQPRCUUYENPYUCEXRM"
-ADDR_C_SEED_ID = "FLNRYKSGLGKZQECRCBNCYAWLNHVCWNYAZSISJRAPUANHDGWAIFBYLIADPQLE"
+ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_KEY = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_KEY = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_KEY_ID = "SINUBYSBZKBSVEFQDZBQWUEJWRXCXOZNKPHIXDZWRBKXDSPJEHFAMBACXHUN"
+ADDR_B_KEY_ID = "KENGZYMYWOIHSCXMGBIXBGTKZYCCDITKSNBNILSLUFPQPRCUUYENPYUCEXRM"
+ADDR_C_KEY_ID = "FLNRYKSGLGKZQECRCBNCYAWLNHVCWNYAZSISJRAPUANHDGWAIFBYLIADPQLE"
 
 def get_tick():
     return requests.get(f"{RPC}/live/v1/tick-info").json()["tick"]
@@ -47,7 +47,7 @@ def get_fees():
 def build_gate_id_hex(gate_id):
     return struct.pack("<Q", gate_id).hex()
 
-def send_custom_tx(seed, amount, target_tick, input_type, hex_data):
+def send_custom_tx(key, amount, target_tick, input_type, hex_data):
     data_bytes = bytes.fromhex(hex_data) if hex_data else b""
     cmd = [CLI, "-nodeip", "127.0.0.1", "-nodeport", "31841",
            "-seed", seed, "-sendcustomtransaction",
@@ -55,7 +55,7 @@ def send_custom_tx(seed, amount, target_tick, input_type, hex_data):
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     return r.stdout.strip() + " " + r.stderr.strip()
 
-def get_pubkey_bytes(seed):
+def get_pubkey_bytes(key):
     r = subprocess.run([CLI, "-seed", seed, "-showkeys"],
                       capture_output=True, text=True, timeout=10)
     for line in r.stdout.split("\n"):
@@ -85,9 +85,9 @@ def identity_to_bytes(identity):
     # Fallback: try using the qubic-cli getPublicKeyFromIdentity if available
     return None
 
-def seed_to_pubkey_bytes(seed):
-    """Get pubkey bytes by using identity_tool with the seed"""
-    r = subprocess.run([ID_TOOL, seed],
+def key_to_pubkey_bytes(key):
+    """Get pubkey bytes by using identity_tool with the key"""
+    r = subprocess.run([ID_TOOL, key],
                       capture_output=True, text=True, timeout=10)
     out = r.stdout.strip()
     # identity_tool outputs: Identity: XXX\nPublic key (hex): YYY
@@ -125,8 +125,8 @@ def decode_identity(identity):
         struct.pack_into('<Q', pk, i * 8, val)
     return bytes(pk)
 
-pk1 = decode_identity(ADDR_B_SEED_ID)
-pk2 = decode_identity(ADDR_C_SEED_ID)
+pk1 = decode_identity(ADDR_B_KEY_ID)
+pk2 = decode_identity(ADDR_C_KEY_ID)
 print(f"  Address B pubkey: {pk1.hex()[:16]}...")
 print(f"  Address C pubkey: {pk2.hex()[:16]}...")
 
@@ -134,9 +134,9 @@ print(f"  Address C pubkey: {pk2.hex()[:16]}...")
 print("\n--- Test 0: Initial State ---")
 total, active, burned = get_gate_count()
 print(f"Gates: total={total}, active={active}, burned={burned}")
-b0 = get_balance(ADDR_A_SEED_ID)
-b1 = get_balance(ADDR_B_SEED_ID)
-b2 = get_balance(ADDR_C_SEED_ID)
+b0 = get_balance(ADDR_A_KEY_ID)
+b1 = get_balance(ADDR_B_KEY_ID)
+b2 = get_balance(ADDR_C_KEY_ID)
 print(f"Address A: {b0:,} QU")
 print(f"Address B: {b1:,} QU")
 print(f"Address C: {b2:,} QU")
@@ -173,14 +173,14 @@ data[592] = 0
 tick = get_tick()
 target = tick + 5
 print(f"Sending createGate tx at tick {tick}, target {target}")
-result = send_custom_tx(ADDR_A_SEED, 2000, target, 1, data.hex())
+result = send_custom_tx(ADDR_A_KEY, 2000, target, 1, data.hex())
 print(f"TX: {result[:100]}")
 
 wait_ticks(20)
 
 total2, active2, burned2 = get_gate_count()
 print(f"Gates: total={total2}, active={active2}, burned={burned2}")
-b0_after = get_balance(ADDR_A_SEED_ID)
+b0_after = get_balance(ADDR_A_KEY_ID)
 print(f"Address A balance change: {b0_after - b0:,} QU")
 
 if active2 > active:
@@ -196,13 +196,13 @@ if active2 > active:
     gate_id = 1
     tick = get_tick()
     target = tick + 5
-    result = send_custom_tx(ADDR_A_SEED, 10000, target, 2, build_gate_id_hex(gate_id))
+    result = send_custom_tx(ADDR_A_KEY, 10000, target, 2, build_gate_id_hex(gate_id))
     print(f"TX: {result[:100]}")
     
     wait_ticks(20)
     
-    b1_after = get_balance(ADDR_B_SEED_ID)
-    b2_after = get_balance(ADDR_C_SEED_ID)
+    b1_after = get_balance(ADDR_B_KEY_ID)
+    b2_after = get_balance(ADDR_C_KEY_ID)
     print(f"Address B received: {b1_after - b1:,} QU (expected ~6000)")
     print(f"Address C received: {b2_after - b2:,} QU (expected ~4000)")
     
@@ -217,7 +217,7 @@ if active2 > active:
     print("\n--- Test 5: Dust Burn (#17) ---")
     tick = get_tick()
     target = tick + 5
-    result = send_custom_tx(ADDR_A_SEED, 5, target, 2, build_gate_id_hex(gate_id))
+    result = send_custom_tx(ADDR_A_KEY, 5, target, 2, build_gate_id_hex(gate_id))
     print(f"TX (5 QU dust): {result[:100]}")
     wait_ticks(20)
     _, _, burned3 = get_gate_count()
@@ -226,14 +226,14 @@ if active2 > active:
     
     # Test 6: Fee overpayment refund
     print("\n--- Test 6: Fee Overpayment Refund (#19) ---")
-    b0_pre = get_balance(ADDR_A_SEED_ID)
+    b0_pre = get_balance(ADDR_A_KEY_ID)
     tick = get_tick()
     target = tick + 5
     # Create another gate with 5000 QU (overpay by 4000)
-    result = send_custom_tx(ADDR_A_SEED, 5000, target, 1, data.hex())
+    result = send_custom_tx(ADDR_A_KEY, 5000, target, 1, data.hex())
     print(f"TX (5000 QU, fee=1000): {result[:100]}")
     wait_ticks(20)
-    b0_post = get_balance(ADDR_A_SEED_ID)
+    b0_post = get_balance(ADDR_A_KEY_ID)
     cost = b0_pre - b0_post
     print(f"Actual cost: {cost:,} QU (expected ~1000, refund ~4000)")
     print("PASS" if cost <= 1100 else f"CHECK — cost was {cost}")
@@ -242,7 +242,7 @@ if active2 > active:
     print("\n--- Test 7: Close Gate ---")
     tick = get_tick()
     target = tick + 5
-    result = send_custom_tx(ADDR_A_SEED, 0, target, 3, build_gate_id_hex(gate_id))
+    result = send_custom_tx(ADDR_A_KEY, 0, target, 3, build_gate_id_hex(gate_id))
     print(f"TX: {result[:100]}")
     wait_ticks(20)
     total3, active3, burned3b = get_gate_count()
@@ -256,9 +256,9 @@ else:
 print("\n" + "=" * 60)
 total_f, active_f, burned_f = get_gate_count()
 print(f"Final state: gates={total_f}, active={active_f}, burned={burned_f}")
-print(f"Address A: {get_balance(ADDR_A_SEED_ID):,} QU")
-print(f"Address B: {get_balance(ADDR_B_SEED_ID):,} QU")
-print(f"Address C: {get_balance(ADDR_C_SEED_ID):,} QU")
+print(f"Address A: {get_balance(ADDR_A_KEY_ID):,} QU")
+print(f"Address B: {get_balance(ADDR_B_KEY_ID):,} QU")
+print(f"Address C: {get_balance(ADDR_C_KEY_ID):,} QU")
 print("=" * 60)
 
 # (moved to top)

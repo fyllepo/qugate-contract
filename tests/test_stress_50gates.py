@@ -21,9 +21,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_KEY = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_KEY = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
@@ -41,8 +41,8 @@ def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
     return r.stdout + r.stderr
 
-def get_identity(seed):
-    out = cli("-seed", seed, "-showkeys")
+def get_identity(key):
+    out = cli("-seed", key, "-showkeys")
     for line in out.splitlines():
         if "Identity:" in line:
             return line.split("Identity:")[1].strip()
@@ -116,9 +116,9 @@ def build_create_gate(mode, recipients_pk, ratios, threshold=0, allowed_senders=
     data += struct.pack('<B', len(allowed_senders) if allowed_senders else 0)
     return bytes(data)
 
-def send_contract_tx(seed, input_type, amount, input_data):
+def send_contract_tx(key, input_type, amount, input_data):
     hex_data = input_data.hex()
-    return cli("-seed", seed, "-sendcustomtransaction",
+    return cli("-seed", key, "-sendcustomtransaction",
                CONTRACT_ID, str(input_type), str(amount),
                str(len(input_data)), hex_data)
 
@@ -148,9 +148,9 @@ print()
 tick = get_tick()
 print(f"Node up at tick {tick}")
 
-ADDR_A = get_identity(ADDR_A_SEED)
-ADDR_B = get_identity(ADDR_B_SEED)
-ADDR_C = get_identity(ADDR_C_SEED)
+ADDR_A = get_identity(ADDR_A_KEY)
+ADDR_B = get_identity(ADDR_B_KEY)
+ADDR_C = get_identity(ADDR_C_KEY)
 PK_A = get_pubkey_from_identity(ADDR_A)
 PK_B = get_pubkey_from_identity(ADDR_B)
 PK_C = get_pubkey_from_identity(ADDR_C)
@@ -226,7 +226,7 @@ for batch_start in range(0, len(gate_configs), BATCH_SIZE):
     for i, (name, mode, pks, ratios, thresh, senders) in enumerate(batch):
         idx = batch_start + i + 1
         create_data = build_create_gate(mode, pks, ratios, thresh, senders)
-        out = send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, create_data)
+        out = send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, create_data)
         if "sent" in out.lower():
             sys.stdout.write(f"    #{idx} {name} ")
             sys.stdout.flush()
@@ -266,7 +266,7 @@ for batch_start in range(0, len(gate_ids), BATCH_SIZE):
     
     for gid in batch_ids:
         send_data = struct.pack('<Q', gid)
-        out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, send_amount, send_data)
+        out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, send_amount, send_data)
         sends_attempted += 1
         if "sent" in out.lower():
             sends_ok += 1
@@ -297,7 +297,7 @@ for batch_start in range(0, len(gate_ids), BATCH_SIZE):
     
     for gid in batch_ids:
         close_data = struct.pack('<Q', gid)
-        send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, close_data)
+        send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, close_data)
     
     wait_ticks(15)
     closed += len(batch_ids)
@@ -317,7 +317,7 @@ print(f"{'='*60}")
 total_before_reuse = total_end
 for i in range(5):
     create_data = build_create_gate(MODE_SPLIT, [PK_B, PK_C], [50, 50])
-    send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, create_data)
+    send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, create_data)
 
 wait_ticks(15)
 total_after_reuse, active_after_reuse = query_gate_count()
@@ -332,7 +332,7 @@ else:
 # Clean up reuse gates
 for i in range(5):
     gid = total_after_reuse - 4 + i
-    send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, struct.pack('<Q', gid))
+    send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, struct.pack('<Q', gid))
 wait_ticks(15)
 
 # ============================================================
