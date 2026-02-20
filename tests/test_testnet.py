@@ -50,13 +50,13 @@ def build_gate_id_hex(gate_id):
 def send_custom_tx(key, amount, target_tick, input_type, hex_data):
     data_bytes = bytes.fromhex(hex_data) if hex_data else b""
     cmd = [CLI, "-nodeip", "127.0.0.1", "-nodeport", "31841",
-           "-seed", seed, "-sendcustomtransaction",
+           "-seed", key, "-sendcustomtransaction",
            CONTRACT, str(input_type), str(amount), str(len(data_bytes)), hex_data]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     return r.stdout.strip() + " " + r.stderr.strip()
 
 def get_pubkey_bytes(key):
-    r = subprocess.run([CLI, "-seed", seed, "-showkeys"],
+    r = subprocess.run([CLI, "-seed", key, "-showkeys"],
                       capture_output=True, text=True, timeout=10)
     for line in r.stdout.split("\n"):
         if line.startswith("Public key:"):
@@ -100,7 +100,7 @@ def key_to_pubkey_bytes(key):
                 except ValueError:
                     pass
     # Last resort — construct from showkeys
-    r2 = subprocess.run([CLI, "-seed", seed, "-showkeys"],
+    r2 = subprocess.run([CLI, "-seed", key, "-showkeys"],
                        capture_output=True, text=True, timeout=10)
     print(f"  [debug] showkeys output: {r2.stdout[:200]}")
     print(f"  [debug] identity_tool output: {out[:200]}")
