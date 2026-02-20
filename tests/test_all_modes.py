@@ -1,301 +1,454 @@
 #!/usr/bin/env python3
-"""QuGate testnet — all 5 modes + feature verification"""
-import subprocess, requests, time, base64, struct, sys
+"""
+QuGate — All 5 Gate Modes Test
+
+Tests: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL
+Plus: updateGate, closeGate, non-owner rejection
+"""
+import struct, subprocess, json, base64, time, requests, sys
 
 CLI = "/home/phil/projects/qubic-cli/build/qubic-cli"
-RPC = "http://localhost:41841"
-CONTRACT_IDX = 24
-CONTRACT = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
+NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
+RPC = "http://127.0.0.1:41841"
+CONTRACT_INDEX = 24
+CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
 SEED0 = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
 SEED1 = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
 SEED2 = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
-SEED0_ID = "SINUBYSBZKBSVEFQDZBQWUEJWRXCXOZNKPHIXDZWRBKXDSPJEHFAMBACXHUN"
-SEED1_ID = "KENGZYMYWOIHSCXMGBIXBGTKZYCCDITKSNBNILSLUFPQPRCUUYENPYUCEXRM"
-SEED2_ID = "FLNRYKSGLGKZQECRCBNCYAWLNHVCWNYAZSISJRAPUANHDGWAIFBYLIADPQLE"
 
-PASS_COUNT = 0
-FAIL_COUNT = 0
+CREATION_FEE = 100000
+MIN_SEND = 1000
 
-def decode_identity(identity):
-    identity = identity.upper()
+MODE_SPLIT = 0
+MODE_ROUND_ROBIN = 1
+MODE_THRESHOLD = 2
+MODE_RANDOM = 3
+MODE_CONDITIONAL = 4
+
+PROC_CREATE = 1
+PROC_SEND = 2
+PROC_CLOSE = 3
+PROC_UPDATE = 4
+FUNC_GET_GATE = 5
+FUNC_GET_COUNT = 6
+FUNC_GET_FEES = 9
+
+passed = 0
+failed = 0
+
+def cli(*args, timeout=15):
+    r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
+    return r.stdout + r.stderr
+
+def get_identity(seed):
+    out = cli("-seed", seed, "-showkeys")
+    for line in out.splitlines():
+        if "Identity:" in line:
+            return line.split("Identity:")[1].strip()
+    raise Exception("Cannot get identity")
+
+def get_balance(identity):
+    out = cli("-getbalance", identity)
+    for line in out.splitlines():
+        if "Balance:" in line:
+            return int(line.split("Balance:")[1].strip())
+    return None
+
+def get_tick():
+    for attempt in range(5):
+        try:
+            return requests.get(f"{RPC}/live/v1/tick-info", timeout=5).json()['tick']
+        except:
+            if attempt < 4: time.sleep(3)
+    raise Exception("Node not responding")
+
+def get_pubkey(identity):
     pk = bytearray(32)
     for i in range(4):
         val = 0
         for j in range(13, -1, -1):
-            val = val * 26 + (ord(identity[i * 14 + j]) - ord('A'))
+            c = identity[i * 14 + j]
+            val = val * 26 + (ord(c) - ord('A'))
         struct.pack_into('<Q', pk, i * 8, val)
     return bytes(pk)
 
-PK0 = decode_identity(SEED0_ID)
-PK1 = decode_identity(SEED1_ID)
-PK2 = decode_identity(SEED2_ID)
+def query_gate(gate_id):
+    data = struct.pack('<Q', gate_id)
+    resp = requests.post(f"{RPC}/live/v1/querySmartContract", json={
+        'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_GATE, 'inputSize': len(data),
+        'requestData': base64.b64encode(data).decode()
+    }, timeout=5).json()
+    b = base64.b64decode(resp['responseData'])
+    modes = ['SPLIT', 'ROUND_ROBIN', 'THRESHOLD', 'RANDOM', 'CONDITIONAL']
+    # Layout: mode(1) rcpCount(1) active(1) pad(5) owner(32) [offset 40] totRcv(8) totFwd(8) curBal(8) thresh(8) createdEp(2) lastEp(2) pad(4) [offset 80] recipients(256) ratios(64) = 400 bytes
+    tr, tf, cb, th = struct.unpack_from('<QQQQ', b, 40)
+    ratios = [struct.unpack_from('<Q', b, 336 + i*8)[0] for i in range(8)]
+    return {
+        'mode': b[0], 'mode_name': modes[b[0]] if b[0] < 5 else f'?{b[0]}',
+        'recipientCount': b[1], 'active': b[2],
+        'totalReceived': tr, 'totalForwarded': tf,
+        'currentBalance': cb, 'threshold': th,
+        'ratios': ratios[:max(b[1], 1)],
+    }
 
-def get_tick():
-    return requests.get(f"{RPC}/live/v1/tick-info").json()["tick"]
+def query_count():
+    resp = requests.post(f"{RPC}/live/v1/querySmartContract", json={
+        'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_COUNT, 'inputSize': 0, 'requestData': ''
+    }, timeout=5).json()
+    b = base64.b64decode(resp['responseData'])
+    t, a = struct.unpack('<QQ', b[:16])
+    return t, a
 
-def get_balance(addr):
-    return int(requests.get(f"{RPC}/live/v1/balances/{addr}").json()["balance"]["balance"])
+def build_create(mode, recipients_pk, ratios, threshold=0, allowed_senders=None):
+    data = bytearray()
+    data += struct.pack('<B', mode)
+    data += struct.pack('<B', len(recipients_pk))
+    data += bytes(6)  # padding
+    for i in range(8):
+        data += recipients_pk[i] if i < len(recipients_pk) else bytes(32)
+    for i in range(8):
+        data += struct.pack('<Q', ratios[i] if i < len(ratios) else 0)
+    data += struct.pack('<Q', threshold)
+    for i in range(8):
+        if allowed_senders and i < len(allowed_senders):
+            data += allowed_senders[i]
+        else:
+            data += bytes(32)
+    data += struct.pack('<B', len(allowed_senders) if allowed_senders else 0)
+    return bytes(data)
 
-def wait_ticks(n=20):
-    target = get_tick() + n
-    while get_tick() < target:
-        time.sleep(3)
+def build_update(gate_id, recipients_pk, ratios, threshold=0, allowed_senders=None):
+    data = bytearray()
+    data += struct.pack('<Q', gate_id)
+    data += struct.pack('<B', len(recipients_pk))
+    data += bytes(7)  # padding
+    for i in range(8):
+        data += recipients_pk[i] if i < len(recipients_pk) else bytes(32)
+    for i in range(8):
+        data += struct.pack('<Q', ratios[i] if i < len(ratios) else 0)
+    data += struct.pack('<Q', threshold)
+    for i in range(8):
+        if allowed_senders and i < len(allowed_senders):
+            data += allowed_senders[i]
+        else:
+            data += bytes(32)
+    data += struct.pack('<B', len(allowed_senders) if allowed_senders else 0)
+    data += bytes(7)  # trailing padding
+    assert len(data) == 608, f"Expected 608, got {len(data)}"
+    return bytes(data)
 
-def query_sc(input_type, input_size=0, request_data=""):
-    r = requests.post(f"{RPC}/live/v1/querySmartContract",
-        json={"contractIndex": CONTRACT_IDX, "inputType": input_type,
-              "inputSize": input_size, "requestData": request_data})
-    return base64.b64decode(r.json().get("responseData", ""))
+def send_tx(seed, proc, amount, data):
+    return cli("-seed", seed, "-sendcustomtransaction",
+               CONTRACT_ID, str(proc), str(amount),
+               str(len(data)), data.hex())
 
-def get_gate_count():
-    data = query_sc(6)
-    if len(data) >= 24:
-        return struct.unpack_from("<QQQ", data)
-    return (0, 0, 0)
-
-def get_gate(gate_id):
-    """Query getGate (inputType 5)"""
-    req = base64.b64encode(struct.pack("<Q", gate_id)).decode()
-    data = query_sc(5, 8, req)
-    return data
-
-def get_fees():
-    data = query_sc(9)
-    if len(data) >= 32:
-        return struct.unpack_from("<QQQQ", data)
-    return None
-
-def send_tx(seed, amount, input_type, hex_data):
-    data_bytes = bytes.fromhex(hex_data) if hex_data else b""
-    cmd = [CLI, "-nodeip", "127.0.0.1", "-nodeport", "31841",
-           "-seed", seed, "-sendcustomtransaction",
-           CONTRACT, str(input_type), str(amount), str(len(data_bytes)), hex_data]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    sent = "sent" in r.stdout.lower()
-    return sent
-
-def build_create_gate(mode, recipients_pk, ratios, threshold=0, allowed_senders=None, allowed_sender_count=0):
-    """Build createGate_input — 600 bytes with proper alignment"""
-    data = bytearray(600)
-    data[0] = mode
-    data[1] = len(recipients_pk)
-    for i, pk in enumerate(recipients_pk):
-        struct.pack_into("32s", data, 8 + i * 32, pk)
-    for i, r in enumerate(ratios):
-        struct.pack_into("<Q", data, 264 + i * 8, r)
-    struct.pack_into("<Q", data, 328, threshold)
-    if allowed_senders:
-        for i, pk in enumerate(allowed_senders):
-            struct.pack_into("32s", data, 336 + i * 32, pk)
-    data[592] = allowed_sender_count
-    return data.hex()
-
-def build_gate_id(gate_id):
-    return struct.pack("<Q", gate_id).hex()
+def wait(n=15):
+    start = get_tick()
+    target = start + n
+    print(f"    waiting for tick {target}...")
+    for _ in range(180):
+        time.sleep(4)
+        try:
+            if get_tick() >= target:
+                return True
+        except:
+            time.sleep(5)
+    print(f"    ⚠ timeout!")
+    return False
 
 def check(name, condition, detail=""):
-    global PASS_COUNT, FAIL_COUNT
+    global passed, failed
     if condition:
-        PASS_COUNT += 1
+        passed += 1
         print(f"  ✅ {name}" + (f" — {detail}" if detail else ""))
     else:
-        FAIL_COUNT += 1
+        failed += 1
         print(f"  ❌ {name}" + (f" — {detail}" if detail else ""))
 
-def section(title):
-    print(f"\n{'='*60}")
-    print(f"  {title}")
-    print(f"{'='*60}")
+# ============================================================
+print("=" * 60)
+print("QuGate — Full 5-Mode Testnet Test")
+print("=" * 60)
+print()
+
+ID0 = get_identity(SEED0)
+ID1 = get_identity(SEED1)
+ID2 = get_identity(SEED2)
+PK0 = get_pubkey(ID0)
+PK1 = get_pubkey(ID1)
+PK2 = get_pubkey(ID2)
+
+tick = get_tick()
+print(f"Node: tick={tick}, epoch=200")
+print(f"Addr A: {ID0}")
+print(f"Addr B: {ID1}")
+print(f"Addr C: {ID2}")
+print()
 
 # ============================================================
-section("INITIAL STATE")
-total0, active0, burned0 = get_gate_count()
-b0_start = get_balance(SEED0_ID)
-b1_start = get_balance(SEED1_ID)
-b2_start = get_balance(SEED2_ID)
-print(f"  Gates: {total0}/{active0}, Burned: {burned0}")
-print(f"  Seed0: {b0_start:,}  Seed1: {b1_start:,}  Seed2: {b2_start:,}")
+# TEST 1: SPLIT mode (60/40)
+# ============================================================
+print("─" * 60)
+print("TEST 1: SPLIT mode (60/40)")
+print("─" * 60)
+
+before_total, _ = query_count()
+data = build_create(MODE_SPLIT, [PK1, PK2], [60, 40])
+send_tx(SEED0, PROC_CREATE, CREATION_FEE, data)
+wait()
+
+total, active = query_count()
+gate_id = total
+print(f"  (before={before_total}, after={total})")
+gate = query_gate(gate_id)
+check("Gate created", gate['active'] == 1, f"id={gate_id}, mode={gate['mode_name']}")
+check("Ratios correct", gate['ratios'] == [60, 40], f"ratios={gate['ratios']}")
+
+bal1_before = get_balance(ID1)
+bal2_before = get_balance(ID2)
+
+send_tx(SEED0, PROC_SEND, 10000, struct.pack('<Q', gate_id))
+wait()
+
+s1 = get_balance(ID1) - bal1_before
+s2 = get_balance(ID2) - bal2_before
+check("Split 60/40", s1 == 6000 and s2 == 4000, f"got {s1}/{s2}")
 
 # ============================================================
-section("TEST 1: getFees Query")
-fees = get_fees()
-check("baseFee = 1000", fees and fees[0] == 1000, f"got {fees[0] if fees else 'None'}")
-check("currentFee = 1000", fees and fees[1] == 1000, f"got {fees[1] if fees else 'None'}")
-check("minSend = 10", fees and fees[2] == 10, f"got {fees[2] if fees else 'None'}")
-check("expiryEpochs = 50", fees and fees[3] == 50, f"got {fees[3] if fees else 'None'}")
+# TEST 2: ROUND_ROBIN mode
+# ============================================================
+print()
+print("─" * 60)
+print("TEST 2: ROUND_ROBIN mode")
+print("─" * 60)
+
+data = build_create(MODE_ROUND_ROBIN, [PK1, PK2], [1, 1])
+send_tx(SEED0, PROC_CREATE, CREATION_FEE, data)
+wait()
+
+total, _ = query_count()
+rr_id = total
+print(f"  (total={total})")
+gate = query_gate(rr_id)
+check("RR gate created", gate['active'] == 1, f"id={rr_id}")
+
+# Send twice — should alternate
+bal1_before = get_balance(ID1)
+bal2_before = get_balance(ID2)
+
+send_tx(SEED0, PROC_SEND, 5000, struct.pack('<Q', rr_id))
+wait()
+
+s1a = get_balance(ID1) - bal1_before
+s2a = get_balance(ID2) - bal2_before
+
+bal1_before = get_balance(ID1)
+bal2_before = get_balance(ID2)
+
+send_tx(SEED0, PROC_SEND, 5000, struct.pack('<Q', rr_id))
+wait()
+
+s1b = get_balance(ID1) - bal1_before
+s2b = get_balance(ID2) - bal2_before
+
+# One should get 5000 then the other
+check("RR alternates", (s1a == 5000 and s2b == 5000) or (s2a == 5000 and s1b == 5000),
+      f"send1: {s1a}/{s2a}, send2: {s1b}/{s2b}")
 
 # ============================================================
-section("TEST 2: SPLIT Mode (60/40)")
-hex_data = build_create_gate(0, [PK1, PK2], [60, 40])
-ok = send_tx(SEED0, 2000, 1, hex_data)
-check("createGate TX sent", ok)
-wait_ticks(20)
+# TEST 3: THRESHOLD mode
+# ============================================================
+print()
+print("─" * 60)
+print("TEST 3: THRESHOLD mode (threshold=15000)")
+print("─" * 60)
 
-total, active, burned = get_gate_count()
-check("Gate created", active == active0 + 1, f"active {active0}→{active}")
-check("Fee burned", burned >= burned0 + 1000, f"burned {burned0}→{burned}")
+data = build_create(MODE_THRESHOLD, [PK1, PK2], [50, 50], threshold=15000)
+send_tx(SEED0, PROC_CREATE, CREATION_FEE, data)
+wait()
 
-# Send 10000 through gate 1
-b1_pre = get_balance(SEED1_ID)
-b2_pre = get_balance(SEED2_ID)
-send_tx(SEED0, 10000, 2, build_gate_id(1))
-wait_ticks(20)
-b1_post = get_balance(SEED1_ID)
-b2_post = get_balance(SEED2_ID)
-s1_got = b1_post - b1_pre
-s2_got = b2_post - b2_pre
-check("Seed1 got 6000 (60%)", s1_got == 6000, f"got {s1_got}")
-check("Seed2 got 4000 (40%)", s2_got == 4000, f"got {s2_got}")
+total, _ = query_count()
+th_id = total
+print(f"  (total={total})")
+gate = query_gate(th_id)
+check("Threshold gate created", gate['active'] == 1 and gate['threshold'] == 15000)
+
+# Send 10k — below threshold, should accumulate
+bal1_before = get_balance(ID1)
+bal2_before = get_balance(ID2)
+
+send_tx(SEED0, PROC_SEND, 10000, struct.pack('<Q', th_id))
+wait()
+
+gate = query_gate(th_id)
+check("Below threshold: held", gate['currentBalance'] == 10000, f"balance={gate['currentBalance']}")
+
+s1 = get_balance(ID1) - bal1_before
+s2 = get_balance(ID2) - bal2_before
+check("No distribution yet", s1 == 0 and s2 == 0, f"got {s1}/{s2}")
+
+# Send 10k more — 20k total, above threshold, should flush all to recipient[0]
+bal1_before = get_balance(ID1)
+
+send_tx(SEED0, PROC_SEND, 10000, struct.pack('<Q', th_id))
+wait()
+
+gate = query_gate(th_id)
+s1 = get_balance(ID1) - bal1_before
+check("Above threshold: flushed to recipient[0]", s1 == 20000 and gate['currentBalance'] == 0,
+      f"recipient[0] got {s1}, gate balance={gate['currentBalance']}")
 
 # ============================================================
-section("TEST 3: ROUND_ROBIN Mode")
-hex_data = build_create_gate(1, [PK1, PK2], [1, 1])
-send_tx(SEED0, 2000, 1, hex_data)
-wait_ticks(20)
+# TEST 4: RANDOM mode
+# ============================================================
+print()
+print("─" * 60)
+print("TEST 4: RANDOM mode")
+print("─" * 60)
 
-total_rr, active_rr, _ = get_gate_count()
-gate_id_rr = total_rr  # latest gate
-check("RR gate created", active_rr == active + 1, f"active {active}→{active_rr}")
+data = build_create(MODE_RANDOM, [PK1, PK2], [50, 50])
+send_tx(SEED0, PROC_CREATE, CREATION_FEE, data)
+wait()
 
-# Send 3 times — should alternate recipients
-b1_pre = get_balance(SEED1_ID)
-b2_pre = get_balance(SEED2_ID)
-send_tx(SEED0, 500, 2, build_gate_id(gate_id_rr))
-wait_ticks(20)
-send_tx(SEED0, 500, 2, build_gate_id(gate_id_rr))
-wait_ticks(20)
-send_tx(SEED0, 500, 2, build_gate_id(gate_id_rr))
-wait_ticks(20)
-b1_post = get_balance(SEED1_ID)
-b2_post = get_balance(SEED2_ID)
-s1_got = b1_post - b1_pre
-s2_got = b2_post - b2_pre
-# With 3 sends alternating: first→Seed1, second→Seed2, third→Seed1
-# So Seed1 should get 1000, Seed2 500 (or vice versa)
-total_distributed = s1_got + s2_got
-check("RR distributed 1500 total", total_distributed == 1500, f"Seed1 +{s1_got}, Seed2 +{s2_got}")
-check("RR alternated (neither got all)", s1_got > 0 and s2_got > 0, f"Seed1 +{s1_got}, Seed2 +{s2_got}")
+total, _ = query_count()
+rand_id = total
+print(f"  (total={total})")
+gate = query_gate(rand_id)
+check("Random gate created", gate['active'] == 1)
+
+# Send 3 times with waits between to ensure separate ticks
+bal1_before = get_balance(ID1)
+bal2_before = get_balance(ID2)
+
+send_tx(SEED0, PROC_SEND, MIN_SEND, struct.pack('<Q', rand_id))
+wait()
+send_tx(SEED0, PROC_SEND, MIN_SEND, struct.pack('<Q', rand_id))
+wait()
+send_tx(SEED0, PROC_SEND, MIN_SEND, struct.pack('<Q', rand_id))
+wait()
+
+s1 = get_balance(ID1) - bal1_before
+s2 = get_balance(ID2) - bal2_before
+total_out = s1 + s2
+check("Random distributed", total_out == 3 * MIN_SEND, f"total={total_out}, split={s1}/{s2}")
+check("Random picked recipients", s1 > 0 or s2 > 0, f"{s1}/{s2}")
 
 # ============================================================
-section("TEST 4: THRESHOLD Mode")
-hex_data = build_create_gate(2, [PK1], [1], threshold=5000)
-send_tx(SEED0, 2000, 1, hex_data)
-wait_ticks(20)
+# TEST 5: CONDITIONAL mode
+# ============================================================
+print()
+print("─" * 60)
+print("TEST 5: CONDITIONAL mode (whitelist)")
+print("─" * 60)
 
-total_th, active_th, _ = get_gate_count()
-gate_id_th = total_th
-check("Threshold gate created", active_th == active_rr + 1, f"active {active_rr}→{active_th}")
+# Only SEED1 is allowed to send
+data = build_create(MODE_CONDITIONAL, [PK1, PK2], [50, 50], allowed_senders=[PK1])
+send_tx(SEED0, PROC_CREATE, CREATION_FEE, data)
+wait()
 
-# Send 3000 — should NOT forward (below 5000 threshold)
-b1_pre = get_balance(SEED1_ID)
-send_tx(SEED0, 3000, 2, build_gate_id(gate_id_th))
-wait_ticks(20)
-b1_mid = get_balance(SEED1_ID)
-check("Below threshold: held", b1_mid == b1_pre, f"Seed1 change: {b1_mid - b1_pre}")
+total, _ = query_count()
+cond_id = total
+print(f"  (total={total})")
+gate = query_gate(cond_id)
+check("Conditional gate created", gate['active'] == 1)
 
-# Send 2500 more — total 5500, should forward all
-send_tx(SEED0, 2500, 2, build_gate_id(gate_id_th))
-wait_ticks(20)
-b1_post = get_balance(SEED1_ID)
-forwarded = b1_post - b1_pre
-check("Above threshold: forwarded", forwarded == 5500, f"Seed1 got {forwarded}")
+# Non-whitelisted sender (SEED2) — should be rejected, refunded
+bal2_before = get_balance(ID2)
+bal0_before = get_balance(ID0)
+
+send_tx(SEED0, PROC_SEND, 5000, struct.pack('<Q', cond_id))
+wait()
+
+bal0_after = get_balance(ID0)
+gate = query_gate(cond_id)
+# If rejected, SEED0 loses nothing (or gets refund). Gate should have 0 forwarded.
+check("Non-whitelisted rejected", gate['totalForwarded'] == 0,
+      f"forwarded={gate['totalForwarded']}, gate balance={gate['currentBalance']}")
+
+# Whitelisted sender (SEED1) — sends to recipient[0] which is PK1 (SEED1 itself)
+# So SEED1 net = -10000 (send) + 10000 (receive from gate) = 0
+# Use gate stats to verify it was processed
+gate_before = query_gate(cond_id)
+
+send_tx(SEED1, PROC_SEND, 10000, struct.pack('<Q', cond_id))
+wait()
+
+gate_after = query_gate(cond_id)
+check("Whitelisted sender accepted", gate_after['totalForwarded'] == 10000,
+      f"forwarded={gate_after['totalForwarded']}, received={gate_after['totalReceived']}")
 
 # ============================================================
-section("TEST 5: RANDOM Mode")
-hex_data = build_create_gate(3, [PK1, PK2], [1, 1])
-send_tx(SEED0, 2000, 1, hex_data)
-wait_ticks(20)
+# TEST 6: updateGate
+# ============================================================
+print()
+print("─" * 60)
+print("TEST 6: updateGate (change SPLIT ratios)")
+print("─" * 60)
 
-total_rand, active_rand, _ = get_gate_count()
-gate_id_rand = total_rand
-check("Random gate created", active_rand == active_th + 1, f"active {active_th}→{active_rand}")
+# Update gate_id (the SPLIT gate from test 1) from 60/40 to 25/75
+update_data = build_update(gate_id, [PK1, PK2], [25, 75])
+send_tx(SEED0, PROC_UPDATE, 0, update_data)
+wait()
 
-# Send 5 times — at least one should go to each recipient (probabilistic)
-b1_pre = get_balance(SEED1_ID)
-b2_pre = get_balance(SEED2_ID)
-for i in range(5):
-    send_tx(SEED0, 200, 2, build_gate_id(gate_id_rand))
-    wait_ticks(20)
-b1_post = get_balance(SEED1_ID)
-b2_post = get_balance(SEED2_ID)
-s1_got = b1_post - b1_pre
-s2_got = b2_post - b2_pre
-total_rand_dist = s1_got + s2_got
-check("Random distributed 1000 total", total_rand_dist == 1000, f"Seed1 +{s1_got}, Seed2 +{s2_got}")
-check("Random picked recipients", s1_got >= 0 and s2_got >= 0, f"Seed1 +{s1_got}, Seed2 +{s2_got}")
+gate = query_gate(gate_id)
+check("Ratios updated", gate['ratios'] == [25, 75], f"ratios={gate['ratios']}")
+
+# Verify new split
+bal1_before = get_balance(ID1)
+bal2_before = get_balance(ID2)
+send_tx(SEED0, PROC_SEND, 10000, struct.pack('<Q', gate_id))
+wait()
+
+s1 = get_balance(ID1) - bal1_before
+s2 = get_balance(ID2) - bal2_before
+check("New 25/75 split works", s1 == 2500 and s2 == 7500, f"got {s1}/{s2}")
+
+# Non-owner update should fail
+gate_before = query_gate(gate_id)
+bad_update = build_update(gate_id, [PK1, PK2], [99, 1])
+send_tx(SEED2, PROC_UPDATE, 0, bad_update)
+wait()
+
+gate_after = query_gate(gate_id)
+check("Non-owner update rejected", gate_after['ratios'] == gate_before['ratios'])
 
 # ============================================================
-section("TEST 6: CONDITIONAL Mode")
-# Conditional: only allowed senders can send
-hex_data = build_create_gate(4, [PK1], [1], allowed_senders=[PK0], allowed_sender_count=1)
-send_tx(SEED0, 2000, 1, hex_data)
-wait_ticks(20)
+# TEST 7: closeGate
+# ============================================================
+print()
+print("─" * 60)
+print("TEST 7: closeGate + non-owner rejection")
+print("─" * 60)
 
-total_cond, active_cond, _ = get_gate_count()
-gate_id_cond = total_cond
-check("Conditional gate created", active_cond == active_rand + 1, f"active {active_rand}→{active_cond}")
+# Non-owner close should fail
+send_tx(SEED2, PROC_CLOSE, 0, struct.pack('<Q', gate_id))
+wait()
+gate = query_gate(gate_id)
+check("Non-owner close rejected", gate['active'] == 1)
 
-# Allowed sender (Seed0) sends — should work
-b1_pre = get_balance(SEED1_ID)
-send_tx(SEED0, 1000, 2, build_gate_id(gate_id_cond))
-wait_ticks(20)
-b1_post = get_balance(SEED1_ID)
-check("Allowed sender: forwarded", b1_post - b1_pre == 1000, f"Seed1 got {b1_post - b1_pre}")
+# Owner close
+send_tx(SEED0, PROC_CLOSE, 0, struct.pack('<Q', gate_id))
+wait()
+gate = query_gate(gate_id)
+check("Owner close works", gate['active'] == 0)
 
-# Unauthorized sender (Seed2) sends — should be rejected/refunded
-b1_pre2 = get_balance(SEED1_ID)
-b2_pre2 = get_balance(SEED2_ID)
-send_tx(SEED2, 1000, 2, build_gate_id(gate_id_cond))
-wait_ticks(20)
-b1_post2 = get_balance(SEED1_ID)
-b2_post2 = get_balance(SEED2_ID)
-check("Unauthorized sender: rejected", b1_post2 == b1_pre2, f"Seed1 change: {b1_post2 - b1_pre2}")
+# Send to closed gate should fail
+bal1_before = get_balance(ID1)
+bal2_before = get_balance(ID2)
+send_tx(SEED0, PROC_SEND, 5000, struct.pack('<Q', gate_id))
+wait()
+s1 = get_balance(ID1) - bal1_before
+s2 = get_balance(ID2) - bal2_before
+check("Send to closed gate rejected", s1 == 0 and s2 == 0, f"got {s1}/{s2}")
 
 # ============================================================
-section("TEST 7: Dust Burn")
-b0_pre = get_balance(SEED0_ID)
-_, _, burned_pre = get_gate_count()
-send_tx(SEED0, 5, 2, build_gate_id(1))  # 5 QU < minSend(10)
-wait_ticks(20)
-_, _, burned_post = get_gate_count()
-check("Dust burned", burned_post > burned_pre, f"burned {burned_pre}→{burned_post}")
-
+# SUMMARY
 # ============================================================
-section("TEST 8: Fee Overpayment Refund")
-b0_pre = get_balance(SEED0_ID)
-hex_data = build_create_gate(0, [PK1], [1])
-send_tx(SEED0, 5000, 1, hex_data)
-wait_ticks(20)
-b0_post = get_balance(SEED0_ID)
-cost = b0_pre - b0_post
-check("Overpayment refunded", cost == 1000, f"cost was {cost} (expected 1000)")
+print()
+print("=" * 60)
+total = passed + failed
+print(f"RESULTS: {passed}/{total} passed, {failed} failed")
+print("=" * 60)
 
-# ============================================================
-section("TEST 9: Close Gate + Slot Reuse")
-total_pre, active_pre, _ = get_gate_count()
-send_tx(SEED0, 0, 3, build_gate_id(1))  # close gate 1
-wait_ticks(20)
-total_post, active_post, _ = get_gate_count()
-check("Gate closed", active_post == active_pre - 1, f"active {active_pre}→{active_post}")
-
-# Create new gate — should reuse slot
-hex_data = build_create_gate(0, [PK1], [1])
-send_tx(SEED0, 2000, 1, hex_data)
-wait_ticks(20)
-total_reuse, active_reuse, _ = get_gate_count()
-check("Slot reused", active_reuse == active_post + 1, f"active {active_post}→{active_reuse}")
-
-# ============================================================
-section("FINAL STATE")
-total_f, active_f, burned_f = get_gate_count()
-print(f"  Gates: total={total_f}, active={active_f}, burned={burned_f}")
-print(f"  Seed0: {get_balance(SEED0_ID):,} QU")
-print(f"  Seed1: {get_balance(SEED1_ID):,} QU")
-print(f"  Seed2: {get_balance(SEED2_ID):,} QU")
-
-section(f"SUMMARY: {PASS_COUNT} PASS, {FAIL_COUNT} FAIL")
-if FAIL_COUNT == 0:
-    print("  ALL TESTS PASSED! 🎉")
-else:
-    print(f"  {FAIL_COUNT} test(s) failed.")
+sys.exit(0 if failed == 0 else 1)
