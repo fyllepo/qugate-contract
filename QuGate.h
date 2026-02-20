@@ -1239,8 +1239,7 @@ protected:
     BEGIN_TICK() {}
     END_TICK() {}
 
-    EXPAND()
-    }
+    EXPAND() {}
 };
 
 
