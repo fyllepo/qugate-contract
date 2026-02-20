@@ -36,11 +36,11 @@ constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
 constexpr uint64 QUGATE_DEFAULT_EXPIRY_EPOCHS = 50;
 
 // Gate modes
-constexpr uint8 QUGATE_QUGATE_MODE_SPLIT = 0;
-constexpr uint8 QUGATE_QUGATE_MODE_ROUND_ROBIN = 1;
-constexpr uint8 QUGATE_QUGATE_MODE_THRESHOLD = 2;
-constexpr uint8 QUGATE_QUGATE_MODE_RANDOM = 3;
-constexpr uint8 QUGATE_QUGATE_MODE_CONDITIONAL = 4;
+constexpr uint8 QUGATE_MODE_SPLIT = 0;
+constexpr uint8 QUGATE_MODE_ROUND_ROBIN = 1;
+constexpr uint8 QUGATE_MODE_THRESHOLD = 2;
+constexpr uint8 QUGATE_MODE_RANDOM = 3;
+constexpr uint8 QUGATE_MODE_CONDITIONAL = 4;
 
 // Status codes — used in procedure outputs and logger _type
 constexpr sint64 QUGATE_SUCCESS = 0;
