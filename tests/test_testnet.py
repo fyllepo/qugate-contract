@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """QuGate testnet verification"""
-import os, shutil
-import subprocess, json, requests, time, base64, struct, sys
+import os
+import shutil
+import subprocess
+import requests
+import time
+import base64
+import struct
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
+ID_TOOL = os.environ.get("QUBIC_ID_TOOL", shutil.which("identity_tool") or "identity_tool")
 RPC = "http://localhost:41841"
 CONTRACT_IDX = 24
 CONTRACT = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
@@ -147,7 +153,7 @@ fees = get_fees()
 if fees:
     print(f"Base fee: {fees[0]}, Current fee: {fees[1]}, Min send: {fees[2]}, Expiry: {fees[3]}")
     ok = fees[0] == 1000 and fees[1] == 1000 and fees[2] == 10 and fees[3] == 50
-    print("PASS" if ok else f"FAIL — unexpected values")
+    print("PASS" if ok else "FAIL — unexpected values")
 else:
     print("FAIL — no data")
 
@@ -187,7 +193,7 @@ if active2 > active:
     print("PASS — gate created")
     
     # Test 3: totalBurned
-    print(f"\n--- Test 3: totalBurned (#20) ---")
+    print("\n--- Test 3: totalBurned (#20) ---")
     print(f"Burned: {burned2}")
     print("PASS" if burned2 >= 1000 else "FAIL — expected >= 1000 burned")
     

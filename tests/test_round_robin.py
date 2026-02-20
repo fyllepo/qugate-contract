@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """QuGate ROUND_ROBIN Test"""
-import os, shutil
-import struct, subprocess, json, base64, time, requests, sys
+import os
+import shutil
+import struct
+import subprocess
+import base64
+import time
+import requests
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
@@ -39,8 +44,9 @@ def get_tick():
     for attempt in range(5):
         try:
             return requests.get(f"{RPC}/live/v1/tick-info", timeout=5).json()['tick']
-        except:
-            if attempt < 4: time.sleep(3)
+        except Exception:
+            if attempt < 4:
+                time.sleep(3)
     raise Exception("Node not responding")
 
 def query_gate_count():
@@ -115,9 +121,9 @@ def wait_ticks(n=15):
             if cur >= target:
                 print(f"    ✓ Reached tick {cur}")
                 return True
-        except:
+        except Exception:
             time.sleep(5)
-    print(f"    ⚠ Timeout")
+    print("    ⚠ Timeout")
     return False
 
 # ============================================================
@@ -142,7 +148,7 @@ print("="*50)
 # For round robin, ratios aren't used but we still fill them
 input_data = build_create_gate(mode=MODE_ROUND_ROBIN, recipients_pk=[PK_B, PK_C], ratios=[1, 1])
 print(f"  Input size: {len(input_data)} bytes")
-print(f"  Sending createGate tx (1000 QU fee)...")
+print("  Sending createGate tx (1000 QU fee)...")
 out = send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line or "TxHash" in line or "Tick:" in line:

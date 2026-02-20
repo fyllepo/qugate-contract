@@ -12,8 +12,15 @@ Gate distribution:
   - 10 RANDOM gates (2-3 recipients)
   - 5 CONDITIONAL gates (sender-restricted)
 """
-import os, shutil
-import struct, subprocess, json, base64, time, requests, sys, random
+import os
+import shutil
+import struct
+import subprocess
+import base64
+import time
+import requests
+import sys
+import random
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
@@ -58,8 +65,9 @@ def get_tick():
     for attempt in range(5):
         try:
             return requests.get(f"{RPC}/live/v1/tick-info", timeout=5).json()['tick']
-        except:
-            if attempt < 4: time.sleep(3)
+        except Exception:
+            if attempt < 4:
+                time.sleep(3)
     raise Exception("Node not responding")
 
 def query_gate_count():
@@ -85,7 +93,7 @@ def query_gate(gate_id):
             'totalReceived': tr, 'totalForwarded': tf,
             'currentBalance': cb, 'threshold': th
         }
-    except:
+    except Exception:
         return None
 
 def get_pubkey_from_identity(identity):
@@ -134,7 +142,7 @@ def wait_ticks(n=15):
             if cur >= target:
                 print(f" ✓ ({cur})")
                 return True
-        except:
+        except Exception:
             time.sleep(5)
     print(" ⚠ TIMEOUT")
     return False
@@ -251,7 +259,7 @@ print(f"\n  ✅ Created {created}/50 gates ({failed_creates} send failures)")
 
 # ============================================================
 print(f"\n{'='*60}")
-print(f"PHASE 2: Send transactions through all active gates")
+print("PHASE 2: Send transactions through all active gates")
 print(f"{'='*60}")
 
 send_amount = 1000  # Small amounts to avoid running out
@@ -287,7 +295,7 @@ print(f"  Sample check: {gates_with_activity}/{len(sample_gates)} sampled gates 
 
 # ============================================================
 print(f"\n{'='*60}")
-print(f"PHASE 3: Close all 50 gates")
+print("PHASE 3: Close all 50 gates")
 print(f"{'='*60}")
 
 closed = 0
@@ -311,7 +319,7 @@ print(f"\n  Final: total={total_end}, active={active_end}")
 
 # ============================================================
 print(f"\n{'='*60}")
-print(f"PHASE 4: Verify slot reuse — create 5 new gates")
+print("PHASE 4: Verify slot reuse — create 5 new gates")
 print(f"{'='*60}")
 
 total_before_reuse = total_end
@@ -327,7 +335,7 @@ print(f"  Slots reused: {reused}/5")
 if reused > 0:
     print(f"  ✅ Free-list working — {reused} slots reused from closed gates!")
 else:
-    print(f"  ⚠ No slots reused (free-list may not be working)")
+    print("  ⚠ No slots reused (free-list may not be working)")
 
 # Clean up reuse gates
 for i in range(5):
@@ -337,7 +345,7 @@ wait_ticks(15)
 
 # ============================================================
 print(f"\n{'='*60}")
-print(f"FINAL RESULTS")
+print("FINAL RESULTS")
 print(f"{'='*60}")
 
 bal0_end = get_balance(ADDR_A)
@@ -350,9 +358,9 @@ print(f"  Transactions sent: {sends_ok}/{sends_attempted}")
 print(f"  Gates closed: {closed}/{len(gate_ids)}")
 print(f"  Slot reuse verified: {reused > 0}")
 print(f"  Final gate count: total={total_final}, active={active_final}")
-print(f"\n  Balance changes:")
+print("\n  Balance changes:")
 print(f"    Address A: {bal0_end - bal0_start:+,} QU")
 print(f"    Address B: {bal1_end - bal1_start:+,} QU")
 print(f"    Address C: {bal2_end - bal2_start:+,} QU")
 print(f"\n  Node stability: {'✅ STABLE' if get_tick() > 0 else '❌ DOWN'}")
-print(f"\n🏁 50-gate stress test complete!")
+print("\n🏁 50-gate stress test complete!")

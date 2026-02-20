@@ -3,8 +3,13 @@
 QuGate V2 Attack Vector Tests
 Tests edge cases, unauthorized access, and potential exploits.
 """
-import os, shutil
-import struct, subprocess, json, base64, time, requests, sys
+import os
+import shutil
+import struct
+import subprocess
+import base64
+import time
+import requests
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 ID_TOOL = os.environ.get("QUBIC_ID_TOOL", shutil.which("identity_tool") or "identity_tool")
@@ -44,8 +49,9 @@ def get_tick():
     for attempt in range(5):
         try:
             return requests.get(f"{RPC}/live/v1/tick-info", timeout=5).json()['tick']
-        except:
-            if attempt < 4: time.sleep(3)
+        except Exception:
+            if attempt < 4:
+                time.sleep(3)
     raise Exception("Node not responding")
 
 def query_gate_count():
@@ -121,9 +127,9 @@ def wait_ticks(n=15):
             if cur >= target:
                 print(f"    ✓ Reached tick {cur}")
                 return True
-        except:
+        except Exception:
             time.sleep(5)
-    print(f"    ⚠ Timeout")
+    print("    ⚠ Timeout")
     return False
 
 def record(name, passed, detail=""):
@@ -162,7 +168,7 @@ bal2_before = get_balance(ADDR_C)
 # Create gate as Address A
 create_data = build_create_gate(0, [PK_B], [100])  # SPLIT, 1 recipient
 out = send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, create_data)
-print(f"  Address A created gate (1000 QU fee)")
+print("  Address A created gate (1000 QU fee)")
 wait_ticks(15)
 
 total, active = query_gate_count()
@@ -172,7 +178,7 @@ print(f"  Gate #{gate_id} created, active={active}")
 # Try to close as Address C (not the owner)
 close_data = struct.pack('<Q', gate_id)
 out = send_contract_tx(ADDR_C_KEY, PROC_CLOSE_GATE, 0, close_data)
-print(f"  Address C attempted close...")
+print("  Address C attempted close...")
 wait_ticks(15)
 
 gate = query_gate(gate_id)
@@ -196,7 +202,7 @@ print("=" * 50)
 bal0_before = get_balance(ADDR_A)
 send_data = struct.pack('<Q', 9999)
 out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 5000, send_data)
-print(f"  Sent 5000 QU to gate #9999")
+print("  Sent 5000 QU to gate #9999")
 wait_ticks(15)
 
 bal0_after = get_balance(ADDR_A)

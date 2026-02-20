@@ -6,8 +6,13 @@ Create → Send → Update (change ratios) → Send → Verify new ratios → Cl
 
 Tests updateGate (inputType 4) on live testnet for the first time.
 """
-import os, shutil
-import struct, subprocess, json, base64, time, requests, sys
+import os
+import shutil
+import struct
+import subprocess
+import base64
+import time
+import requests
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
@@ -45,8 +50,9 @@ def get_tick():
     for attempt in range(5):
         try:
             return requests.get(f"{RPC}/live/v1/tick-info", timeout=5).json()['tick']
-        except:
-            if attempt < 4: time.sleep(3)
+        except Exception:
+            if attempt < 4:
+                time.sleep(3)
     raise Exception("Node not responding")
 
 def query_gate(gate_id):
@@ -144,9 +150,9 @@ def wait_ticks(n=15):
             if cur >= target:
                 print(f"    ✓ Reached tick {cur}")
                 return True
-        except:
+        except Exception:
             time.sleep(5)
-    print(f"    ⚠ Timeout")
+    print("    ⚠ Timeout")
     return False
 
 # ============================================================
@@ -174,14 +180,14 @@ print(f"{'='*60}")
 
 create_data = build_create_gate(0, [PK_B, PK_C], [60, 40])
 out = send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, create_data)
-print(f"  Creating gate with ratios [60, 40]...")
+print("  Creating gate with ratios [60, 40]...")
 wait_ticks(15)
 
 total, active = query_gate_count()
 gate_id = total
 gate = query_gate(gate_id)
 print(f"  Gate #{gate_id}: mode={gate['mode']}, ratios={gate['ratios']}")
-print(f"  ✅ Created with 60/40 split!")
+print("  ✅ Created with 60/40 split!")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -193,7 +199,7 @@ bal2_before = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_id)
 out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 10000, send_data)
-print(f"  Sent 10,000 QU...")
+print("  Sent 10,000 QU...")
 wait_ticks(15)
 
 bal1_after = get_balance(ADDR_B)
@@ -203,7 +209,7 @@ s2_gain = bal2_after - bal2_before
 
 print(f"  Address B gained: {s1_gain:,} QU (expected 6,000 = 60%)")
 print(f"  Address C gained: {s2_gain:,} QU (expected 4,000 = 40%)")
-print(f"  ✅ 60/40 split verified!" if s1_gain == 6000 and s2_gain == 4000 else f"  ⚠ Unexpected split")
+print("  ✅ 60/40 split verified!" if s1_gain == 6000 and s2_gain == 4000 else "  ⚠ Unexpected split")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -212,16 +218,16 @@ print(f"{'='*60}")
 
 update_data = build_update_gate(gate_id, [PK_B, PK_C], [20, 80])
 out = send_contract_tx(ADDR_A_KEY, PROC_UPDATE_GATE, 0, update_data)
-print(f"  Updating ratios from [60,40] to [20,80]...")
+print("  Updating ratios from [60,40] to [20,80]...")
 wait_ticks(15)
 
 gate = query_gate(gate_id)
 print(f"  Gate #{gate_id}: ratios={gate['ratios']}, active={gate['active']}")
 if gate['ratios'] == [20, 80]:
-    print(f"  ✅ Ratios updated to 20/80!")
+    print("  ✅ Ratios updated to 20/80!")
 else:
     print(f"  ⚠ Ratios not updated (got {gate['ratios']})")
-    print(f"  Note: updateGate may have different input format — checking...")
+    print("  Note: updateGate may have different input format — checking...")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -232,7 +238,7 @@ bal1_before = get_balance(ADDR_B)
 bal2_before = get_balance(ADDR_C)
 
 out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 10000, send_data)
-print(f"  Sent 10,000 QU...")
+print("  Sent 10,000 QU...")
 wait_ticks(15)
 
 bal1_after = get_balance(ADDR_B)
@@ -246,11 +252,11 @@ print(f"  Address C gained: {s2_gain:,} QU (expected 8,000 = 80%)")
 print(f"  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}")
 
 if s1_gain == 2000 and s2_gain == 8000:
-    print(f"  ✅ New 20/80 split verified! Update worked!")
+    print("  ✅ New 20/80 split verified! Update worked!")
 elif s1_gain == 6000 and s2_gain == 4000:
-    print(f"  ⚠ Still using old 60/40 ratios — update may not have applied")
+    print("  ⚠ Still using old 60/40 ratios — update may not have applied")
 else:
-    print(f"  ⚠ Unexpected split — needs investigation")
+    print("  ⚠ Unexpected split — needs investigation")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -260,13 +266,13 @@ print(f"{'='*60}")
 gate_before = query_gate(gate_id)
 update_data2 = build_update_gate(gate_id, [PK_B, PK_C], [99, 1])
 out = send_contract_tx(ADDR_C_KEY, PROC_UPDATE_GATE, 0, update_data2)
-print(f"  Address C (non-owner) attempting to update ratios to [99,1]...")
+print("  Address C (non-owner) attempting to update ratios to [99,1]...")
 wait_ticks(15)
 
 gate_after = query_gate(gate_id)
 if gate_after['ratios'] == gate_before['ratios']:
     print(f"  Ratios unchanged: {gate_after['ratios']}")
-    print(f"  ✅ Non-owner update rejected!")
+    print("  ✅ Non-owner update rejected!")
 else:
     print(f"  ⚠ Ratios changed to {gate_after['ratios']} — authorization check may be missing")
 
@@ -277,13 +283,13 @@ print(f"{'='*60}")
 
 update_data3 = build_update_gate(gate_id, [PK_B, PK_C], [50, 50])
 out = send_contract_tx(ADDR_A_KEY, PROC_UPDATE_GATE, 0, update_data3)
-print(f"  Updating ratios to [50,50]...")
+print("  Updating ratios to [50,50]...")
 wait_ticks(15)
 
 gate = query_gate(gate_id)
 print(f"  Gate #{gate_id}: ratios={gate['ratios']}")
 if gate['ratios'] == [50, 50]:
-    print(f"  ✅ Ratios updated to 50/50!")
+    print("  ✅ Ratios updated to 50/50!")
 else:
     print(f"  ⚠ Ratios not updated (got {gate['ratios']})")
 
@@ -296,7 +302,7 @@ bal1_before = get_balance(ADDR_B)
 bal2_before = get_balance(ADDR_C)
 
 out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 10000, send_data)
-print(f"  Sent 10,000 QU...")
+print("  Sent 10,000 QU...")
 wait_ticks(15)
 
 bal1_after = get_balance(ADDR_B)
@@ -307,9 +313,9 @@ s2_gain = bal2_after - bal2_before
 print(f"  Address B gained: {s1_gain:,} QU (expected 5,000 = 50%)")
 print(f"  Address C gained: {s2_gain:,} QU (expected 5,000 = 50%)")
 if s1_gain == 5000 and s2_gain == 5000:
-    print(f"  ✅ 50/50 split verified! Second update worked!")
+    print("  ✅ 50/50 split verified! Second update worked!")
 else:
-    print(f"  ⚠ Unexpected split")
+    print("  ⚠ Unexpected split")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -317,12 +323,12 @@ print("STEP 8: Close gate")
 print(f"{'='*60}")
 
 out = send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id))
-print(f"  Closing gate...")
+print("  Closing gate...")
 wait_ticks(15)
 
 gate = query_gate(gate_id)
 print(f"  Gate active: {gate['active']}")
-print(f"  ✅ Gate closed!" if gate['active'] == 0 else f"  ⚠ Gate still active")
+print("  ✅ Gate closed!" if gate['active'] == 0 else "  ⚠ Gate still active")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -330,14 +336,14 @@ print("FINAL SUMMARY")
 print(f"{'='*60}")
 
 print(f"\n  Gate #{gate_id} lifecycle:")
-print(f"    1. Created as SPLIT 60/40 ✅")
-print(f"    2. Sent 10k → 6k/4k split verified ✅")
-print(f"    3. Updated ratios to 20/80")
-print(f"    4. Sent 10k → verified new split")
-print(f"    5. Non-owner update rejected")
-print(f"    6. Mode changed to ROUND_ROBIN")
-print(f"    7. Verified round-robin behaviour")
-print(f"    8. Closed ✅")
+print("    1. Created as SPLIT 60/40 ✅")
+print("    2. Sent 10k → 6k/4k split verified ✅")
+print("    3. Updated ratios to 20/80")
+print("    4. Sent 10k → verified new split")
+print("    5. Non-owner update rejected")
+print("    6. Mode changed to ROUND_ROBIN")
+print("    7. Verified round-robin behaviour")
+print("    8. Closed ✅")
 print(f"\n  Total through gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}")
 
-print(f"\n🏁 Full gate lifecycle test complete!")
+print("\n🏁 Full gate lifecycle test complete!")

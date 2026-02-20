@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """QuGate RANDOM Test - randomly selects one recipient per payment"""
-import os, shutil
-import struct, subprocess, json, base64, time, requests, sys
+import os
+import shutil
+import struct
+import subprocess
+import base64
+import time
+import requests
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
@@ -39,8 +44,9 @@ def get_tick():
     for attempt in range(5):
         try:
             return requests.get(f"{RPC}/live/v1/tick-info", timeout=5).json()['tick']
-        except:
-            if attempt < 4: time.sleep(3)
+        except Exception:
+            if attempt < 4:
+                time.sleep(3)
     raise Exception("Node not responding")
 
 def query_gate_count():
@@ -111,7 +117,7 @@ def wait_ticks(n=15):
             if cur >= target:
                 print(f"    ✓ Reached tick {cur}")
                 return True
-        except:
+        except Exception:
             time.sleep(5)
     return False
 
@@ -135,7 +141,7 @@ print("STEP 1: Create RANDOM gate (recipients: Address B, Address C)")
 print("="*50)
 
 input_data = build_create_gate(mode=MODE_RANDOM, recipients_pk=[PK_B, PK_C], ratios=[1, 1])
-print(f"  Sending createGate tx (1000 QU fee)...")
+print("  Sending createGate tx (1000 QU fee)...")
 out = send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line:
@@ -152,7 +158,7 @@ if gate['mode'] == 'RANDOM' and gate['active']:
     print("  ✅ RANDOM gate created!")
     RND_GATE = total
 else:
-    print(f"  ⚠ Unexpected")
+    print("  ⚠ Unexpected")
     RND_GATE = total
 
 # ━━━ Send 6 payments and track distribution ━━━

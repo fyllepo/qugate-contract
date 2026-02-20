@@ -5,8 +5,14 @@ QuGate — All 5 Gate Modes Test
 Tests: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL
 Plus: updateGate, closeGate, non-owner rejection
 """
-import os, shutil
-import struct, subprocess, json, base64, time, requests, sys
+import os
+import shutil
+import struct
+import subprocess
+import base64
+import time
+import requests
+import sys
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
@@ -60,8 +66,9 @@ def get_tick():
     for attempt in range(5):
         try:
             return requests.get(f"{RPC}/live/v1/tick-info", timeout=5).json()['tick']
-        except:
-            if attempt < 4: time.sleep(3)
+        except Exception:
+            if attempt < 4:
+                time.sleep(3)
     raise Exception("Node not responding")
 
 def get_pubkey(identity):
@@ -153,9 +160,9 @@ def wait(n=15):
         try:
             if get_tick() >= target:
                 return True
-        except:
+        except Exception:
             time.sleep(5)
-    print(f"    ⚠ timeout!")
+    print("    ⚠ timeout!")
     return False
 
 def check(name, condition, detail=""):

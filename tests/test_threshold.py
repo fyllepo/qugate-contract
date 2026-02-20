@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """QuGate THRESHOLD Test - accumulate until threshold, then forward"""
-import os, shutil
-import struct, subprocess, json, base64, time, requests, sys
+import os
+import shutil
+import struct
+import subprocess
+import base64
+import time
+import requests
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
@@ -39,8 +44,9 @@ def get_tick():
     for attempt in range(5):
         try:
             return requests.get(f"{RPC}/live/v1/tick-info", timeout=5).json()['tick']
-        except:
-            if attempt < 4: time.sleep(3)
+        except Exception:
+            if attempt < 4:
+                time.sleep(3)
     raise Exception("Node not responding")
 
 def query_gate_count():
@@ -115,9 +121,9 @@ def wait_ticks(n=15):
             if cur >= target:
                 print(f"    ✓ Reached tick {cur}")
                 return True
-        except:
+        except Exception:
             time.sleep(5)
-    print(f"    ⚠ Timeout")
+    print("    ⚠ Timeout")
     return False
 
 # ============================================================
@@ -146,7 +152,7 @@ input_data = build_create_gate(
     threshold=THRESHOLD_AMOUNT
 )
 print(f"  Threshold: {THRESHOLD_AMOUNT:,} QU")
-print(f"  Sending createGate tx (1000 QU fee)...")
+print("  Sending createGate tx (1000 QU fee)...")
 out = send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line:
@@ -163,7 +169,7 @@ if gate['mode'] == 'THRESHOLD' and gate['active'] and gate['threshold'] == THRES
     print("  ✅ THRESHOLD gate created!")
     TH_GATE = total
 else:
-    print(f"  ⚠ Unexpected state")
+    print("  ⚠ Unexpected state")
     TH_GATE = total
 
 # ━━━ Payment 1: 10,000 QU (below threshold — should accumulate) ━━━

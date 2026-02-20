@@ -5,8 +5,13 @@ QuGate V2 — Multi-Sender Convergence Test
 3 different addresses all send to the same SPLIT gate.
 Verifies correct routing regardless of sender identity.
 """
-import os, shutil
-import struct, subprocess, json, base64, time, requests, sys
+import os
+import shutil
+import struct
+import subprocess
+import base64
+import time
+import requests
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
@@ -43,8 +48,9 @@ def get_tick():
     for attempt in range(5):
         try:
             return requests.get(f"{RPC}/live/v1/tick-info", timeout=5).json()['tick']
-        except:
-            if attempt < 4: time.sleep(3)
+        except Exception:
+            if attempt < 4:
+                time.sleep(3)
     raise Exception("Node not responding")
 
 def query_gate(gate_id):
@@ -115,9 +121,9 @@ def wait_ticks(n=15):
             if cur >= target:
                 print(f"    ✓ Reached tick {cur}")
                 return True
-        except:
+        except Exception:
             time.sleep(5)
-    print(f"    ⚠ Timeout")
+    print("    ⚠ Timeout")
     return False
 
 # ============================================================
@@ -144,12 +150,12 @@ PK_C = get_pubkey_from_identity(ADDR_C)
 # Senders: Address A, Address B, Address C
 
 print(f"  Recipients: Address A ({ADDR_A[:12]}...) + Address C ({ADDR_C[:12]}...)")
-print(f"  Senders: Address A, Address B, Address C")
+print("  Senders: Address A, Address B, Address C")
 
 bal0_start = get_balance(ADDR_A)
 bal1_start = get_balance(ADDR_B)
 bal2_start = get_balance(ADDR_C)
-print(f"\n━━━ Starting Balances ━━━")
+print("\n━━━ Starting Balances ━━━")
 print(f"  Address A: {bal0_start:,} QU")
 print(f"  Address B: {bal1_start:,} QU")
 print(f"  Address C: {bal2_start:,} QU")
@@ -161,14 +167,14 @@ print(f"{'='*60}")
 
 create_data = build_create_gate(0, [PK_A, PK_C], [50, 50])
 out = send_contract_tx(ADDR_B_KEY, PROC_CREATE_GATE, 1000, create_data)
-print(f"  Address B creates gate (1000 QU fee) — Address B is owner but NOT a recipient")
+print("  Address B creates gate (1000 QU fee) — Address B is owner but NOT a recipient")
 wait_ticks(15)
 
 total, active = query_gate_count()
 gate_id = total
 gate = query_gate(gate_id)
 print(f"  Gate #{gate_id}: mode={gate['mode']}, recipients={gate['recipientCount']}, active={gate['active']}")
-print(f"  ✅ Gate created!")
+print("  ✅ Gate created!")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -194,7 +200,7 @@ addr_c_gain = bal2_after - bal2_before
 print(f"  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}")
 print(f"  Address A net change: {addr_a_net:+,} QU (sent 10k, received 5k back = -5k)")
 print(f"  Address C gained: {addr_c_gain:+,} QU (expected +5,000)")
-print(f"  ✅ Sender-as-recipient works!" if addr_c_gain == 5000 else f"  ⚠ Unexpected: Address C gained {addr_c_gain}")
+print("  ✅ Sender-as-recipient works!" if addr_c_gain == 5000 else f"  ⚠ Unexpected: Address C gained {addr_c_gain}")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -218,7 +224,7 @@ addr_c_gain = bal2_after - bal2_before
 print(f"  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}")
 print(f"  Address A gained: {addr_a_gain:+,} QU (expected +10,000)")
 print(f"  Address C gained: {addr_c_gain:+,} QU (expected +10,000)")
-print(f"  ✅ Owner-as-sender works!" if addr_a_gain == 10000 and addr_c_gain == 10000 else f"  ⚠ Unexpected distribution")
+print("  ✅ Owner-as-sender works!" if addr_a_gain == 10000 and addr_c_gain == 10000 else "  ⚠ Unexpected distribution")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -242,7 +248,7 @@ addr_c_net = bal2_after - bal2_before
 print(f"  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}")
 print(f"  Address A gained: {addr_a_gain:+,} QU (expected +4,000)")
 print(f"  Address C net change: {addr_c_net:+,} QU (sent 8k, received 4k back = -4k)")
-print(f"  ✅ Recipient-as-sender works!" if addr_a_gain == 4000 else f"  ⚠ Unexpected distribution")
+print("  ✅ Recipient-as-sender works!" if addr_a_gain == 4000 else "  ⚠ Unexpected distribution")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -251,12 +257,12 @@ print(f"{'='*60}")
 
 # Only Address B (owner) can close
 out = send_contract_tx(ADDR_B_KEY, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id))
-print(f"  Address B (owner) closing gate...")
+print("  Address B (owner) closing gate...")
 wait_ticks(15)
 
 gate = query_gate(gate_id)
 print(f"  Gate active: {gate['active']}")
-print(f"  ✅ Gate closed!" if gate['active'] == 0 else f"  ⚠ Gate still active")
+print("  ✅ Gate closed!" if gate['active'] == 0 else "  ⚠ Gate still active")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -267,7 +273,7 @@ bal0_end = get_balance(ADDR_A)
 bal1_end = get_balance(ADDR_B)
 bal2_end = get_balance(ADDR_C)
 
-print(f"\n  Balance Changes:")
+print("\n  Balance Changes:")
 print(f"    Address A: {bal0_end - bal0_start:+,} QU (sent 10k, received 50% of all 38k)")
 print(f"    Address B: {bal1_end - bal1_start:+,} QU (sent 20k + 1k fee, received nothing)")
 print(f"    Address C: {bal2_end - bal2_start:+,} QU (sent 8k, received 50% of all 38k)")
@@ -277,9 +283,9 @@ print(f"\n  Gate totals: received={gate['totalReceived']}, forwarded={gate['tota
 total_sent = 10000 + 20000 + 8000
 print(f"  Total through gate: {total_sent:,} QU from 3 different senders")
 
-print(f"\n  ✅ Multi-sender convergence verified!")
-print(f"  ✅ Sender-as-recipient works!")
-print(f"  ✅ Owner-as-sender works!")
-print(f"  ✅ Recipient-as-sender works!")
+print("\n  ✅ Multi-sender convergence verified!")
+print("  ✅ Sender-as-recipient works!")
+print("  ✅ Owner-as-sender works!")
+print("  ✅ Recipient-as-sender works!")
 
-print(f"\n🏁 Multi-sender convergence test complete!")
+print("\n🏁 Multi-sender convergence test complete!")

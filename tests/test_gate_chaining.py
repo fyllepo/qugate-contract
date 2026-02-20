@@ -20,8 +20,13 @@ Demonstrates composable payment routing:
 
   This proves gates can be composed into multi-stage payment pipelines.
 """
-import os, shutil
-import struct, subprocess, json, base64, time, requests, sys
+import os
+import shutil
+import struct
+import subprocess
+import base64
+import time
+import requests
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
@@ -58,8 +63,9 @@ def get_tick():
     for attempt in range(5):
         try:
             return requests.get(f"{RPC}/live/v1/tick-info", timeout=5).json()['tick']
-        except:
-            if attempt < 4: time.sleep(3)
+        except Exception:
+            if attempt < 4:
+                time.sleep(3)
     raise Exception("Node not responding")
 
 def query_gate(gate_id):
@@ -132,9 +138,9 @@ def wait_ticks(n=15):
             if cur >= target:
                 print(f"    ✓ Reached tick {cur}")
                 return True
-        except:
+        except Exception:
             time.sleep(5)
-    print(f"    ⚠ Timeout")
+    print("    ⚠ Timeout")
     return False
 
 # ============================================================
@@ -166,7 +172,7 @@ print(f"  Address C: {ADDR_C[:12]}...")
 bal0_start = get_balance(ADDR_A)
 bal1_start = get_balance(ADDR_B)
 bal2_start = get_balance(ADDR_C)
-print(f"\n━━━ Starting Balances ━━━")
+print("\n━━━ Starting Balances ━━━")
 print(f"  Address A: {bal0_start:,} QU")
 print(f"  Address B: {bal1_start:,} QU")
 print(f"  Address C: {bal2_start:,} QU")
@@ -178,7 +184,7 @@ print(f"{'='*60}")
 
 gate_a_data = build_create_gate(0, [PK_B, PK_C], [70, 30])  # SPLIT mode
 out = send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, gate_a_data)
-print(f"  Address A creating Gate A (1000 QU fee)...")
+print("  Address A creating Gate A (1000 QU fee)...")
 wait_ticks(15)
 
 total, active = query_gate_count()
@@ -193,7 +199,7 @@ print(f"{'='*60}")
 
 gate_b_data = build_create_gate(2, [PK_C], [100], threshold=15000)  # THRESHOLD mode
 out = send_contract_tx(ADDR_B_KEY, PROC_CREATE_GATE, 1000, gate_b_data)
-print(f"  Address B creating Gate B (1000 QU fee)...")
+print("  Address B creating Gate B (1000 QU fee)...")
 wait_ticks(15)
 
 total, active = query_gate_count()
@@ -211,7 +217,7 @@ bal2_before = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_a_id)
 out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 20000, send_data)
-print(f"  Sent 20,000 QU to Gate A...")
+print("  Sent 20,000 QU to Gate A...")
 wait_ticks(15)
 
 bal1_after_stage3 = get_balance(ADDR_B)
@@ -225,7 +231,7 @@ print(f"  Address B gained: {addr_b_gained:,} QU (expected 14,000 = 70%)")
 print(f"  Address C gained: {addr_c_gained:,} QU (expected 6,000 = 30%)")
 assert addr_b_gained == 14000, f"Expected 14000, got {addr_b_gained}"
 assert addr_c_gained == 6000, f"Expected 6000, got {addr_c_gained}"
-print(f"  ✅ Gate A split correctly!")
+print("  ✅ Gate A split correctly!")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -236,7 +242,7 @@ bal2_before_chain = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_b_id)
 out = send_contract_tx(ADDR_B_KEY, PROC_SEND_TO_GATE, 14000, send_data)
-print(f"  Address B routes 14,000 QU into Gate B (threshold=15000)...")
+print("  Address B routes 14,000 QU into Gate B (threshold=15000)...")
 wait_ticks(15)
 
 gate_b = query_gate(gate_b_id)
@@ -245,7 +251,7 @@ addr_c_chain_gained = bal2_after_chain1 - bal2_before_chain
 
 print(f"  Gate B: received={gate_b['totalReceived']}, forwarded={gate_b['totalForwarded']}, balance={gate_b['currentBalance']}")
 print(f"  Address C gained from chain: {addr_c_chain_gained:,} QU")
-print(f"  ✅ Gate B accumulating (14,000 < 15,000 threshold) — not yet triggered")
+print("  ✅ Gate B accumulating (14,000 < 15,000 threshold) — not yet triggered")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -257,7 +263,7 @@ bal2_before_stage5 = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_a_id)
 out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 20000, send_data)
-print(f"  Sent 20,000 QU to Gate A...")
+print("  Sent 20,000 QU to Gate A...")
 wait_ticks(15)
 
 bal1_after_stage5 = get_balance(ADDR_B)
@@ -269,7 +275,7 @@ gate_a = query_gate(gate_a_id)
 print(f"  Gate A: received={gate_a['totalReceived']}, forwarded={gate_a['totalForwarded']}")
 print(f"  Address B gained: {addr_b_gained_5:,} QU (expected 14,000)")
 print(f"  Address C gained: {addr_c_gained_5:,} QU (expected 6,000)")
-print(f"  ✅ Gate A split correctly again!")
+print("  ✅ Gate A split correctly again!")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -280,7 +286,7 @@ bal2_before_trigger = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_b_id)
 out = send_contract_tx(ADDR_B_KEY, PROC_SEND_TO_GATE, 14000, send_data)
-print(f"  Address B routes 14,000 QU into Gate B (total will be 28,000 ≥ 15,000)...")
+print("  Address B routes 14,000 QU into Gate B (total will be 28,000 ≥ 15,000)...")
 wait_ticks(15)
 
 gate_b = query_gate(gate_b_id)
@@ -291,9 +297,9 @@ print(f"  Gate B: received={gate_b['totalReceived']}, forwarded={gate_b['totalFo
 print(f"  Address C gained from threshold trigger: {addr_c_trigger_gained:,} QU")
 
 if gate_b['totalForwarded'] > 0:
-    print(f"  ✅ GATE B TRIGGERED! Threshold reached, funds forwarded to Address C!")
+    print("  ✅ GATE B TRIGGERED! Threshold reached, funds forwarded to Address C!")
 else:
-    print(f"  ⚠ Gate B did not trigger — checking if threshold logic differs...")
+    print("  ⚠ Gate B did not trigger — checking if threshold logic differs...")
 
 # ============================================================
 print(f"\n{'='*60}")
@@ -318,7 +324,7 @@ bal0_end = get_balance(ADDR_A)
 bal1_end = get_balance(ADDR_B)
 bal2_end = get_balance(ADDR_C)
 
-print(f"\n  Balance Changes:")
+print("\n  Balance Changes:")
 print(f"    Address A: {bal0_end - bal0_start:+,} QU (sent 40k + 2k fees)")
 print(f"    Address B: {bal1_end - bal1_start:+,} QU (received 28k from A, sent 28k to B, paid 1k fee)")
 print(f"    Address C: {bal2_end - bal2_start:+,} QU (received 12k from A + {gate_b_final['totalForwarded']} from B)")
@@ -326,11 +332,11 @@ print(f"    Address C: {bal2_end - bal2_start:+,} QU (received 12k from A + {gat
 print(f"\n  Gate A (SPLIT): received={gate_a_final['totalReceived']}, forwarded={gate_a_final['totalForwarded']}")
 print(f"  Gate B (THRESHOLD): received={gate_b_final['totalReceived']}, forwarded={gate_b_final['totalForwarded']}")
 
-print(f"\n  Pipeline Flow:")
-print(f"    Address A → 40,000 QU → Gate A")
+print("\n  Pipeline Flow:")
+print("    Address A → 40,000 QU → Gate A")
 print(f"    Gate A → {int(40000*0.7):,} QU (70%) → Address B → Gate B → Address C")
 print(f"    Gate A → {int(40000*0.3):,} QU (30%) → Address C (direct)")
 total_to_addr_c = bal2_end - bal2_start
 print(f"    Total to Address C: {total_to_addr_c:,} QU (direct + chained)")
 
-print(f"\n🏁 Gate chaining POC complete!")
+print("\n🏁 Gate chaining POC complete!")

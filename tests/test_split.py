@@ -3,8 +3,14 @@
 QuGate Testnet Scenario Tests
 Uses qubic-cli for transactions, HTTP RPC for queries.
 """
-import os, shutil
-import struct, subprocess, json, base64, time, requests, sys
+import os
+import shutil
+import struct
+import subprocess
+import base64
+import time
+import requests
+import sys
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 ID_TOOL = os.environ.get("QUBIC_ID_TOOL", shutil.which("identity_tool") or "identity_tool")
@@ -43,7 +49,7 @@ def get_tick():
     for attempt in range(5):
         try:
             return requests.get(f"{RPC}/live/v1/tick-info", timeout=5).json()['tick']
-        except:
+        except Exception:
             if attempt < 4:
                 time.sleep(3)
     raise Exception("Node not responding after 5 attempts")
@@ -57,7 +63,7 @@ def query_gate_count():
             b = base64.b64decode(resp['responseData'])
             t, a = struct.unpack('<QQ', b[:16])
             return t, a
-        except:
+        except Exception:
             if attempt < 4:
                 time.sleep(3)
             else:
@@ -74,7 +80,7 @@ def query_gate(gate_id):
             }, timeout=5).json()
             b = base64.b64decode(resp['responseData'])
             break
-        except:
+        except Exception:
             if attempt < 4:
                 time.sleep(3)
             else:
@@ -142,7 +148,7 @@ def wait_ticks(n=15):
     """Wait for n ticks to pass, with node crash recovery"""
     try:
         start = get_tick()
-    except:
+    except Exception:
         print("    Node down, restarting...")
         restart_node()
         start = get_tick()
@@ -155,10 +161,10 @@ def wait_ticks(n=15):
             if cur >= target:
                 print(f"    ✓ Reached tick {cur}")
                 return True
-        except:
+        except Exception:
             print("    Node crashed, restarting...")
             restart_node()
-    print(f"    ⚠ Timeout waiting for ticks")
+    print("    ⚠ Timeout waiting for ticks")
     return False
 
 def restart_node():
@@ -179,7 +185,7 @@ def restart_node():
             if t > 43910000:
                 print(f"    Node restarted at tick {t}")
                 return
-        except:
+        except Exception:
             pass
     raise Exception("Failed to restart node")
 
@@ -201,7 +207,7 @@ print("Checking node...")
 try:
     tick = get_tick()
     print(f"  Node up at tick {tick}\n")
-except:
+except Exception:
     print("  Node not responding! Start it first.")
     sys.exit(1)
 
@@ -232,7 +238,7 @@ print("="*50)
 
 input_data = build_create_gate(mode=0, recipients_pk=[PK_B, PK_C], ratios=[60, 40])
 print(f"  Input size: {len(input_data)} bytes")
-print(f"  Sending createGate tx (1000 QU fee)...")
+print("  Sending createGate tx (1000 QU fee)...")
 out = send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, input_data)
 print(f"  CLI: {out.strip()}")
 
@@ -292,14 +298,14 @@ else:
 # SCENARIO 3: Send more QU - verify consistency
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 print("\n" + "="*50)
-print(f"SCENARIO 3: Send 50,000 QU through same gate")
+print("SCENARIO 3: Send 50,000 QU through same gate")
 print("="*50)
 
 bal_before_1 = get_balance(ADDR_B)
 bal_before_2 = get_balance(ADDR_C)
 
 input_data = build_send_to_gate(SPLIT_GATE_ID)
-print(f"  Sending 50,000 QU...")
+print("  Sending 50,000 QU...")
 out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 50000, input_data)
 print(f"  CLI: {out.strip()}")
 
@@ -328,7 +334,7 @@ print(f"SCENARIO 4: Close gate #{SPLIT_GATE_ID}")
 print("="*50)
 
 input_data = build_close_gate(SPLIT_GATE_ID)
-print(f"  Sending closeGate tx...")
+print("  Sending closeGate tx...")
 out = send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, input_data)
 print(f"  CLI: {out.strip()}")
 
