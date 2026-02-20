@@ -99,18 +99,6 @@ public:
         sint8 _terminator;      // Qubic logs data before this field only
     };
 
-    struct QuGateEventLogger
-    {
-        uint32 _contractIndex;
-        uint32 _type;
-        uint64 gateId;
-        id sender;
-        id recipient;
-        sint64 amount;
-        uint8 mode;
-        sint8 _terminator;
-    };
-
     // =============================================
     // Data structures for gate configuration
     // =============================================
@@ -279,36 +267,6 @@ protected:
     // For now, fees are set in INITIALIZE and cannot be changed until shareholder infra is wired.
 
     // =============================================
-    // Private validation helper structs
-    // =============================================
-
-    struct isValidGateId_input
-    {
-        uint64 gateId;
-    };
-    struct isValidGateId_output
-    {
-        bit result;
-    };
-    struct isValidGateId_locals
-    {
-    };
-
-    struct isGateOwner_input
-    {
-        uint64 gateId;
-        id caller;
-    };
-    struct isGateOwner_output
-    {
-        bit result;
-    };
-    struct isGateOwner_locals
-    {
-        GateConfig gate;
-    };
-
-    // =============================================
     // Locals — all variables declared here, not inline
     // =============================================
 
@@ -325,28 +283,21 @@ protected:
     struct sendToGate_locals
     {
         QuGateLogger logger;
-        QuGateEventLogger eventLog;
         GateConfig gate;
-        sint64 amount;                                   // matches invocationReward() return type
+        sint64 amount;
         uint64 totalRatio;
         uint64 share;
         uint64 distributed;
-        uint64 idx;                                      // gate index (gateId - 1)
-        uint64 recipientIdx;                             // selected recipient for RANDOM mode
+        uint64 idx;
+        uint64 recipientIdx;
         uint64 i;
         uint8 senderAllowed;
-        isValidGateId_input vg_in;                       //
-        isValidGateId_output vg_out;
     };
 
     struct closeGate_locals
     {
         QuGateLogger logger;
         GateConfig gate;
-        isValidGateId_input vg_in;                       //
-        isValidGateId_output vg_out;
-        isGateOwner_input go_in;                         //
-        isGateOwner_output go_out;
     };
 
     struct updateGate_locals
@@ -355,10 +306,6 @@ protected:
         GateConfig gate;
         uint64 totalRatio;
         uint64 i;
-        isValidGateId_input vg_in;                       //
-        isValidGateId_output vg_out;
-        isGateOwner_input go_in;                         //
-        isGateOwner_output go_out;
     };
 
     struct getGate_locals
@@ -386,39 +333,6 @@ protected:
         QuGateLogger logger;
         GateConfig gate;
     };
-
-    // =============================================
-    // Private validation helpers
-    // =============================================
-
-    PRIVATE_FUNCTION_WITH_LOCALS(isValidGateId)
-    {
-        if (input.gateId == 0 || input.gateId > state._gateCount)
-        {
-            output.result = 0;
-        }
-        else if (state._gates.get(input.gateId - 1).active == 0)
-        {
-            output.result = 0;
-        }
-        else
-        {
-            output.result = 1;
-        }
-    }
-
-    PRIVATE_FUNCTION_WITH_LOCALS(isGateOwner)
-    {
-        output.result = 0;
-        if (input.gateId > 0 && input.gateId <= state._gateCount)
-        {
-            locals.gate = state._gates.get(input.gateId - 1);
-            if (locals.gate.owner == input.caller)
-            {
-                output.result = 1;
-            }
-        }
-    }
 
     // =============================================
     // Procedures
@@ -644,14 +558,14 @@ protected:
         }
 
         locals.amount = qpi.invocationReward();           // sint64
-        if (locals.amount == 0)
+        if (locals.amount <= 0)
         {
             output.status = QUGATE_DUST_AMOUNT;
             return;
         }
 
         // Minimum send amount — burn dust
-        if ((uint64)locals.amount < state._minSendAmount)
+        if (locals.amount < (sint64)state._minSendAmount)
         {
             qpi.burn(locals.amount);
             state._totalBurned += locals.amount;           //
@@ -748,10 +662,9 @@ protected:
             locals.senderAllowed = 0;
             for (locals.i = 0; locals.i < locals.gate.allowedSenderCount; locals.i += 1)
             {
-                if (locals.gate.allowedSenders.get(locals.i) == qpi.invocator())
+                if (locals.senderAllowed == 0 && locals.gate.allowedSenders.get(locals.i) == qpi.invocator())
                 {
                     locals.senderAllowed = 1;
-                    break;
                 }
             }
 
@@ -1066,29 +979,30 @@ protected:
                     locals.entry.ratios.set(locals.j, 0);
                 }
                 output.gates.set(locals.i, locals.entry);
-                continue;
             }
-
-            locals.gate = state._gates.get(input.gateIds.get(locals.i) - 1);
-
-            locals.entry.mode = locals.gate.mode;
-            locals.entry.recipientCount = locals.gate.recipientCount;
-            locals.entry.active = locals.gate.active;
-            locals.entry.owner = locals.gate.owner;
-            locals.entry.totalReceived = locals.gate.totalReceived;
-            locals.entry.totalForwarded = locals.gate.totalForwarded;
-            locals.entry.currentBalance = locals.gate.currentBalance;
-            locals.entry.threshold = locals.gate.threshold;
-            locals.entry.createdEpoch = locals.gate.createdEpoch;
-            locals.entry.lastActivityEpoch = locals.gate.lastActivityEpoch;  //
-
-            for (locals.j = 0; locals.j < QUGATE_MAX_RECIPIENTS; locals.j += 1)
+            else
             {
-                locals.entry.recipients.set(locals.j, locals.gate.recipients.get(locals.j));
-                locals.entry.ratios.set(locals.j, locals.gate.ratios.get(locals.j));
-            }
+                locals.gate = state._gates.get(input.gateIds.get(locals.i) - 1);
 
-            output.gates.set(locals.i, locals.entry);
+                locals.entry.mode = locals.gate.mode;
+                locals.entry.recipientCount = locals.gate.recipientCount;
+                locals.entry.active = locals.gate.active;
+                locals.entry.owner = locals.gate.owner;
+                locals.entry.totalReceived = locals.gate.totalReceived;
+                locals.entry.totalForwarded = locals.gate.totalForwarded;
+                locals.entry.currentBalance = locals.gate.currentBalance;
+                locals.entry.threshold = locals.gate.threshold;
+                locals.entry.createdEpoch = locals.gate.createdEpoch;
+                locals.entry.lastActivityEpoch = locals.gate.lastActivityEpoch;
+
+                for (locals.j = 0; locals.j < QUGATE_MAX_RECIPIENTS; locals.j += 1)
+                {
+                    locals.entry.recipients.set(locals.j, locals.gate.recipients.get(locals.j));
+                    locals.entry.ratios.set(locals.j, locals.gate.ratios.get(locals.j));
+                }
+
+                output.gates.set(locals.i, locals.entry);
+            }
         }
     }
 
