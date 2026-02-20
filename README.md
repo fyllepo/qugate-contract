@@ -47,7 +47,7 @@ QuGate introduces **gates** — configurable routing nodes that automatically fo
 
 ## Gate Modes
 
-### MODE_SPLIT (0) — Proportional Distribution
+### QUGATE_MODE_SPLIT (0) — Proportional Distribution
 
 Distributes incoming payments to N recipients according to fixed ratios.
 
@@ -61,13 +61,13 @@ Ratios are relative, not percentages. Ratios of [3, 7] and [30, 70] produce iden
 
 **Validation**: Each ratio must be <= 10,000. Total ratio must be > 0. Recipient count 1-8.
 
-### MODE_ROUND_ROBIN (1) — Rotating Distribution
+### QUGATE_MODE_ROUND_ROBIN (1) — Rotating Distribution
 
 Forwards each payment to the next recipient in sequence. An internal `roundRobinIndex` tracks position and wraps using `mod(index + 1, recipientCount)`.
 
 Payment 1 goes to recipient 0, payment 2 to recipient 1, etc. After reaching the last recipient, it cycles back to recipient 0.
 
-### MODE_THRESHOLD (2) — Accumulate and Forward
+### QUGATE_MODE_THRESHOLD (2) — Accumulate and Forward
 
 Holds incoming payments in `currentBalance` until the configured threshold is reached. When `currentBalance >= threshold`, the entire balance is transferred to recipient 0 and the balance resets to zero. The gate then begins accumulating again.
 
@@ -75,7 +75,7 @@ Holds incoming payments in `currentBalance` until the configured threshold is re
 
 If the gate is closed or expires while holding a balance, the held funds are refunded to the gate owner.
 
-### MODE_RANDOM (3) — Probabilistic Distribution
+### QUGATE_MODE_RANDOM (3) — Probabilistic Distribution
 
 Selects one recipient per payment using tick-based entropy:
 
@@ -85,7 +85,7 @@ recipientIdx = mod(totalReceived + tick(), recipientCount)
 
 Where `totalReceived` is the gate's cumulative received amount (already incremented by the current payment) and `tick()` is the current Qubic tick number. The tick number is not controllable by the sender, providing sufficient unpredictability for payment routing, though this is not cryptographic randomness.
 
-### MODE_CONDITIONAL (4) — Sender-Restricted Forwarding
+### QUGATE_MODE_CONDITIONAL (4) — Sender-Restricted Forwarding
 
 Only forwards payments from addresses in the gate's `allowedSenders` list. Payments from unauthorized senders are bounced back (transferred back to the sender) with status `QUGATE_CONDITIONAL_REJECTED`.
 
@@ -505,7 +505,6 @@ Accumulating fees in the contract would create a honeypot and complicate governa
 
 **QuGateLogger** (general events): `_contractIndex` (uint32), `_type` (uint32), `gateId` (uint64), `sender` (id), `amount` (sint64), `_terminator` (sint8).
 
-**QuGateEventLogger** (detailed payment events): adds `recipient` (id) and `mode` (uint8) fields.
 
 ---
 
