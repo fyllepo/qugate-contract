@@ -75,7 +75,7 @@ constexpr uint32 QUGATE_LOG_FAIL_INSUFFICIENT_FEE = 104;
 constexpr uint32 QUGATE_LOG_FAIL_NO_SLOTS = 105;
 
 // Asset name for shareholder proposals
-constexpr uint64 QUGATE_CONTRACT_ASSET_NAME = 0; // TODO: set at registration time
+constexpr uint64 QUGATE_CONTRACT_ASSET_NAME = 76228174763345ULL; // "QUGATE" as uint64 little-endian
 
 // Future extension struct (Qubic convention)
 struct QUGATE2
