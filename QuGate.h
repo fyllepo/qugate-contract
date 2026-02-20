@@ -75,7 +75,7 @@ constexpr uint32 QUGATE_LOG_FAIL_INSUFFICIENT_FEE = 104;
 constexpr uint32 QUGATE_LOG_FAIL_NO_SLOTS = 105;
 
 // Asset name for shareholder proposals
-constexpr uint64 QUGATE_CONTRACT_ASSET_NAME = 0; // TODO: set from assetNameFromString("QUGATE")
+constexpr uint64 QUGATE_CONTRACT_ASSET_NAME = 0; // TODO: set at registration time
 
 // Future extension struct (Qubic convention)
 struct QUGATE2
@@ -275,7 +275,7 @@ protected:
 
     // Shareholder proposal storage
     // DEFINE_SHAREHOLDER_PROPOSAL_STORAGE(4, QUGATE_CONTRACT_ASSET_NAME);
-    // NOTE: Uncomment when QUGATE_CONTRACT_ASSET_NAME is set from assetNameFromString("QUGATE")
+    // NOTE: Uncomment when QUGATE_CONTRACT_ASSET_NAME is set at registration time
     // For now, fees are set in INITIALIZE and cannot be changed until shareholder infra is wired.
 
     // =============================================
