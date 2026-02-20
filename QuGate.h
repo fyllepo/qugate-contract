@@ -280,24 +280,6 @@ protected:
         uint64 currentFee;     // escalated fee
     };
 
-    struct sendToGate_locals
-    {
-        QuGateLogger logger;
-        GateConfig gate;
-        sint64 amount;
-        uint64 idx;
-        processSplit_input splitIn;
-        processSplit_output splitOut;
-        processRoundRobin_input rrIn;
-        processRoundRobin_output rrOut;
-        processThreshold_input threshIn;
-        processThreshold_output threshOut;
-        processRandom_input randIn;
-        processRandom_output randOut;
-        processConditional_input condIn;
-        processConditional_output condOut;
-    };
-
     struct processSplit_input
     {
         uint64 gateIdx;
@@ -374,6 +356,30 @@ protected:
         GateConfig gate;
         uint64 i;
         uint8 senderAllowed;
+    };
+
+
+    struct sendToGate_locals
+    {
+        QuGateLogger logger;
+        GateConfig gate;
+        sint64 amount;
+        uint64 idx;
+        processSplit_input splitIn;
+        processSplit_output splitOut;
+        processSplit_locals splitLocals;
+        processRoundRobin_input rrIn;
+        processRoundRobin_output rrOut;
+        processRoundRobin_locals rrLocals;
+        processThreshold_input threshIn;
+        processThreshold_output threshOut;
+        processThreshold_locals threshLocals;
+        processRandom_input randIn;
+        processRandom_output randOut;
+        processRandom_locals randLocals;
+        processConditional_input condIn;
+        processConditional_output condOut;
+        processConditional_locals condLocals;
     };
 
     struct closeGate_locals
@@ -778,7 +784,7 @@ protected:
         {
             locals.splitIn.gateIdx = locals.idx;
             locals.splitIn.amount = locals.amount;
-            processSplit(locals.splitIn, locals.splitOut);
+            processSplit(qpi, state, locals.splitIn, locals.splitOut, locals.splitLocals);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }
@@ -786,7 +792,7 @@ protected:
         {
             locals.rrIn.gateIdx = locals.idx;
             locals.rrIn.amount = locals.amount;
-            processRoundRobin(locals.rrIn, locals.rrOut);
+            processRoundRobin(qpi, state, locals.rrIn, locals.rrOut, locals.rrLocals);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }
@@ -794,7 +800,7 @@ protected:
         {
             locals.threshIn.gateIdx = locals.idx;
             locals.threshIn.amount = locals.amount;
-            processThreshold(locals.threshIn, locals.threshOut);
+            processThreshold(qpi, state, locals.threshIn, locals.threshOut, locals.threshLocals);
             if (locals.threshOut.forwarded > 0)
             {
                 locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
@@ -805,7 +811,7 @@ protected:
         {
             locals.randIn.gateIdx = locals.idx;
             locals.randIn.amount = locals.amount;
-            processRandom(locals.randIn, locals.randOut);
+            processRandom(qpi, state, locals.randIn, locals.randOut, locals.randLocals);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }
@@ -813,7 +819,7 @@ protected:
         {
             locals.condIn.gateIdx = locals.idx;
             locals.condIn.amount = locals.amount;
-            processConditional(locals.condIn, locals.condOut);
+            processConditional(qpi, state, locals.condIn, locals.condOut, locals.condLocals);
             if (locals.condOut.status == QUGATE_SUCCESS)
             {
                 locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
@@ -1233,7 +1239,8 @@ protected:
     BEGIN_TICK() {}
     END_TICK() {}
 
-    EXPAND() {}                                          //
+    EXPAND()
+    }
 };
 
 
