@@ -36,11 +36,11 @@ constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
 constexpr uint64 QUGATE_DEFAULT_EXPIRY_EPOCHS = 50;
 
 // Gate modes
-constexpr uint8 MODE_SPLIT = 0;
-constexpr uint8 MODE_ROUND_ROBIN = 1;
-constexpr uint8 MODE_THRESHOLD = 2;
-constexpr uint8 MODE_RANDOM = 3;
-constexpr uint8 MODE_CONDITIONAL = 4;
+constexpr uint8 QUGATE_QUGATE_MODE_SPLIT = 0;
+constexpr uint8 QUGATE_QUGATE_MODE_ROUND_ROBIN = 1;
+constexpr uint8 QUGATE_QUGATE_MODE_THRESHOLD = 2;
+constexpr uint8 QUGATE_QUGATE_MODE_RANDOM = 3;
+constexpr uint8 QUGATE_QUGATE_MODE_CONDITIONAL = 4;
 
 // Status codes — used in procedure outputs and logger _type
 constexpr sint64 QUGATE_SUCCESS = 0;
@@ -285,11 +285,93 @@ protected:
         QuGateLogger logger;
         GateConfig gate;
         sint64 amount;
+        uint64 idx;
+        processSplit_input splitIn;
+        processSplit_output splitOut;
+        processRoundRobin_input rrIn;
+        processRoundRobin_output rrOut;
+        processThreshold_input threshIn;
+        processThreshold_output threshOut;
+        processRandom_input randIn;
+        processRandom_output randOut;
+        processConditional_input condIn;
+        processConditional_output condOut;
+    };
+
+    struct processSplit_input
+    {
+        uint64 gateIdx;
+        sint64 amount;
+    };
+    struct processSplit_output
+    {
+        uint64 forwarded;
+    };
+    struct processSplit_locals
+    {
+        GateConfig gate;
         uint64 totalRatio;
         uint64 share;
         uint64 distributed;
-        uint64 idx;
+        uint64 i;
+    };
+
+    struct processRoundRobin_input
+    {
+        uint64 gateIdx;
+        sint64 amount;
+    };
+    struct processRoundRobin_output
+    {
+        uint64 forwarded;
+    };
+    struct processRoundRobin_locals
+    {
+        GateConfig gate;
+    };
+
+    struct processThreshold_input
+    {
+        uint64 gateIdx;
+        sint64 amount;
+    };
+    struct processThreshold_output
+    {
+        uint64 forwarded;
+    };
+    struct processThreshold_locals
+    {
+        GateConfig gate;
+    };
+
+    struct processRandom_input
+    {
+        uint64 gateIdx;
+        sint64 amount;
+    };
+    struct processRandom_output
+    {
+        uint64 forwarded;
+    };
+    struct processRandom_locals
+    {
+        GateConfig gate;
         uint64 recipientIdx;
+    };
+
+    struct processConditional_input
+    {
+        uint64 gateIdx;
+        sint64 amount;
+    };
+    struct processConditional_output
+    {
+        sint64 status;
+        uint64 forwarded;
+    };
+    struct processConditional_locals
+    {
+        GateConfig gate;
         uint64 i;
         uint8 senderAllowed;
     };
@@ -367,7 +449,7 @@ protected:
         }
 
         // Validate mode
-        if (input.mode > MODE_CONDITIONAL)
+        if (input.mode > QUGATE_MODE_CONDITIONAL)
         {
             // Refund all
             qpi.transfer(qpi.invocator(), qpi.invocationReward());
@@ -398,7 +480,7 @@ protected:
         }
 
         // Validate SPLIT ratios
-        if (input.mode == MODE_SPLIT)
+        if (input.mode == QUGATE_MODE_SPLIT)
         {
             locals.totalRatio = 0;
             for (locals.i = 0; locals.i < input.recipientCount; locals.i += 1)
@@ -424,7 +506,7 @@ protected:
         }
 
         // Validate THRESHOLD > 0
-        if (input.mode == MODE_THRESHOLD && input.threshold == 0)
+        if (input.mode == QUGATE_MODE_THRESHOLD && input.threshold == 0)
         {
             qpi.transfer(qpi.invocator(), qpi.invocationReward());
             output.status = QUGATE_INVALID_THRESHOLD;
@@ -518,17 +600,130 @@ protected:
         LOG_INFO(locals.logger);
     }
 
+    // =============================================
+    // Private mode processors
+    // =============================================
+
+    PRIVATE_PROCEDURE_WITH_LOCALS(processSplit)
+    {
+        locals.gate = state._gates.get(input.gateIdx);
+
+        locals.totalRatio = 0;
+        for (locals.i = 0; locals.i < locals.gate.recipientCount; locals.i += 1)
+        {
+            locals.totalRatio += locals.gate.ratios.get(locals.i);
+        }
+
+        locals.distributed = 0;
+        for (locals.i = 0; locals.i < locals.gate.recipientCount; locals.i += 1)
+        {
+            if (locals.i == locals.gate.recipientCount - 1)
+            {
+                locals.share = input.amount - locals.distributed;
+            }
+            else
+            {
+                locals.share = QPI::div((uint64)input.amount, locals.totalRatio) * locals.gate.ratios.get(locals.i)
+                    + QPI::div(QPI::mod((uint64)input.amount, locals.totalRatio) * locals.gate.ratios.get(locals.i), locals.totalRatio);
+            }
+
+            if (locals.share > 0)
+            {
+                qpi.transfer(locals.gate.recipients.get(locals.i), locals.share);
+                locals.distributed += locals.share;
+            }
+        }
+
+        locals.gate.totalForwarded += locals.distributed;
+        state._gates.set(input.gateIdx, locals.gate);
+        output.forwarded = locals.distributed;
+    }
+
+    PRIVATE_PROCEDURE_WITH_LOCALS(processRoundRobin)
+    {
+        locals.gate = state._gates.get(input.gateIdx);
+
+        qpi.transfer(locals.gate.recipients.get(locals.gate.roundRobinIndex), input.amount);
+        locals.gate.totalForwarded += input.amount;
+        locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
+
+        state._gates.set(input.gateIdx, locals.gate);
+        output.forwarded = input.amount;
+    }
+
+    PRIVATE_PROCEDURE_WITH_LOCALS(processThreshold)
+    {
+        locals.gate = state._gates.get(input.gateIdx);
+
+        locals.gate.currentBalance += input.amount;
+        output.forwarded = 0;
+
+        if (locals.gate.currentBalance >= locals.gate.threshold)
+        {
+            qpi.transfer(locals.gate.recipients.get(0), locals.gate.currentBalance);
+            output.forwarded = locals.gate.currentBalance;
+            locals.gate.totalForwarded += locals.gate.currentBalance;
+            locals.gate.currentBalance = 0;
+        }
+
+        state._gates.set(input.gateIdx, locals.gate);
+    }
+
+    PRIVATE_PROCEDURE_WITH_LOCALS(processRandom)
+    {
+        locals.gate = state._gates.get(input.gateIdx);
+
+        locals.recipientIdx = QPI::mod(locals.gate.totalReceived + qpi.tick(), (uint64)locals.gate.recipientCount);
+        qpi.transfer(locals.gate.recipients.get(locals.recipientIdx), input.amount);
+        locals.gate.totalForwarded += input.amount;
+
+        state._gates.set(input.gateIdx, locals.gate);
+        output.forwarded = input.amount;
+    }
+
+    PRIVATE_PROCEDURE_WITH_LOCALS(processConditional)
+    {
+        locals.gate = state._gates.get(input.gateIdx);
+        output.status = QUGATE_SUCCESS;
+        output.forwarded = 0;
+
+        locals.senderAllowed = 0;
+        for (locals.i = 0; locals.i < locals.gate.allowedSenderCount; locals.i += 1)
+        {
+            if (locals.senderAllowed == 0 && locals.gate.allowedSenders.get(locals.i) == qpi.invocator())
+            {
+                locals.senderAllowed = 1;
+            }
+        }
+
+        if (locals.senderAllowed)
+        {
+            qpi.transfer(locals.gate.recipients.get(0), input.amount);
+            locals.gate.totalForwarded += input.amount;
+            output.forwarded = input.amount;
+        }
+        else
+        {
+            qpi.transfer(qpi.invocator(), input.amount);
+            output.status = QUGATE_CONDITIONAL_REJECTED;
+        }
+
+        state._gates.set(input.gateIdx, locals.gate);
+    }
+
+    // =============================================
+    // Procedures
+    // =============================================
+
     PUBLIC_PROCEDURE_WITH_LOCALS(sendToGate)
     {
         output.status = QUGATE_SUCCESS;
 
-        // Init logger
         locals.logger._contractIndex = CONTRACT_INDEX;
         locals.logger.sender = qpi.invocator();
         locals.logger.amount = qpi.invocationReward();
         locals.logger.gateId = input.gateId;
 
-        // Validate gate ID (1-indexed)
         if (input.gateId == 0 || input.gateId > state._gateCount)
         {
             if (qpi.invocationReward() > 0)
@@ -544,7 +739,6 @@ protected:
         locals.idx = input.gateId - 1;
         locals.gate = state._gates.get(locals.idx);
 
-        // Check gate is active
         if (locals.gate.active == 0)
         {
             if (qpi.invocationReward() > 0)
@@ -557,138 +751,81 @@ protected:
             return;
         }
 
-        locals.amount = qpi.invocationReward();           // sint64
+        locals.amount = qpi.invocationReward();
         if (locals.amount <= 0)
         {
             output.status = QUGATE_DUST_AMOUNT;
             return;
         }
 
-        // Minimum send amount — burn dust
         if (locals.amount < (sint64)state._minSendAmount)
         {
             qpi.burn(locals.amount);
-            state._totalBurned += locals.amount;           //
+            state._totalBurned += locals.amount;
             output.status = QUGATE_DUST_AMOUNT;
             locals.logger._type = QUGATE_LOG_DUST_BURNED;
             LOG_INFO(locals.logger);
             return;
         }
 
-        // Update last activity epoch
+        // Update activity and track received
         locals.gate.lastActivityEpoch = qpi.epoch();
-
-        // Track received
         locals.gate.totalReceived += locals.amount;
+        state._gates.set(locals.idx, locals.gate);
 
-        // ---- MODE: SPLIT ----
-        if (locals.gate.mode == MODE_SPLIT)
+        // Dispatch to mode-specific handler
+        if (locals.gate.mode == QUGATE_MODE_SPLIT)
         {
-            locals.totalRatio = 0;
-            for (locals.i = 0; locals.i < locals.gate.recipientCount; locals.i += 1)
-            {
-                locals.totalRatio += locals.gate.ratios.get(locals.i);
-            }
-
-            locals.distributed = 0;
-            for (locals.i = 0; locals.i < locals.gate.recipientCount; locals.i += 1)
-            {
-                if (locals.i == locals.gate.recipientCount - 1)
-                {
-                    locals.share = locals.amount - locals.distributed;
-                }
-                else
-                {
-                    // Safe against overflow: divide first, then multiply remainder
-                    // share = (amount / totalRatio) * ratio + (amount % totalRatio) * ratio / totalRatio
-                    locals.share = QPI::div((uint64)locals.amount, locals.totalRatio) * locals.gate.ratios.get(locals.i)
-                        + QPI::div(QPI::mod((uint64)locals.amount, locals.totalRatio) * locals.gate.ratios.get(locals.i), locals.totalRatio);
-                }
-
-                if (locals.share > 0)
-                {
-                    qpi.transfer(locals.gate.recipients.get(locals.i), locals.share);
-                    locals.distributed += locals.share;
-                }
-            }
-            locals.gate.totalForwarded += locals.distributed;
-
-            // Log forwarded payment
+            locals.splitIn.gateIdx = locals.idx;
+            locals.splitIn.amount = locals.amount;
+            processSplit(locals.splitIn, locals.splitOut);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }
-
-        // ---- MODE: ROUND_ROBIN ----
-        else if (locals.gate.mode == MODE_ROUND_ROBIN)
+        else if (locals.gate.mode == QUGATE_MODE_ROUND_ROBIN)
         {
-            qpi.transfer(locals.gate.recipients.get(locals.gate.roundRobinIndex), locals.amount);
-            locals.gate.totalForwarded += locals.amount;
-            locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
-
+            locals.rrIn.gateIdx = locals.idx;
+            locals.rrIn.amount = locals.amount;
+            processRoundRobin(locals.rrIn, locals.rrOut);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }
-
-        // ---- MODE: THRESHOLD ----
-        else if (locals.gate.mode == MODE_THRESHOLD)
+        else if (locals.gate.mode == QUGATE_MODE_THRESHOLD)
         {
-            locals.gate.currentBalance += locals.amount;
-
-            if (locals.gate.currentBalance >= locals.gate.threshold)
+            locals.threshIn.gateIdx = locals.idx;
+            locals.threshIn.amount = locals.amount;
+            processThreshold(locals.threshIn, locals.threshOut);
+            if (locals.threshOut.forwarded > 0)
             {
-                qpi.transfer(locals.gate.recipients.get(0), locals.gate.currentBalance);
-                locals.gate.totalForwarded += locals.gate.currentBalance;
-                locals.gate.currentBalance = 0;
-
                 locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
                 LOG_INFO(locals.logger);
             }
         }
-
-        // ---- MODE: RANDOM ----
-        else if (locals.gate.mode == MODE_RANDOM)
+        else if (locals.gate.mode == QUGATE_MODE_RANDOM)
         {
-            locals.recipientIdx = QPI::mod(locals.gate.totalReceived + qpi.tick(), (uint64)locals.gate.recipientCount);
-            qpi.transfer(locals.gate.recipients.get(locals.recipientIdx), locals.amount);
-            locals.gate.totalForwarded += locals.amount;
-
+            locals.randIn.gateIdx = locals.idx;
+            locals.randIn.amount = locals.amount;
+            processRandom(locals.randIn, locals.randOut);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }
-
-        // ---- MODE: CONDITIONAL ----
-        else if (locals.gate.mode == MODE_CONDITIONAL)
+        else if (locals.gate.mode == QUGATE_MODE_CONDITIONAL)
         {
-            locals.senderAllowed = 0;
-            for (locals.i = 0; locals.i < locals.gate.allowedSenderCount; locals.i += 1)
+            locals.condIn.gateIdx = locals.idx;
+            locals.condIn.amount = locals.amount;
+            processConditional(locals.condIn, locals.condOut);
+            if (locals.condOut.status == QUGATE_SUCCESS)
             {
-                if (locals.senderAllowed == 0 && locals.gate.allowedSenders.get(locals.i) == qpi.invocator())
-                {
-                    locals.senderAllowed = 1;
-                }
-            }
-
-            if (locals.senderAllowed)
-            {
-                qpi.transfer(locals.gate.recipients.get(0), locals.amount);
-                locals.gate.totalForwarded += locals.amount;
-
                 locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
                 LOG_INFO(locals.logger);
             }
             else
             {
-                // Bounce back to sender
-                qpi.transfer(qpi.invocator(), locals.amount);
-                output.status = QUGATE_CONDITIONAL_REJECTED;
-
+                output.status = locals.condOut.status;
                 locals.logger._type = QUGATE_LOG_PAYMENT_BOUNCED;
                 LOG_INFO(locals.logger);
             }
         }
-
-        // Save updated gate state
-        state._gates.set(input.gateId - 1, locals.gate);
     }
 
     PUBLIC_PROCEDURE_WITH_LOCALS(closeGate)
@@ -824,7 +961,7 @@ protected:
         }
 
         // Validate SPLIT ratios if gate is SPLIT mode
-        if (locals.gate.mode == MODE_SPLIT)
+        if (locals.gate.mode == QUGATE_MODE_SPLIT)
         {
             locals.totalRatio = 0;
             for (locals.i = 0; locals.i < input.recipientCount; locals.i += 1)
@@ -852,7 +989,7 @@ protected:
         }
 
         // Validate THRESHOLD if gate is THRESHOLD mode
-        if (locals.gate.mode == MODE_THRESHOLD && input.threshold == 0)
+        if (locals.gate.mode == QUGATE_MODE_THRESHOLD && input.threshold == 0)
         {
             if (qpi.invocationReward() > 0)
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
