@@ -4,19 +4,19 @@ QuGate V2 — Gate Chaining Test (Proof of Concept)
 
 Demonstrates composable payment routing:
   
-  Pipeline: Seed0 → Gate A (SPLIT 70/30) → Seed1 (70%) + Seed2 (30%)
+  Pipeline: Address A → Gate A (SPLIT 70/30) → Address B (70%) + Address C (30%)
                                               ↓
-                              Seed1 → Gate B (THRESHOLD 15k) → Seed2
+                              Address B → Gate B (THRESHOLD 15k) → Address C
                                               
   Flow:
-    1. Create Gate A: SPLIT 70/30 → Seed1, Seed2
-    2. Create Gate B: THRESHOLD 15000 → Seed2 (owned by Seed1)
+    1. Create Gate A: SPLIT 70/30 → Address B, Address C
+    2. Create Gate B: THRESHOLD 15000 → Address C (owned by Address B)
     3. Send 20,000 QU through Gate A
-       → Seed1 gets 14,000 (70%), Seed2 gets 6,000 (30%)
-    4. Seed1 routes 14,000 through Gate B (threshold=15k, so accumulates)
+       → Address B gets 14,000 (70%), Address C gets 6,000 (30%)
+    4. Address B routes 14,000 through Gate B (threshold=15k, so accumulates)
     5. Send another 20,000 QU through Gate A
-       → Seed1 gets 14,000 more (total 28k through Gate B → triggers threshold!)
-    6. Verify Gate B triggered and forwarded all accumulated funds to Seed2
+       → Address B gets 14,000 more (total 28k through Gate B → triggers threshold!)
+    6. Verify Gate B triggered and forwarded all accumulated funds to Address C
 
   This proves gates can be composed into multi-stage payment pipelines.
 """
@@ -29,9 +29,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-SEED0 = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-SEED1 = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-SEED2 = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
@@ -143,42 +143,42 @@ print("║   QuGate V2 — Gate Chaining Test (POC)           ║")
 print("╚══════════════════════════════════════════════════╝")
 print()
 print("  Pipeline:")
-print("    Seed0 → [Gate A: SPLIT 70/30] → Seed1 (70%) + Seed2 (30%)")
+print("    Address A → [Gate A: SPLIT 70/30] → Address B (70%) + Address C (30%)")
 print("                                       ↓")
-print("                        Seed1 → [Gate B: THRESHOLD 15k] → Seed2")
+print("                        Address B → [Gate B: THRESHOLD 15k] → Address C")
 print()
 
 tick = get_tick()
 print(f"Node up at tick {tick}")
 
-ID0 = get_identity(SEED0)
-ID1 = get_identity(SEED1)
-ID2 = get_identity(SEED2)
-PK0 = get_pubkey_from_identity(ID0)
-PK1 = get_pubkey_from_identity(ID1)
-PK2 = get_pubkey_from_identity(ID2)
+ADDR_A = get_identity(ADDR_A_SEED)
+ADDR_B = get_identity(ADDR_B_SEED)
+ADDR_C = get_identity(ADDR_C_SEED)
+PK_A = get_pubkey_from_identity(ADDR_A)
+PK_B = get_pubkey_from_identity(ADDR_B)
+PK_C = get_pubkey_from_identity(ADDR_C)
 
-print(f"  Seed0: {ID0[:12]}...")
-print(f"  Seed1: {ID1[:12]}...")
-print(f"  Seed2: {ID2[:12]}...")
+print(f"  Address A: {ADDR_A[:12]}...")
+print(f"  Address B: {ADDR_B[:12]}...")
+print(f"  Address C: {ADDR_C[:12]}...")
 
 # Record starting balances
-bal0_start = get_balance(ID0)
-bal1_start = get_balance(ID1)
-bal2_start = get_balance(ID2)
+bal0_start = get_balance(ADDR_A)
+bal1_start = get_balance(ADDR_B)
+bal2_start = get_balance(ADDR_C)
 print(f"\n━━━ Starting Balances ━━━")
-print(f"  Seed0: {bal0_start:,} QU")
-print(f"  Seed1: {bal1_start:,} QU")
-print(f"  Seed2: {bal2_start:,} QU")
+print(f"  Address A: {bal0_start:,} QU")
+print(f"  Address B: {bal1_start:,} QU")
+print(f"  Address C: {bal2_start:,} QU")
 
 # ============================================================
 print(f"\n{'='*60}")
-print("STAGE 1: Create Gate A (SPLIT 70% → Seed1, 30% → Seed2)")
+print("STAGE 1: Create Gate A (SPLIT 70% → Address B, 30% → Address C)")
 print(f"{'='*60}")
 
-gate_a_data = build_create_gate(0, [PK1, PK2], [70, 30])  # SPLIT mode
-out = send_contract_tx(SEED0, PROC_CREATE_GATE, 1000, gate_a_data)
-print(f"  Seed0 creating Gate A (1000 QU fee)...")
+gate_a_data = build_create_gate(0, [PK_B, PK_C], [70, 30])  # SPLIT mode
+out = send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, gate_a_data)
+print(f"  Address A creating Gate A (1000 QU fee)...")
 wait_ticks(15)
 
 total, active = query_gate_count()
@@ -188,12 +188,12 @@ print(f"  ✅ Gate A = #{gate_a_id}: mode={gate_a['mode']}, recipients={gate_a['
 
 # ============================================================
 print(f"\n{'='*60}")
-print("STAGE 2: Create Gate B (THRESHOLD 15000 → Seed2, owned by Seed1)")
+print("STAGE 2: Create Gate B (THRESHOLD 15000 → Address C, owned by Address B)")
 print(f"{'='*60}")
 
-gate_b_data = build_create_gate(2, [PK2], [100], threshold=15000)  # THRESHOLD mode
-out = send_contract_tx(SEED1, PROC_CREATE_GATE, 1000, gate_b_data)
-print(f"  Seed1 creating Gate B (1000 QU fee)...")
+gate_b_data = build_create_gate(2, [PK_C], [100], threshold=15000)  # THRESHOLD mode
+out = send_contract_tx(ADDR_B_SEED, PROC_CREATE_GATE, 1000, gate_b_data)
+print(f"  Address B creating Gate B (1000 QU fee)...")
 wait_ticks(15)
 
 total, active = query_gate_count()
@@ -203,95 +203,95 @@ print(f"  ✅ Gate B = #{gate_b_id}: mode={gate_b['mode']}, threshold={gate_b['t
 
 # ============================================================
 print(f"\n{'='*60}")
-print("STAGE 3: Seed0 sends 20,000 QU through Gate A")
+print("STAGE 3: Address A sends 20,000 QU through Gate A")
 print(f"{'='*60}")
 
-bal1_before = get_balance(ID1)
-bal2_before = get_balance(ID2)
+bal1_before = get_balance(ADDR_B)
+bal2_before = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_a_id)
-out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 20000, send_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 20000, send_data)
 print(f"  Sent 20,000 QU to Gate A...")
 wait_ticks(15)
 
-bal1_after_stage3 = get_balance(ID1)
-bal2_after_stage3 = get_balance(ID2)
-seed1_gained = bal1_after_stage3 - bal1_before
-seed2_gained = bal2_after_stage3 - bal2_before
+bal1_after_stage3 = get_balance(ADDR_B)
+bal2_after_stage3 = get_balance(ADDR_C)
+addr_b_gained = bal1_after_stage3 - bal1_before
+addr_c_gained = bal2_after_stage3 - bal2_before
 gate_a = query_gate(gate_a_id)
 
 print(f"  Gate A: received={gate_a['totalReceived']}, forwarded={gate_a['totalForwarded']}")
-print(f"  Seed1 gained: {seed1_gained:,} QU (expected 14,000 = 70%)")
-print(f"  Seed2 gained: {seed2_gained:,} QU (expected 6,000 = 30%)")
-assert seed1_gained == 14000, f"Expected 14000, got {seed1_gained}"
-assert seed2_gained == 6000, f"Expected 6000, got {seed2_gained}"
+print(f"  Address B gained: {addr_b_gained:,} QU (expected 14,000 = 70%)")
+print(f"  Address C gained: {addr_c_gained:,} QU (expected 6,000 = 30%)")
+assert addr_b_gained == 14000, f"Expected 14000, got {addr_b_gained}"
+assert addr_c_gained == 6000, f"Expected 6000, got {addr_c_gained}"
 print(f"  ✅ Gate A split correctly!")
 
 # ============================================================
 print(f"\n{'='*60}")
-print("STAGE 4: Seed1 chains 14,000 QU into Gate B")
+print("STAGE 4: Address B chains 14,000 QU into Gate B")
 print(f"{'='*60}")
 
-bal2_before_chain = get_balance(ID2)
+bal2_before_chain = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_b_id)
-out = send_contract_tx(SEED1, PROC_SEND_TO_GATE, 14000, send_data)
-print(f"  Seed1 routes 14,000 QU into Gate B (threshold=15000)...")
+out = send_contract_tx(ADDR_B_SEED, PROC_SEND_TO_GATE, 14000, send_data)
+print(f"  Address B routes 14,000 QU into Gate B (threshold=15000)...")
 wait_ticks(15)
 
 gate_b = query_gate(gate_b_id)
-bal2_after_chain1 = get_balance(ID2)
-seed2_chain_gained = bal2_after_chain1 - bal2_before_chain
+bal2_after_chain1 = get_balance(ADDR_C)
+addr_c_chain_gained = bal2_after_chain1 - bal2_before_chain
 
 print(f"  Gate B: received={gate_b['totalReceived']}, forwarded={gate_b['totalForwarded']}, balance={gate_b['currentBalance']}")
-print(f"  Seed2 gained from chain: {seed2_chain_gained:,} QU")
+print(f"  Address C gained from chain: {addr_c_chain_gained:,} QU")
 print(f"  ✅ Gate B accumulating (14,000 < 15,000 threshold) — not yet triggered")
 
 # ============================================================
 print(f"\n{'='*60}")
-print("STAGE 5: Seed0 sends another 20,000 QU through Gate A")
+print("STAGE 5: Address A sends another 20,000 QU through Gate A")
 print(f"{'='*60}")
 
-bal1_before_stage5 = get_balance(ID1)
-bal2_before_stage5 = get_balance(ID2)
+bal1_before_stage5 = get_balance(ADDR_B)
+bal2_before_stage5 = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_a_id)
-out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 20000, send_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 20000, send_data)
 print(f"  Sent 20,000 QU to Gate A...")
 wait_ticks(15)
 
-bal1_after_stage5 = get_balance(ID1)
-bal2_after_stage5 = get_balance(ID2)
-seed1_gained_5 = bal1_after_stage5 - bal1_before_stage5
-seed2_gained_5 = bal2_after_stage5 - bal2_before_stage5
+bal1_after_stage5 = get_balance(ADDR_B)
+bal2_after_stage5 = get_balance(ADDR_C)
+addr_b_gained_5 = bal1_after_stage5 - bal1_before_stage5
+addr_c_gained_5 = bal2_after_stage5 - bal2_before_stage5
 gate_a = query_gate(gate_a_id)
 
 print(f"  Gate A: received={gate_a['totalReceived']}, forwarded={gate_a['totalForwarded']}")
-print(f"  Seed1 gained: {seed1_gained_5:,} QU (expected 14,000)")
-print(f"  Seed2 gained: {seed2_gained_5:,} QU (expected 6,000)")
+print(f"  Address B gained: {addr_b_gained_5:,} QU (expected 14,000)")
+print(f"  Address C gained: {addr_c_gained_5:,} QU (expected 6,000)")
 print(f"  ✅ Gate A split correctly again!")
 
 # ============================================================
 print(f"\n{'='*60}")
-print("STAGE 6: Seed1 chains another 14,000 QU → Gate B TRIGGERS!")
+print("STAGE 6: Address B chains another 14,000 QU → Gate B TRIGGERS!")
 print(f"{'='*60}")
 
-bal2_before_trigger = get_balance(ID2)
+bal2_before_trigger = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_b_id)
-out = send_contract_tx(SEED1, PROC_SEND_TO_GATE, 14000, send_data)
-print(f"  Seed1 routes 14,000 QU into Gate B (total will be 28,000 ≥ 15,000)...")
+out = send_contract_tx(ADDR_B_SEED, PROC_SEND_TO_GATE, 14000, send_data)
+print(f"  Address B routes 14,000 QU into Gate B (total will be 28,000 ≥ 15,000)...")
 wait_ticks(15)
 
 gate_b = query_gate(gate_b_id)
-bal2_after_trigger = get_balance(ID2)
-seed2_trigger_gained = bal2_after_trigger - bal2_before_trigger
+bal2_after_trigger = get_balance(ADDR_C)
+addr_c_trigger_gained = bal2_after_trigger - bal2_before_trigger
 
 print(f"  Gate B: received={gate_b['totalReceived']}, forwarded={gate_b['totalForwarded']}, balance={gate_b['currentBalance']}")
-print(f"  Seed2 gained from threshold trigger: {seed2_trigger_gained:,} QU")
+print(f"  Address C gained from threshold trigger: {addr_c_trigger_gained:,} QU")
 
 if gate_b['totalForwarded'] > 0:
-    print(f"  ✅ GATE B TRIGGERED! Threshold reached, funds forwarded to Seed2!")
+    print(f"  ✅ GATE B TRIGGERED! Threshold reached, funds forwarded to Address C!")
 else:
     print(f"  ⚠ Gate B did not trigger — checking if threshold logic differs...")
 
@@ -300,8 +300,8 @@ print(f"\n{'='*60}")
 print("STAGE 7: Close both gates")
 print(f"{'='*60}")
 
-send_contract_tx(SEED0, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_a_id))
-send_contract_tx(SEED1, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_b_id))
+send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_a_id))
+send_contract_tx(ADDR_B_SEED, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_b_id))
 wait_ticks(15)
 
 gate_a_final = query_gate(gate_a_id)
@@ -314,23 +314,23 @@ print(f"\n{'='*60}")
 print("FINAL RESULTS")
 print(f"{'='*60}")
 
-bal0_end = get_balance(ID0)
-bal1_end = get_balance(ID1)
-bal2_end = get_balance(ID2)
+bal0_end = get_balance(ADDR_A)
+bal1_end = get_balance(ADDR_B)
+bal2_end = get_balance(ADDR_C)
 
 print(f"\n  Balance Changes:")
-print(f"    Seed0: {bal0_end - bal0_start:+,} QU (sent 40k + 2k fees)")
-print(f"    Seed1: {bal1_end - bal1_start:+,} QU (received 28k from A, sent 28k to B, paid 1k fee)")
-print(f"    Seed2: {bal2_end - bal2_start:+,} QU (received 12k from A + {gate_b_final['totalForwarded']} from B)")
+print(f"    Address A: {bal0_end - bal0_start:+,} QU (sent 40k + 2k fees)")
+print(f"    Address B: {bal1_end - bal1_start:+,} QU (received 28k from A, sent 28k to B, paid 1k fee)")
+print(f"    Address C: {bal2_end - bal2_start:+,} QU (received 12k from A + {gate_b_final['totalForwarded']} from B)")
 
 print(f"\n  Gate A (SPLIT): received={gate_a_final['totalReceived']}, forwarded={gate_a_final['totalForwarded']}")
 print(f"  Gate B (THRESHOLD): received={gate_b_final['totalReceived']}, forwarded={gate_b_final['totalForwarded']}")
 
 print(f"\n  Pipeline Flow:")
-print(f"    Seed0 → 40,000 QU → Gate A")
-print(f"    Gate A → {int(40000*0.7):,} QU (70%) → Seed1 → Gate B → Seed2")
-print(f"    Gate A → {int(40000*0.3):,} QU (30%) → Seed2 (direct)")
-total_to_seed2 = bal2_end - bal2_start
-print(f"    Total to Seed2: {total_to_seed2:,} QU (direct + chained)")
+print(f"    Address A → 40,000 QU → Gate A")
+print(f"    Gate A → {int(40000*0.7):,} QU (70%) → Address B → Gate B → Address C")
+print(f"    Gate A → {int(40000*0.3):,} QU (30%) → Address C (direct)")
+total_to_addr_c = bal2_end - bal2_start
+print(f"    Total to Address C: {total_to_addr_c:,} QU (direct + chained)")
 
 print(f"\n🏁 Gate chaining POC complete!")

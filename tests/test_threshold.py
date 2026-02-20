@@ -9,9 +9,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-SEED0 = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-SEED1 = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-SEED2 = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
@@ -128,26 +128,26 @@ print("╚═══════════════════════�
 tick = get_tick()
 print(f"Node up at tick {tick}\n")
 
-ID0 = get_identity(SEED0)
-ID1 = get_identity(SEED1)
-ID2 = get_identity(SEED2)
-PK1 = get_pubkey_from_identity(ID1)
+ADDR_A = get_identity(ADDR_A_SEED)
+ADDR_B = get_identity(ADDR_B_SEED)
+ADDR_C = get_identity(ADDR_C_SEED)
+PK_B = get_pubkey_from_identity(ADDR_B)
 
-# ━━━ Create THRESHOLD gate: forward to Seed1 when balance >= 25,000 ━━━
+# ━━━ Create THRESHOLD gate: forward to Address B when balance >= 25,000 ━━━
 print("="*50)
-print("STEP 1: Create THRESHOLD gate (threshold=25000, recipient=Seed1)")
+print("STEP 1: Create THRESHOLD gate (threshold=25000, recipient=Address B)")
 print("="*50)
 
 THRESHOLD_AMOUNT = 25000
 input_data = build_create_gate(
     mode=MODE_THRESHOLD,
-    recipients_pk=[PK1],
+    recipients_pk=[PK_B],
     ratios=[100],
     threshold=THRESHOLD_AMOUNT
 )
 print(f"  Threshold: {THRESHOLD_AMOUNT:,} QU")
 print(f"  Sending createGate tx (1000 QU fee)...")
-out = send_contract_tx(SEED0, PROC_CREATE_GATE, 1000, input_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line:
         print(f"  {line.strip()}")
@@ -171,11 +171,11 @@ print("\n" + "="*50)
 print("STEP 2: Send 10,000 QU (below threshold — should accumulate)")
 print("="*50)
 
-bal1_start = get_balance(ID1)
-print(f"  Seed1 before: {bal1_start:,} QU")
+bal1_start = get_balance(ADDR_B)
+print(f"  Address B before: {bal1_start:,} QU")
 
 input_data = struct.pack('<Q', TH_GATE)
-out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 10000, input_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line:
         print(f"  {line.strip()}")
@@ -183,9 +183,9 @@ for line in out.strip().splitlines():
 wait_ticks(15)
 
 gate = query_gate(TH_GATE)
-bal1 = get_balance(ID1)
+bal1 = get_balance(ADDR_B)
 print(f"\n  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}, balance={gate['currentBalance']}")
-print(f"  Seed1 gained: {bal1 - bal1_start}")
+print(f"  Address B gained: {bal1 - bal1_start}")
 
 if gate['currentBalance'] == 10000 and gate['totalForwarded'] == 0:
     print("  ✅ Correctly accumulated — threshold not yet reached!")
@@ -200,7 +200,7 @@ print("STEP 3: Send 10,000 more QU (total 20k — still below threshold)")
 print("="*50)
 
 input_data = struct.pack('<Q', TH_GATE)
-out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 10000, input_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line:
         print(f"  {line.strip()}")
@@ -208,9 +208,9 @@ for line in out.strip().splitlines():
 wait_ticks(15)
 
 gate = query_gate(TH_GATE)
-bal1 = get_balance(ID1)
+bal1 = get_balance(ADDR_B)
 print(f"\n  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}, balance={gate['currentBalance']}")
-print(f"  Seed1 total gained: {bal1 - bal1_start}")
+print(f"  Address B total gained: {bal1 - bal1_start}")
 
 if gate['currentBalance'] == 20000 and gate['totalForwarded'] == 0:
     print("  ✅ Still accumulating — 20k < 25k threshold")
@@ -223,7 +223,7 @@ print("STEP 4: Send 5,000 more QU (total 25k — HITS THRESHOLD!)")
 print("="*50)
 
 input_data = struct.pack('<Q', TH_GATE)
-out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 5000, input_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 5000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line:
         print(f"  {line.strip()}")
@@ -231,13 +231,13 @@ for line in out.strip().splitlines():
 wait_ticks(15)
 
 gate = query_gate(TH_GATE)
-bal1 = get_balance(ID1)
+bal1 = get_balance(ADDR_B)
 gain = bal1 - bal1_start
 print(f"\n  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}, balance={gate['currentBalance']}")
-print(f"  Seed1 total gained: {gain:,}")
+print(f"  Address B total gained: {gain:,}")
 
 if gate['totalForwarded'] == 25000 and gate['currentBalance'] == 0:
-    print("  ✅ THRESHOLD triggered! All 25,000 QU forwarded to Seed1!")
+    print("  ✅ THRESHOLD triggered! All 25,000 QU forwarded to Address B!")
 elif gate['totalForwarded'] > 0:
     print(f"  Forwarded {gate['totalForwarded']} — threshold triggered (balance={gate['currentBalance']})")
 else:
@@ -249,7 +249,7 @@ print("STEP 5: Send 10,000 QU after threshold reset (should accumulate again)")
 print("="*50)
 
 input_data = struct.pack('<Q', TH_GATE)
-out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 10000, input_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line:
         print(f"  {line.strip()}")
@@ -267,7 +267,7 @@ elif gate['currentBalance'] == 0 and gate['totalForwarded'] == 35000:
 # Close gate
 print("\n  Closing gate...")
 input_data = struct.pack('<Q', TH_GATE)
-send_contract_tx(SEED0, PROC_CLOSE_GATE, 0, input_data)
+send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, input_data)
 wait_ticks(15)
 gate = query_gate(TH_GATE)
 if not gate['active']:

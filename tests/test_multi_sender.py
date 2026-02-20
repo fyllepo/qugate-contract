@@ -14,9 +14,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-SEED0 = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-SEED1 = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-SEED2 = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
@@ -125,43 +125,43 @@ print("╔═══════════════════════�
 print("║   QuGate V2 — Multi-Sender Convergence Test      ║")
 print("╚══════════════════════════════════════════════════╝")
 print()
-print("  3 senders → 1 SPLIT gate (50/50) → Seed1 + Seed2")
+print("  3 senders → 1 SPLIT gate (50/50) → Address B + Address C")
 print("  Verifies any sender can use a gate, not just the owner")
 print()
 
 tick = get_tick()
 print(f"Node up at tick {tick}")
 
-ID0 = get_identity(SEED0)
-ID1 = get_identity(SEED1)
-ID2 = get_identity(SEED2)
-PK0 = get_pubkey_from_identity(ID0)
-PK1 = get_pubkey_from_identity(ID1)
-PK2 = get_pubkey_from_identity(ID2)
+ADDR_A = get_identity(ADDR_A_SEED)
+ADDR_B = get_identity(ADDR_B_SEED)
+ADDR_C = get_identity(ADDR_C_SEED)
+PK_A = get_pubkey_from_identity(ADDR_A)
+PK_B = get_pubkey_from_identity(ADDR_B)
+PK_C = get_pubkey_from_identity(ADDR_C)
 
-# Use Seed0 and Seed2 as recipients so all 3 seeds can be senders
-# Gate: SPLIT 50/50 → Seed0, Seed2
-# Senders: Seed0, Seed1, Seed2
+# Use Address A and Address C as recipients so all 3 seeds can be senders
+# Gate: SPLIT 50/50 → Address A, Address C
+# Senders: Address A, Address B, Address C
 
-print(f"  Recipients: Seed0 ({ID0[:12]}...) + Seed2 ({ID2[:12]}...)")
-print(f"  Senders: Seed0, Seed1, Seed2")
+print(f"  Recipients: Address A ({ADDR_A[:12]}...) + Address C ({ADDR_C[:12]}...)")
+print(f"  Senders: Address A, Address B, Address C")
 
-bal0_start = get_balance(ID0)
-bal1_start = get_balance(ID1)
-bal2_start = get_balance(ID2)
+bal0_start = get_balance(ADDR_A)
+bal1_start = get_balance(ADDR_B)
+bal2_start = get_balance(ADDR_C)
 print(f"\n━━━ Starting Balances ━━━")
-print(f"  Seed0: {bal0_start:,} QU")
-print(f"  Seed1: {bal1_start:,} QU")
-print(f"  Seed2: {bal2_start:,} QU")
+print(f"  Address A: {bal0_start:,} QU")
+print(f"  Address B: {bal1_start:,} QU")
+print(f"  Address C: {bal2_start:,} QU")
 
 # ============================================================
 print(f"\n{'='*60}")
-print("STEP 1: Create SPLIT gate (50/50 → Seed0, Seed2)")
+print("STEP 1: Create SPLIT gate (50/50 → Address A, Address C)")
 print(f"{'='*60}")
 
-create_data = build_create_gate(0, [PK0, PK2], [50, 50])
-out = send_contract_tx(SEED1, PROC_CREATE_GATE, 1000, create_data)
-print(f"  Seed1 creates gate (1000 QU fee) — Seed1 is owner but NOT a recipient")
+create_data = build_create_gate(0, [PK_A, PK_C], [50, 50])
+out = send_contract_tx(ADDR_B_SEED, PROC_CREATE_GATE, 1000, create_data)
+print(f"  Address B creates gate (1000 QU fee) — Address B is owner but NOT a recipient")
 wait_ticks(15)
 
 total, active = query_gate_count()
@@ -172,86 +172,86 @@ print(f"  ✅ Gate created!")
 
 # ============================================================
 print(f"\n{'='*60}")
-print("STEP 2: Seed0 sends 10,000 QU (sender is also a recipient)")
+print("STEP 2: Address A sends 10,000 QU (sender is also a recipient)")
 print(f"{'='*60}")
 
-bal0_before = get_balance(ID0)
-bal2_before = get_balance(ID2)
+bal0_before = get_balance(ADDR_A)
+bal2_before = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_id)
-out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 10000, send_data)
-print(f"  Seed0 sent 10,000 QU to gate #{gate_id}")
+out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, send_data)
+print(f"  Address A sent 10,000 QU to gate #{gate_id}")
 wait_ticks(15)
 
-bal0_after = get_balance(ID0)
-bal2_after = get_balance(ID2)
+bal0_after = get_balance(ADDR_A)
+bal2_after = get_balance(ADDR_C)
 gate = query_gate(gate_id)
 
-# Seed0 sent 10k but also received 5k back (50%), net -5k
-seed0_net = bal0_after - bal0_before
-seed2_gain = bal2_after - bal2_before
+# Address A sent 10k but also received 5k back (50%), net -5k
+addr_a_net = bal0_after - bal0_before
+addr_c_gain = bal2_after - bal2_before
 
 print(f"  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}")
-print(f"  Seed0 net change: {seed0_net:+,} QU (sent 10k, received 5k back = -5k)")
-print(f"  Seed2 gained: {seed2_gain:+,} QU (expected +5,000)")
-print(f"  ✅ Sender-as-recipient works!" if seed2_gain == 5000 else f"  ⚠ Unexpected: Seed2 gained {seed2_gain}")
+print(f"  Address A net change: {addr_a_net:+,} QU (sent 10k, received 5k back = -5k)")
+print(f"  Address C gained: {addr_c_gain:+,} QU (expected +5,000)")
+print(f"  ✅ Sender-as-recipient works!" if addr_c_gain == 5000 else f"  ⚠ Unexpected: Address C gained {addr_c_gain}")
 
 # ============================================================
 print(f"\n{'='*60}")
-print("STEP 3: Seed1 sends 20,000 QU (owner sends, not a recipient)")
+print("STEP 3: Address B sends 20,000 QU (owner sends, not a recipient)")
 print(f"{'='*60}")
 
-bal0_before = get_balance(ID0)
-bal2_before = get_balance(ID2)
+bal0_before = get_balance(ADDR_A)
+bal2_before = get_balance(ADDR_C)
 
-out = send_contract_tx(SEED1, PROC_SEND_TO_GATE, 20000, send_data)
-print(f"  Seed1 sent 20,000 QU to gate #{gate_id}")
+out = send_contract_tx(ADDR_B_SEED, PROC_SEND_TO_GATE, 20000, send_data)
+print(f"  Address B sent 20,000 QU to gate #{gate_id}")
 wait_ticks(15)
 
-bal0_after = get_balance(ID0)
-bal2_after = get_balance(ID2)
+bal0_after = get_balance(ADDR_A)
+bal2_after = get_balance(ADDR_C)
 gate = query_gate(gate_id)
 
-seed0_gain = bal0_after - bal0_before
-seed2_gain = bal2_after - bal2_before
+addr_a_gain = bal0_after - bal0_before
+addr_c_gain = bal2_after - bal2_before
 
 print(f"  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}")
-print(f"  Seed0 gained: {seed0_gain:+,} QU (expected +10,000)")
-print(f"  Seed2 gained: {seed2_gain:+,} QU (expected +10,000)")
-print(f"  ✅ Owner-as-sender works!" if seed0_gain == 10000 and seed2_gain == 10000 else f"  ⚠ Unexpected distribution")
+print(f"  Address A gained: {addr_a_gain:+,} QU (expected +10,000)")
+print(f"  Address C gained: {addr_c_gain:+,} QU (expected +10,000)")
+print(f"  ✅ Owner-as-sender works!" if addr_a_gain == 10000 and addr_c_gain == 10000 else f"  ⚠ Unexpected distribution")
 
 # ============================================================
 print(f"\n{'='*60}")
-print("STEP 4: Seed2 sends 8,000 QU (recipient sends to own gate)")
+print("STEP 4: Address C sends 8,000 QU (recipient sends to own gate)")
 print(f"{'='*60}")
 
-bal0_before = get_balance(ID0)
-bal2_before = get_balance(ID2)
+bal0_before = get_balance(ADDR_A)
+bal2_before = get_balance(ADDR_C)
 
-out = send_contract_tx(SEED2, PROC_SEND_TO_GATE, 8000, send_data)
-print(f"  Seed2 sent 8,000 QU to gate #{gate_id}")
+out = send_contract_tx(ADDR_C_SEED, PROC_SEND_TO_GATE, 8000, send_data)
+print(f"  Address C sent 8,000 QU to gate #{gate_id}")
 wait_ticks(15)
 
-bal0_after = get_balance(ID0)
-bal2_after = get_balance(ID2)
+bal0_after = get_balance(ADDR_A)
+bal2_after = get_balance(ADDR_C)
 gate = query_gate(gate_id)
 
-seed0_gain = bal0_after - bal0_before
-seed2_net = bal2_after - bal2_before
+addr_a_gain = bal0_after - bal0_before
+addr_c_net = bal2_after - bal2_before
 
 print(f"  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}")
-print(f"  Seed0 gained: {seed0_gain:+,} QU (expected +4,000)")
-print(f"  Seed2 net change: {seed2_net:+,} QU (sent 8k, received 4k back = -4k)")
-print(f"  ✅ Recipient-as-sender works!" if seed0_gain == 4000 else f"  ⚠ Unexpected distribution")
+print(f"  Address A gained: {addr_a_gain:+,} QU (expected +4,000)")
+print(f"  Address C net change: {addr_c_net:+,} QU (sent 8k, received 4k back = -4k)")
+print(f"  ✅ Recipient-as-sender works!" if addr_a_gain == 4000 else f"  ⚠ Unexpected distribution")
 
 # ============================================================
 print(f"\n{'='*60}")
 print("STEP 5: Close gate")
 print(f"{'='*60}")
 
-# Only Seed1 (owner) can close
-out = send_contract_tx(SEED1, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id))
-print(f"  Seed1 (owner) closing gate...")
+# Only Address B (owner) can close
+out = send_contract_tx(ADDR_B_SEED, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id))
+print(f"  Address B (owner) closing gate...")
 wait_ticks(15)
 
 gate = query_gate(gate_id)
@@ -263,14 +263,14 @@ print(f"\n{'='*60}")
 print("FINAL RESULTS")
 print(f"{'='*60}")
 
-bal0_end = get_balance(ID0)
-bal1_end = get_balance(ID1)
-bal2_end = get_balance(ID2)
+bal0_end = get_balance(ADDR_A)
+bal1_end = get_balance(ADDR_B)
+bal2_end = get_balance(ADDR_C)
 
 print(f"\n  Balance Changes:")
-print(f"    Seed0: {bal0_end - bal0_start:+,} QU (sent 10k, received 50% of all 38k)")
-print(f"    Seed1: {bal1_end - bal1_start:+,} QU (sent 20k + 1k fee, received nothing)")
-print(f"    Seed2: {bal2_end - bal2_start:+,} QU (sent 8k, received 50% of all 38k)")
+print(f"    Address A: {bal0_end - bal0_start:+,} QU (sent 10k, received 50% of all 38k)")
+print(f"    Address B: {bal1_end - bal1_start:+,} QU (sent 20k + 1k fee, received nothing)")
+print(f"    Address C: {bal2_end - bal2_start:+,} QU (sent 8k, received 50% of all 38k)")
 
 print(f"\n  Gate totals: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}")
 

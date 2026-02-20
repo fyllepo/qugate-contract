@@ -13,9 +13,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-SEED0 = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-SEED1 = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-SEED2 = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 # Input types
 PROC_CREATE_GATE = 1
@@ -184,7 +184,7 @@ def restart_node():
     raise Exception("Failed to restart node")
 
 def print_balances():
-    for name, seed in [("Seed0", SEED0), ("Seed1", SEED1), ("Seed2", SEED2)]:
+    for name, seed in [("Address A", ADDR_A_SEED), ("Address B", ADDR_B_SEED), ("Address C", ADDR_C_SEED)]:
         identity = get_identity(seed)
         bal = get_balance(identity)
         print(f"    {name} ({identity[:12]}...): {bal:,} QU")
@@ -206,15 +206,15 @@ except:
     sys.exit(1)
 
 # Get identities and pubkeys
-ID0 = get_identity(SEED0)
-ID1 = get_identity(SEED1)
-ID2 = get_identity(SEED2)
-PK1 = get_pubkey_from_identity(ID1)
-PK2 = get_pubkey_from_identity(ID2)
+ADDR_A = get_identity(ADDR_A_SEED)
+ADDR_B = get_identity(ADDR_B_SEED)
+ADDR_C = get_identity(ADDR_C_SEED)
+PK_B = get_pubkey_from_identity(ADDR_B)
+PK_C = get_pubkey_from_identity(ADDR_C)
 
-print(f"Seed 0: {ID0}")
-print(f"Seed 1: {ID1}")
-print(f"Seed 2: {ID2}")
+print(f"Seed 0: {ADDR_A}")
+print(f"Seed 1: {ADDR_B}")
+print(f"Seed 2: {ADDR_C}")
 print(f"Contract: {CONTRACT_ID}")
 
 # Initial state
@@ -227,13 +227,13 @@ print_balances()
 # SCENARIO 1: Create SPLIT gate (60/40)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 print("\n" + "="*50)
-print("SCENARIO 1: Create SPLIT gate (60% → Seed1, 40% → Seed2)")
+print("SCENARIO 1: Create SPLIT gate (60% → Address B, 40% → Address C)")
 print("="*50)
 
-input_data = build_create_gate(mode=0, recipients_pk=[PK1, PK2], ratios=[60, 40])
+input_data = build_create_gate(mode=0, recipients_pk=[PK_B, PK_C], ratios=[60, 40])
 print(f"  Input size: {len(input_data)} bytes")
 print(f"  Sending createGate tx (1000 QU fee)...")
-out = send_contract_tx(SEED0, PROC_CREATE_GATE, 1000, input_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, input_data)
 print(f"  CLI: {out.strip()}")
 
 wait_ticks(15)
@@ -259,14 +259,14 @@ print("\n" + "="*50)
 print(f"SCENARIO 2: Send 10,000 QU through gate #{SPLIT_GATE_ID}")
 print("="*50)
 
-bal_before_1 = get_balance(ID1)
-bal_before_2 = get_balance(ID2)
-print(f"  Seed1 before: {bal_before_1:,} QU")
-print(f"  Seed2 before: {bal_before_2:,} QU")
+bal_before_1 = get_balance(ADDR_B)
+bal_before_2 = get_balance(ADDR_C)
+print(f"  Address B before: {bal_before_1:,} QU")
+print(f"  Address C before: {bal_before_2:,} QU")
 
 input_data = build_send_to_gate(SPLIT_GATE_ID)
 print(f"  Sending 10,000 QU to gate #{SPLIT_GATE_ID}...")
-out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 10000, input_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, input_data)
 print(f"  CLI: {out.strip()}")
 
 wait_ticks(15)
@@ -274,12 +274,12 @@ wait_ticks(15)
 gate = query_gate(SPLIT_GATE_ID)
 print(f"\n  Gate #{SPLIT_GATE_ID}: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}, balance={gate['currentBalance']}")
 
-bal_after_1 = get_balance(ID1)
-bal_after_2 = get_balance(ID2)
+bal_after_1 = get_balance(ADDR_B)
+bal_after_2 = get_balance(ADDR_C)
 gain1 = bal_after_1 - bal_before_1
 gain2 = bal_after_2 - bal_before_2
-print(f"  Seed1 after: {bal_after_1:,} QU (gained {gain1})")
-print(f"  Seed2 after: {bal_after_2:,} QU (gained {gain2})")
+print(f"  Address B after: {bal_after_1:,} QU (gained {gain1})")
+print(f"  Address C after: {bal_after_2:,} QU (gained {gain2})")
 
 if gain1 == 6000 and gain2 == 4000:
     print("  ✅ Perfect 60/40 split!")
@@ -295,12 +295,12 @@ print("\n" + "="*50)
 print(f"SCENARIO 3: Send 50,000 QU through same gate")
 print("="*50)
 
-bal_before_1 = get_balance(ID1)
-bal_before_2 = get_balance(ID2)
+bal_before_1 = get_balance(ADDR_B)
+bal_before_2 = get_balance(ADDR_C)
 
 input_data = build_send_to_gate(SPLIT_GATE_ID)
 print(f"  Sending 50,000 QU...")
-out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 50000, input_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 50000, input_data)
 print(f"  CLI: {out.strip()}")
 
 wait_ticks(15)
@@ -308,12 +308,12 @@ wait_ticks(15)
 gate = query_gate(SPLIT_GATE_ID)
 print(f"\n  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}")
 
-bal_after_1 = get_balance(ID1)
-bal_after_2 = get_balance(ID2)
+bal_after_1 = get_balance(ADDR_B)
+bal_after_2 = get_balance(ADDR_C)
 gain1 = bal_after_1 - bal_before_1
 gain2 = bal_after_2 - bal_before_2
-print(f"  Seed1 gained: {gain1} (expected 30000)")
-print(f"  Seed2 gained: {gain2} (expected 20000)")
+print(f"  Address B gained: {gain1} (expected 30000)")
+print(f"  Address C gained: {gain2} (expected 20000)")
 
 if gain1 == 30000 and gain2 == 20000:
     print("  ✅ Perfect 60/40 split on 50k!")
@@ -329,7 +329,7 @@ print("="*50)
 
 input_data = build_close_gate(SPLIT_GATE_ID)
 print(f"  Sending closeGate tx...")
-out = send_contract_tx(SEED0, PROC_CLOSE_GATE, 0, input_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, input_data)
 print(f"  CLI: {out.strip()}")
 
 wait_ticks(15)

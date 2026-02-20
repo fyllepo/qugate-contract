@@ -9,9 +9,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-SEED0 = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-SEED1 = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-SEED2 = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
@@ -123,20 +123,20 @@ print("╚═══════════════════════�
 tick = get_tick()
 print(f"Node up at tick {tick}\n")
 
-ID0 = get_identity(SEED0)
-ID1 = get_identity(SEED1)
-ID2 = get_identity(SEED2)
-PK1 = get_pubkey_from_identity(ID1)
-PK2 = get_pubkey_from_identity(ID2)
+ADDR_A = get_identity(ADDR_A_SEED)
+ADDR_B = get_identity(ADDR_B_SEED)
+ADDR_C = get_identity(ADDR_C_SEED)
+PK_B = get_pubkey_from_identity(ADDR_B)
+PK_C = get_pubkey_from_identity(ADDR_C)
 
 # ━━━ Create RANDOM gate with 2 recipients ━━━
 print("="*50)
-print("STEP 1: Create RANDOM gate (recipients: Seed1, Seed2)")
+print("STEP 1: Create RANDOM gate (recipients: Address B, Address C)")
 print("="*50)
 
-input_data = build_create_gate(mode=MODE_RANDOM, recipients_pk=[PK1, PK2], ratios=[1, 1])
+input_data = build_create_gate(mode=MODE_RANDOM, recipients_pk=[PK_B, PK_C], ratios=[1, 1])
 print(f"  Sending createGate tx (1000 QU fee)...")
-out = send_contract_tx(SEED0, PROC_CREATE_GATE, 1000, input_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, input_data)
 for line in out.strip().splitlines():
     if "Transaction has been sent" in line:
         print(f"  {line.strip()}")
@@ -161,24 +161,24 @@ print("STEP 2: Send 6 payments of 10,000 QU each")
 print("="*50)
 print("  (With 2 recipients, expect roughly 50/50 random distribution)")
 
-bal1_start = get_balance(ID1)
-bal2_start = get_balance(ID2)
-print(f"  Seed1 start: {bal1_start:,} QU")
-print(f"  Seed2 start: {bal2_start:,} QU")
+bal1_start = get_balance(ADDR_B)
+bal2_start = get_balance(ADDR_C)
+print(f"  Address B start: {bal1_start:,} QU")
+print(f"  Address C start: {bal2_start:,} QU")
 
 results = []
 for payment_num in range(1, 7):
     print(f"\n  --- Payment {payment_num}: 10,000 QU ---")
     input_data = struct.pack('<Q', RND_GATE)
-    out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 10000, input_data)
+    out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, input_data)
     for line in out.strip().splitlines():
         if "Transaction has been sent" in line:
             print(f"  {line.strip()}")
 
     wait_ticks(15)
 
-    bal1 = get_balance(ID1)
-    bal2 = get_balance(ID2)
+    bal1 = get_balance(ADDR_B)
+    bal2 = get_balance(ADDR_C)
     gain1 = bal1 - bal1_start
     gain2 = bal2 - bal2_start
     
@@ -187,25 +187,25 @@ for payment_num in range(1, 7):
     prev_gain2 = results[-1][1] if results else 0
     this_to_1 = gain1 - prev_gain1
     this_to_2 = gain2 - prev_gain2
-    recipient = "Seed1" if this_to_1 > 0 else "Seed2" if this_to_2 > 0 else "???"
+    recipient = "Address B" if this_to_1 > 0 else "Address C" if this_to_2 > 0 else "???"
     
     results.append((gain1, gain2))
-    print(f"  → Went to {recipient} | Totals: Seed1={gain1:,}, Seed2={gain2:,}")
+    print(f"  → Went to {recipient} | Totals: Address B={gain1:,}, Address C={gain2:,}")
 
 # ━━━ Results ━━━
 print("\n" + "="*50)
 print("RESULTS")
 print("="*50)
-bal1_end = get_balance(ID1)
-bal2_end = get_balance(ID2)
+bal1_end = get_balance(ADDR_B)
+bal2_end = get_balance(ADDR_C)
 total_gain1 = bal1_end - bal1_start
 total_gain2 = bal2_end - bal2_start
 total_sent = 60000
 
 gate = query_gate(RND_GATE)
 print(f"  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}")
-print(f"  Seed1 total: {total_gain1:,} QU ({total_gain1*100//total_sent}%)")
-print(f"  Seed2 total: {total_gain2:,} QU ({total_gain2*100//total_sent}%)")
+print(f"  Address B total: {total_gain1:,} QU ({total_gain1*100//total_sent}%)")
+print(f"  Address C total: {total_gain2:,} QU ({total_gain2*100//total_sent}%)")
 
 if total_gain1 + total_gain2 == total_sent:
     print(f"  ✅ All {total_sent:,} QU distributed! Random distribution verified.")
@@ -219,7 +219,7 @@ else:
 # Close gate
 print("\n  Closing gate...")
 input_data = struct.pack('<Q', RND_GATE)
-send_contract_tx(SEED0, PROC_CLOSE_GATE, 0, input_data)
+send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, input_data)
 wait_ticks(15)
 gate = query_gate(RND_GATE)
 if not gate['active']:

@@ -21,9 +21,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-SEED0 = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-SEED1 = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-SEED2 = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
@@ -148,19 +148,19 @@ print()
 tick = get_tick()
 print(f"Node up at tick {tick}")
 
-ID0 = get_identity(SEED0)
-ID1 = get_identity(SEED1)
-ID2 = get_identity(SEED2)
-PK0 = get_pubkey_from_identity(ID0)
-PK1 = get_pubkey_from_identity(ID1)
-PK2 = get_pubkey_from_identity(ID2)
+ADDR_A = get_identity(ADDR_A_SEED)
+ADDR_B = get_identity(ADDR_B_SEED)
+ADDR_C = get_identity(ADDR_C_SEED)
+PK_A = get_pubkey_from_identity(ADDR_A)
+PK_B = get_pubkey_from_identity(ADDR_B)
+PK_C = get_pubkey_from_identity(ADDR_C)
 
-bal0_start = get_balance(ID0)
-bal1_start = get_balance(ID1)
-bal2_start = get_balance(ID2)
+bal0_start = get_balance(ADDR_A)
+bal1_start = get_balance(ADDR_B)
+bal2_start = get_balance(ADDR_C)
 total_start, active_start = query_gate_count()
 
-print(f"  Starting balances: Seed0={bal0_start:,}, Seed1={bal1_start:,}, Seed2={bal2_start:,}")
+print(f"  Starting balances: Address A={bal0_start:,}, Address B={bal1_start:,}, Address C={bal2_start:,}")
 print(f"  Existing gates: total={total_start}, active={active_start}")
 
 # Define 50 gate configurations
@@ -173,36 +173,36 @@ split_ratios = [
     [20, 30, 50], [15, 85], [75, 25], [5, 95], [50, 30, 20],
 ]
 for i, ratios in enumerate(split_ratios):
-    pks = [PK1, PK2][:len(ratios)] if len(ratios) <= 2 else [PK1, PK2, PK0][:len(ratios)]
+    pks = [PK_B, PK_C][:len(ratios)] if len(ratios) <= 2 else [PK_B, PK_C, PK_A][:len(ratios)]
     # For 4-recipient gates, reuse keys
     if len(ratios) == 4:
-        pks = [PK1, PK2, PK0, PK1]
+        pks = [PK_B, PK_C, PK_A, PK_B]
     gate_configs.append(('SPLIT', MODE_SPLIT, pks, ratios, 0, None))
 
 # 10 ROUND_ROBIN gates
 for i in range(10):
     if i < 5:
-        pks = [PK1, PK2]
+        pks = [PK_B, PK_C]
     else:
-        pks = [PK1, PK2, PK0]
+        pks = [PK_B, PK_C, PK_A]
     gate_configs.append(('ROUND_ROBIN', MODE_ROUND_ROBIN, pks, [100]*len(pks), 0, None))
 
 # 10 THRESHOLD gates
 thresholds = [5000, 10000, 15000, 20000, 25000, 50000, 1000, 3000, 7500, 100000]
 for i, thresh in enumerate(thresholds):
-    gate_configs.append(('THRESHOLD', MODE_THRESHOLD, [PK1], [100], thresh, None))
+    gate_configs.append(('THRESHOLD', MODE_THRESHOLD, [PK_B], [100], thresh, None))
 
 # 10 RANDOM gates
 for i in range(10):
     if i < 6:
-        pks = [PK1, PK2]
+        pks = [PK_B, PK_C]
     else:
-        pks = [PK1, PK2, PK0]
+        pks = [PK_B, PK_C, PK_A]
     gate_configs.append(('RANDOM', MODE_RANDOM, pks, [100]*len(pks), 0, None))
 
 # 5 CONDITIONAL gates
 for i in range(5):
-    gate_configs.append(('CONDITIONAL', MODE_CONDITIONAL, [PK1], [100], 0, [PK0]))
+    gate_configs.append(('CONDITIONAL', MODE_CONDITIONAL, [PK_B], [100], 0, [PK_A]))
 
 assert len(gate_configs) == 50, f"Expected 50 configs, got {len(gate_configs)}"
 
@@ -226,7 +226,7 @@ for batch_start in range(0, len(gate_configs), BATCH_SIZE):
     for i, (name, mode, pks, ratios, thresh, senders) in enumerate(batch):
         idx = batch_start + i + 1
         create_data = build_create_gate(mode, pks, ratios, thresh, senders)
-        out = send_contract_tx(SEED0, PROC_CREATE_GATE, 1000, create_data)
+        out = send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, create_data)
         if "sent" in out.lower():
             sys.stdout.write(f"    #{idx} {name} ")
             sys.stdout.flush()
@@ -266,7 +266,7 @@ for batch_start in range(0, len(gate_ids), BATCH_SIZE):
     
     for gid in batch_ids:
         send_data = struct.pack('<Q', gid)
-        out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, send_amount, send_data)
+        out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, send_amount, send_data)
         sends_attempted += 1
         if "sent" in out.lower():
             sends_ok += 1
@@ -297,7 +297,7 @@ for batch_start in range(0, len(gate_ids), BATCH_SIZE):
     
     for gid in batch_ids:
         close_data = struct.pack('<Q', gid)
-        send_contract_tx(SEED0, PROC_CLOSE_GATE, 0, close_data)
+        send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, close_data)
     
     wait_ticks(15)
     closed += len(batch_ids)
@@ -316,8 +316,8 @@ print(f"{'='*60}")
 
 total_before_reuse = total_end
 for i in range(5):
-    create_data = build_create_gate(MODE_SPLIT, [PK1, PK2], [50, 50])
-    send_contract_tx(SEED0, PROC_CREATE_GATE, 1000, create_data)
+    create_data = build_create_gate(MODE_SPLIT, [PK_B, PK_C], [50, 50])
+    send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, create_data)
 
 wait_ticks(15)
 total_after_reuse, active_after_reuse = query_gate_count()
@@ -332,7 +332,7 @@ else:
 # Clean up reuse gates
 for i in range(5):
     gid = total_after_reuse - 4 + i
-    send_contract_tx(SEED0, PROC_CLOSE_GATE, 0, struct.pack('<Q', gid))
+    send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, struct.pack('<Q', gid))
 wait_ticks(15)
 
 # ============================================================
@@ -340,9 +340,9 @@ print(f"\n{'='*60}")
 print(f"FINAL RESULTS")
 print(f"{'='*60}")
 
-bal0_end = get_balance(ID0)
-bal1_end = get_balance(ID1)
-bal2_end = get_balance(ID2)
+bal0_end = get_balance(ADDR_A)
+bal1_end = get_balance(ADDR_B)
+bal2_end = get_balance(ADDR_C)
 total_final, active_final = query_gate_count()
 
 print(f"\n  Gates created: {created}/50")
@@ -351,8 +351,8 @@ print(f"  Gates closed: {closed}/{len(gate_ids)}")
 print(f"  Slot reuse verified: {reused > 0}")
 print(f"  Final gate count: total={total_final}, active={active_final}")
 print(f"\n  Balance changes:")
-print(f"    Seed0: {bal0_end - bal0_start:+,} QU")
-print(f"    Seed1: {bal1_end - bal1_start:+,} QU")
-print(f"    Seed2: {bal2_end - bal2_start:+,} QU")
+print(f"    Address A: {bal0_end - bal0_start:+,} QU")
+print(f"    Address B: {bal1_end - bal1_start:+,} QU")
+print(f"    Address C: {bal2_end - bal2_start:+,} QU")
 print(f"\n  Node stability: {'✅ STABLE' if get_tick() > 0 else '❌ DOWN'}")
 print(f"\n🏁 50-gate stress test complete!")

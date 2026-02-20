@@ -8,12 +8,12 @@ RPC = "http://localhost:41841"
 CONTRACT_IDX = 24
 CONTRACT = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-SEED0 = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-SEED1 = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-SEED2 = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
-SEED0_ID = "SINUBYSBZKBSVEFQDZBQWUEJWRXCXOZNKPHIXDZWRBKXDSPJEHFAMBACXHUN"
-SEED1_ID = "KENGZYMYWOIHSCXMGBIXBGTKZYCCDITKSNBNILSLUFPQPRCUUYENPYUCEXRM"
-SEED2_ID = "FLNRYKSGLGKZQECRCBNCYAWLNHVCWNYAZSISJRAPUANHDGWAIFBYLIADPQLE"
+ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_SEED_ID = "SINUBYSBZKBSVEFQDZBQWUEJWRXCXOZNKPHIXDZWRBKXDSPJEHFAMBACXHUN"
+ADDR_B_SEED_ID = "KENGZYMYWOIHSCXMGBIXBGTKZYCCDITKSNBNILSLUFPQPRCUUYENPYUCEXRM"
+ADDR_C_SEED_ID = "FLNRYKSGLGKZQECRCBNCYAWLNHVCWNYAZSISJRAPUANHDGWAIFBYLIADPQLE"
 
 def get_tick():
     return requests.get(f"{RPC}/live/v1/tick-info").json()["tick"]
@@ -125,21 +125,21 @@ def decode_identity(identity):
         struct.pack_into('<Q', pk, i * 8, val)
     return bytes(pk)
 
-pk1 = decode_identity(SEED1_ID)
-pk2 = decode_identity(SEED2_ID)
-print(f"  Seed1 pubkey: {pk1.hex()[:16]}...")
-print(f"  Seed2 pubkey: {pk2.hex()[:16]}...")
+pk1 = decode_identity(ADDR_B_SEED_ID)
+pk2 = decode_identity(ADDR_C_SEED_ID)
+print(f"  Address B pubkey: {pk1.hex()[:16]}...")
+print(f"  Address C pubkey: {pk2.hex()[:16]}...")
 
 # Test 0: Initial state
 print("\n--- Test 0: Initial State ---")
 total, active, burned = get_gate_count()
 print(f"Gates: total={total}, active={active}, burned={burned}")
-b0 = get_balance(SEED0_ID)
-b1 = get_balance(SEED1_ID)
-b2 = get_balance(SEED2_ID)
-print(f"Seed0: {b0:,} QU")
-print(f"Seed1: {b1:,} QU")
-print(f"Seed2: {b2:,} QU")
+b0 = get_balance(ADDR_A_SEED_ID)
+b1 = get_balance(ADDR_B_SEED_ID)
+b2 = get_balance(ADDR_C_SEED_ID)
+print(f"Address A: {b0:,} QU")
+print(f"Address B: {b1:,} QU")
+print(f"Address C: {b2:,} QU")
 
 # Test 1: getFees
 print("\n--- Test 1: getFees Query (#24) ---")
@@ -151,7 +151,7 @@ if fees:
 else:
     print("FAIL — no data")
 
-# Test 2: Create SPLIT gate (60/40 to Seed1/Seed2)
+# Test 2: Create SPLIT gate (60/40 to Address B/Address C)
 print("\n--- Test 2: Create SPLIT Gate ---")
 # Build createGate_input — 600 bytes with proper alignment
 # Layout: mode(1) + recipientCount(1) + 6 padding + recipients(256) + ratios(64) + threshold(8) + allowedSenders(256) + allowedSenderCount(1) + 7 trailing padding
@@ -173,15 +173,15 @@ data[592] = 0
 tick = get_tick()
 target = tick + 5
 print(f"Sending createGate tx at tick {tick}, target {target}")
-result = send_custom_tx(SEED0, 2000, target, 1, data.hex())
+result = send_custom_tx(ADDR_A_SEED, 2000, target, 1, data.hex())
 print(f"TX: {result[:100]}")
 
 wait_ticks(20)
 
 total2, active2, burned2 = get_gate_count()
 print(f"Gates: total={total2}, active={active2}, burned={burned2}")
-b0_after = get_balance(SEED0_ID)
-print(f"Seed0 balance change: {b0_after - b0:,} QU")
+b0_after = get_balance(ADDR_A_SEED_ID)
+print(f"Address A balance change: {b0_after - b0:,} QU")
 
 if active2 > active:
     print("PASS — gate created")
@@ -196,15 +196,15 @@ if active2 > active:
     gate_id = 1
     tick = get_tick()
     target = tick + 5
-    result = send_custom_tx(SEED0, 10000, target, 2, build_gate_id_hex(gate_id))
+    result = send_custom_tx(ADDR_A_SEED, 10000, target, 2, build_gate_id_hex(gate_id))
     print(f"TX: {result[:100]}")
     
     wait_ticks(20)
     
-    b1_after = get_balance(SEED1_ID)
-    b2_after = get_balance(SEED2_ID)
-    print(f"Seed1 received: {b1_after - b1:,} QU (expected ~6000)")
-    print(f"Seed2 received: {b2_after - b2:,} QU (expected ~4000)")
+    b1_after = get_balance(ADDR_B_SEED_ID)
+    b2_after = get_balance(ADDR_C_SEED_ID)
+    print(f"Address B received: {b1_after - b1:,} QU (expected ~6000)")
+    print(f"Address C received: {b2_after - b2:,} QU (expected ~4000)")
     
     if b1_after - b1 == 6000 and b2_after - b2 == 4000:
         print("PASS — 60/40 split correct")
@@ -217,7 +217,7 @@ if active2 > active:
     print("\n--- Test 5: Dust Burn (#17) ---")
     tick = get_tick()
     target = tick + 5
-    result = send_custom_tx(SEED0, 5, target, 2, build_gate_id_hex(gate_id))
+    result = send_custom_tx(ADDR_A_SEED, 5, target, 2, build_gate_id_hex(gate_id))
     print(f"TX (5 QU dust): {result[:100]}")
     wait_ticks(20)
     _, _, burned3 = get_gate_count()
@@ -226,14 +226,14 @@ if active2 > active:
     
     # Test 6: Fee overpayment refund
     print("\n--- Test 6: Fee Overpayment Refund (#19) ---")
-    b0_pre = get_balance(SEED0_ID)
+    b0_pre = get_balance(ADDR_A_SEED_ID)
     tick = get_tick()
     target = tick + 5
     # Create another gate with 5000 QU (overpay by 4000)
-    result = send_custom_tx(SEED0, 5000, target, 1, data.hex())
+    result = send_custom_tx(ADDR_A_SEED, 5000, target, 1, data.hex())
     print(f"TX (5000 QU, fee=1000): {result[:100]}")
     wait_ticks(20)
-    b0_post = get_balance(SEED0_ID)
+    b0_post = get_balance(ADDR_A_SEED_ID)
     cost = b0_pre - b0_post
     print(f"Actual cost: {cost:,} QU (expected ~1000, refund ~4000)")
     print("PASS" if cost <= 1100 else f"CHECK — cost was {cost}")
@@ -242,7 +242,7 @@ if active2 > active:
     print("\n--- Test 7: Close Gate ---")
     tick = get_tick()
     target = tick + 5
-    result = send_custom_tx(SEED0, 0, target, 3, build_gate_id_hex(gate_id))
+    result = send_custom_tx(ADDR_A_SEED, 0, target, 3, build_gate_id_hex(gate_id))
     print(f"TX: {result[:100]}")
     wait_ticks(20)
     total3, active3, burned3b = get_gate_count()
@@ -256,9 +256,9 @@ else:
 print("\n" + "=" * 60)
 total_f, active_f, burned_f = get_gate_count()
 print(f"Final state: gates={total_f}, active={active_f}, burned={burned_f}")
-print(f"Seed0: {get_balance(SEED0_ID):,} QU")
-print(f"Seed1: {get_balance(SEED1_ID):,} QU")
-print(f"Seed2: {get_balance(SEED2_ID):,} QU")
+print(f"Address A: {get_balance(ADDR_A_SEED_ID):,} QU")
+print(f"Address B: {get_balance(ADDR_B_SEED_ID):,} QU")
+print(f"Address C: {get_balance(ADDR_C_SEED_ID):,} QU")
 print("=" * 60)
 
 # (moved to top)

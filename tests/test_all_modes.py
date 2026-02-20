@@ -14,9 +14,9 @@ RPC = "http://127.0.0.1:41841"
 CONTRACT_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-SEED0 = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-SEED1 = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-SEED2 = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 CREATION_FEE = 100000
 MIN_SEND = 1000
@@ -173,18 +173,18 @@ print("QuGate — Full 5-Mode Testnet Test")
 print("=" * 60)
 print()
 
-ID0 = get_identity(SEED0)
-ID1 = get_identity(SEED1)
-ID2 = get_identity(SEED2)
-PK0 = get_pubkey(ID0)
-PK1 = get_pubkey(ID1)
-PK2 = get_pubkey(ID2)
+ADDR_A = get_identity(ADDR_A_SEED)
+ADDR_B = get_identity(ADDR_B_SEED)
+ADDR_C = get_identity(ADDR_C_SEED)
+PK_A = get_pubkey(ADDR_A)
+PK_B = get_pubkey(ADDR_B)
+PK_C = get_pubkey(ADDR_C)
 
 tick = get_tick()
 print(f"Node: tick={tick}, epoch=200")
-print(f"Addr A: {ID0}")
-print(f"Addr B: {ID1}")
-print(f"Addr C: {ID2}")
+print(f"Addr A: {ADDR_A}")
+print(f"Addr B: {ADDR_B}")
+print(f"Addr C: {ADDR_C}")
 print()
 
 # ============================================================
@@ -195,8 +195,8 @@ print("TEST 1: SPLIT mode (60/40)")
 print("─" * 60)
 
 before_total, _ = query_count()
-data = build_create(MODE_SPLIT, [PK1, PK2], [60, 40])
-send_tx(SEED0, PROC_CREATE, CREATION_FEE, data)
+data = build_create(MODE_SPLIT, [PK_B, PK_C], [60, 40])
+send_tx(ADDR_A_SEED, PROC_CREATE, CREATION_FEE, data)
 wait()
 
 total, active = query_count()
@@ -206,14 +206,14 @@ gate = query_gate(gate_id)
 check("Gate created", gate['active'] == 1, f"id={gate_id}, mode={gate['mode_name']}")
 check("Ratios correct", gate['ratios'] == [60, 40], f"ratios={gate['ratios']}")
 
-bal1_before = get_balance(ID1)
-bal2_before = get_balance(ID2)
+bal1_before = get_balance(ADDR_B)
+bal2_before = get_balance(ADDR_C)
 
-send_tx(SEED0, PROC_SEND, 10000, struct.pack('<Q', gate_id))
+send_tx(ADDR_A_SEED, PROC_SEND, 10000, struct.pack('<Q', gate_id))
 wait()
 
-s1 = get_balance(ID1) - bal1_before
-s2 = get_balance(ID2) - bal2_before
+s1 = get_balance(ADDR_B) - bal1_before
+s2 = get_balance(ADDR_C) - bal2_before
 check("Split 60/40", s1 == 6000 and s2 == 4000, f"got {s1}/{s2}")
 
 # ============================================================
@@ -224,8 +224,8 @@ print("─" * 60)
 print("TEST 2: ROUND_ROBIN mode")
 print("─" * 60)
 
-data = build_create(MODE_ROUND_ROBIN, [PK1, PK2], [1, 1])
-send_tx(SEED0, PROC_CREATE, CREATION_FEE, data)
+data = build_create(MODE_ROUND_ROBIN, [PK_B, PK_C], [1, 1])
+send_tx(ADDR_A_SEED, PROC_CREATE, CREATION_FEE, data)
 wait()
 
 total, _ = query_count()
@@ -235,23 +235,23 @@ gate = query_gate(rr_id)
 check("RR gate created", gate['active'] == 1, f"id={rr_id}")
 
 # Send twice — should alternate
-bal1_before = get_balance(ID1)
-bal2_before = get_balance(ID2)
+bal1_before = get_balance(ADDR_B)
+bal2_before = get_balance(ADDR_C)
 
-send_tx(SEED0, PROC_SEND, 5000, struct.pack('<Q', rr_id))
+send_tx(ADDR_A_SEED, PROC_SEND, 5000, struct.pack('<Q', rr_id))
 wait()
 
-s1a = get_balance(ID1) - bal1_before
-s2a = get_balance(ID2) - bal2_before
+s1a = get_balance(ADDR_B) - bal1_before
+s2a = get_balance(ADDR_C) - bal2_before
 
-bal1_before = get_balance(ID1)
-bal2_before = get_balance(ID2)
+bal1_before = get_balance(ADDR_B)
+bal2_before = get_balance(ADDR_C)
 
-send_tx(SEED0, PROC_SEND, 5000, struct.pack('<Q', rr_id))
+send_tx(ADDR_A_SEED, PROC_SEND, 5000, struct.pack('<Q', rr_id))
 wait()
 
-s1b = get_balance(ID1) - bal1_before
-s2b = get_balance(ID2) - bal2_before
+s1b = get_balance(ADDR_B) - bal1_before
+s2b = get_balance(ADDR_C) - bal2_before
 
 # One should get 5000 then the other
 check("RR alternates", (s1a == 5000 and s2b == 5000) or (s2a == 5000 and s1b == 5000),
@@ -265,8 +265,8 @@ print("─" * 60)
 print("TEST 3: THRESHOLD mode (threshold=15000)")
 print("─" * 60)
 
-data = build_create(MODE_THRESHOLD, [PK1, PK2], [50, 50], threshold=15000)
-send_tx(SEED0, PROC_CREATE, CREATION_FEE, data)
+data = build_create(MODE_THRESHOLD, [PK_B, PK_C], [50, 50], threshold=15000)
+send_tx(ADDR_A_SEED, PROC_CREATE, CREATION_FEE, data)
 wait()
 
 total, _ = query_count()
@@ -276,27 +276,27 @@ gate = query_gate(th_id)
 check("Threshold gate created", gate['active'] == 1 and gate['threshold'] == 15000)
 
 # Send 10k — below threshold, should accumulate
-bal1_before = get_balance(ID1)
-bal2_before = get_balance(ID2)
+bal1_before = get_balance(ADDR_B)
+bal2_before = get_balance(ADDR_C)
 
-send_tx(SEED0, PROC_SEND, 10000, struct.pack('<Q', th_id))
+send_tx(ADDR_A_SEED, PROC_SEND, 10000, struct.pack('<Q', th_id))
 wait()
 
 gate = query_gate(th_id)
 check("Below threshold: held", gate['currentBalance'] == 10000, f"balance={gate['currentBalance']}")
 
-s1 = get_balance(ID1) - bal1_before
-s2 = get_balance(ID2) - bal2_before
+s1 = get_balance(ADDR_B) - bal1_before
+s2 = get_balance(ADDR_C) - bal2_before
 check("No distribution yet", s1 == 0 and s2 == 0, f"got {s1}/{s2}")
 
 # Send 10k more — 20k total, above threshold, should flush all to recipient[0]
-bal1_before = get_balance(ID1)
+bal1_before = get_balance(ADDR_B)
 
-send_tx(SEED0, PROC_SEND, 10000, struct.pack('<Q', th_id))
+send_tx(ADDR_A_SEED, PROC_SEND, 10000, struct.pack('<Q', th_id))
 wait()
 
 gate = query_gate(th_id)
-s1 = get_balance(ID1) - bal1_before
+s1 = get_balance(ADDR_B) - bal1_before
 check("Above threshold: flushed to recipient[0]", s1 == 20000 and gate['currentBalance'] == 0,
       f"recipient[0] got {s1}, gate balance={gate['currentBalance']}")
 
@@ -308,8 +308,8 @@ print("─" * 60)
 print("TEST 4: RANDOM mode")
 print("─" * 60)
 
-data = build_create(MODE_RANDOM, [PK1, PK2], [50, 50])
-send_tx(SEED0, PROC_CREATE, CREATION_FEE, data)
+data = build_create(MODE_RANDOM, [PK_B, PK_C], [50, 50])
+send_tx(ADDR_A_SEED, PROC_CREATE, CREATION_FEE, data)
 wait()
 
 total, _ = query_count()
@@ -319,18 +319,18 @@ gate = query_gate(rand_id)
 check("Random gate created", gate['active'] == 1)
 
 # Send 3 times with waits between to ensure separate ticks
-bal1_before = get_balance(ID1)
-bal2_before = get_balance(ID2)
+bal1_before = get_balance(ADDR_B)
+bal2_before = get_balance(ADDR_C)
 
-send_tx(SEED0, PROC_SEND, MIN_SEND, struct.pack('<Q', rand_id))
+send_tx(ADDR_A_SEED, PROC_SEND, MIN_SEND, struct.pack('<Q', rand_id))
 wait()
-send_tx(SEED0, PROC_SEND, MIN_SEND, struct.pack('<Q', rand_id))
+send_tx(ADDR_A_SEED, PROC_SEND, MIN_SEND, struct.pack('<Q', rand_id))
 wait()
-send_tx(SEED0, PROC_SEND, MIN_SEND, struct.pack('<Q', rand_id))
+send_tx(ADDR_A_SEED, PROC_SEND, MIN_SEND, struct.pack('<Q', rand_id))
 wait()
 
-s1 = get_balance(ID1) - bal1_before
-s2 = get_balance(ID2) - bal2_before
+s1 = get_balance(ADDR_B) - bal1_before
+s2 = get_balance(ADDR_C) - bal2_before
 total_out = s1 + s2
 check("Random distributed", total_out == 3 * MIN_SEND, f"total={total_out}, split={s1}/{s2}")
 check("Random picked recipients", s1 > 0 or s2 > 0, f"{s1}/{s2}")
@@ -343,9 +343,9 @@ print("─" * 60)
 print("TEST 5: CONDITIONAL mode (whitelist)")
 print("─" * 60)
 
-# Only SEED1 is allowed to send
-data = build_create(MODE_CONDITIONAL, [PK1, PK2], [50, 50], allowed_senders=[PK1])
-send_tx(SEED0, PROC_CREATE, CREATION_FEE, data)
+# Only ADDR_B_SEED is allowed to send
+data = build_create(MODE_CONDITIONAL, [PK_B, PK_C], [50, 50], allowed_senders=[PK_B])
+send_tx(ADDR_A_SEED, PROC_CREATE, CREATION_FEE, data)
 wait()
 
 total, _ = query_count()
@@ -354,25 +354,25 @@ print(f"  (total={total})")
 gate = query_gate(cond_id)
 check("Conditional gate created", gate['active'] == 1)
 
-# Non-whitelisted sender (SEED2) — should be rejected, refunded
-bal2_before = get_balance(ID2)
-bal0_before = get_balance(ID0)
+# Non-whitelisted sender (ADDR_C_SEED) — should be rejected, refunded
+bal2_before = get_balance(ADDR_C)
+bal0_before = get_balance(ADDR_A)
 
-send_tx(SEED0, PROC_SEND, 5000, struct.pack('<Q', cond_id))
+send_tx(ADDR_A_SEED, PROC_SEND, 5000, struct.pack('<Q', cond_id))
 wait()
 
-bal0_after = get_balance(ID0)
+bal0_after = get_balance(ADDR_A)
 gate = query_gate(cond_id)
-# If rejected, SEED0 loses nothing (or gets refund). Gate should have 0 forwarded.
+# If rejected, ADDR_A_SEED loses nothing (or gets refund). Gate should have 0 forwarded.
 check("Non-whitelisted rejected", gate['totalForwarded'] == 0,
       f"forwarded={gate['totalForwarded']}, gate balance={gate['currentBalance']}")
 
-# Whitelisted sender (SEED1) — sends to recipient[0] which is PK1 (SEED1 itself)
-# So SEED1 net = -10000 (send) + 10000 (receive from gate) = 0
+# Whitelisted sender (ADDR_B_SEED) — sends to recipient[0] which is PK_B (ADDR_B_SEED itself)
+# So ADDR_B_SEED net = -10000 (send) + 10000 (receive from gate) = 0
 # Use gate stats to verify it was processed
 gate_before = query_gate(cond_id)
 
-send_tx(SEED1, PROC_SEND, 10000, struct.pack('<Q', cond_id))
+send_tx(ADDR_B_SEED, PROC_SEND, 10000, struct.pack('<Q', cond_id))
 wait()
 
 gate_after = query_gate(cond_id)
@@ -388,27 +388,27 @@ print("TEST 6: updateGate (change SPLIT ratios)")
 print("─" * 60)
 
 # Update gate_id (the SPLIT gate from test 1) from 60/40 to 25/75
-update_data = build_update(gate_id, [PK1, PK2], [25, 75])
-send_tx(SEED0, PROC_UPDATE, 0, update_data)
+update_data = build_update(gate_id, [PK_B, PK_C], [25, 75])
+send_tx(ADDR_A_SEED, PROC_UPDATE, 0, update_data)
 wait()
 
 gate = query_gate(gate_id)
 check("Ratios updated", gate['ratios'] == [25, 75], f"ratios={gate['ratios']}")
 
 # Verify new split
-bal1_before = get_balance(ID1)
-bal2_before = get_balance(ID2)
-send_tx(SEED0, PROC_SEND, 10000, struct.pack('<Q', gate_id))
+bal1_before = get_balance(ADDR_B)
+bal2_before = get_balance(ADDR_C)
+send_tx(ADDR_A_SEED, PROC_SEND, 10000, struct.pack('<Q', gate_id))
 wait()
 
-s1 = get_balance(ID1) - bal1_before
-s2 = get_balance(ID2) - bal2_before
+s1 = get_balance(ADDR_B) - bal1_before
+s2 = get_balance(ADDR_C) - bal2_before
 check("New 25/75 split works", s1 == 2500 and s2 == 7500, f"got {s1}/{s2}")
 
 # Non-owner update should fail
 gate_before = query_gate(gate_id)
-bad_update = build_update(gate_id, [PK1, PK2], [99, 1])
-send_tx(SEED2, PROC_UPDATE, 0, bad_update)
+bad_update = build_update(gate_id, [PK_B, PK_C], [99, 1])
+send_tx(ADDR_C_SEED, PROC_UPDATE, 0, bad_update)
 wait()
 
 gate_after = query_gate(gate_id)
@@ -423,24 +423,24 @@ print("TEST 7: closeGate + non-owner rejection")
 print("─" * 60)
 
 # Non-owner close should fail
-send_tx(SEED2, PROC_CLOSE, 0, struct.pack('<Q', gate_id))
+send_tx(ADDR_C_SEED, PROC_CLOSE, 0, struct.pack('<Q', gate_id))
 wait()
 gate = query_gate(gate_id)
 check("Non-owner close rejected", gate['active'] == 1)
 
 # Owner close
-send_tx(SEED0, PROC_CLOSE, 0, struct.pack('<Q', gate_id))
+send_tx(ADDR_A_SEED, PROC_CLOSE, 0, struct.pack('<Q', gate_id))
 wait()
 gate = query_gate(gate_id)
 check("Owner close works", gate['active'] == 0)
 
 # Send to closed gate should fail
-bal1_before = get_balance(ID1)
-bal2_before = get_balance(ID2)
-send_tx(SEED0, PROC_SEND, 5000, struct.pack('<Q', gate_id))
+bal1_before = get_balance(ADDR_B)
+bal2_before = get_balance(ADDR_C)
+send_tx(ADDR_A_SEED, PROC_SEND, 5000, struct.pack('<Q', gate_id))
 wait()
-s1 = get_balance(ID1) - bal1_before
-s2 = get_balance(ID2) - bal2_before
+s1 = get_balance(ADDR_B) - bal1_before
+s2 = get_balance(ADDR_C) - bal2_before
 check("Send to closed gate rejected", s1 == 0 and s2 == 0, f"got {s1}/{s2}")
 
 # ============================================================

@@ -15,9 +15,9 @@ RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
-SEED0 = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
-SEED1 = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
-SEED2 = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
+ADDR_A_SEED = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
+ADDR_B_SEED = "sgwnpzidgxbclnisgehigeculaejjxedzdkjyyfrzgzvuojrhdzywfh"
+ADDR_C_SEED = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
@@ -160,20 +160,20 @@ print()
 tick = get_tick()
 print(f"Node up at tick {tick}")
 
-ID0 = get_identity(SEED0)
-ID1 = get_identity(SEED1)
-ID2 = get_identity(SEED2)
-PK0 = get_pubkey_from_identity(ID0)
-PK1 = get_pubkey_from_identity(ID1)
-PK2 = get_pubkey_from_identity(ID2)
+ADDR_A = get_identity(ADDR_A_SEED)
+ADDR_B = get_identity(ADDR_B_SEED)
+ADDR_C = get_identity(ADDR_C_SEED)
+PK_A = get_pubkey_from_identity(ADDR_A)
+PK_B = get_pubkey_from_identity(ADDR_B)
+PK_C = get_pubkey_from_identity(ADDR_C)
 
 # ============================================================
 print(f"\n{'='*60}")
-print("STEP 1: Create SPLIT gate (60/40 → Seed1, Seed2)")
+print("STEP 1: Create SPLIT gate (60/40 → Address B, Address C)")
 print(f"{'='*60}")
 
-create_data = build_create_gate(0, [PK1, PK2], [60, 40])
-out = send_contract_tx(SEED0, PROC_CREATE_GATE, 1000, create_data)
+create_data = build_create_gate(0, [PK_B, PK_C], [60, 40])
+out = send_contract_tx(ADDR_A_SEED, PROC_CREATE_GATE, 1000, create_data)
 print(f"  Creating gate with ratios [60, 40]...")
 wait_ticks(15)
 
@@ -188,21 +188,21 @@ print(f"\n{'='*60}")
 print("STEP 2: Send 10,000 QU — verify 60/40 split")
 print(f"{'='*60}")
 
-bal1_before = get_balance(ID1)
-bal2_before = get_balance(ID2)
+bal1_before = get_balance(ADDR_B)
+bal2_before = get_balance(ADDR_C)
 
 send_data = struct.pack('<Q', gate_id)
-out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 10000, send_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, send_data)
 print(f"  Sent 10,000 QU...")
 wait_ticks(15)
 
-bal1_after = get_balance(ID1)
-bal2_after = get_balance(ID2)
+bal1_after = get_balance(ADDR_B)
+bal2_after = get_balance(ADDR_C)
 s1_gain = bal1_after - bal1_before
 s2_gain = bal2_after - bal2_before
 
-print(f"  Seed1 gained: {s1_gain:,} QU (expected 6,000 = 60%)")
-print(f"  Seed2 gained: {s2_gain:,} QU (expected 4,000 = 40%)")
+print(f"  Address B gained: {s1_gain:,} QU (expected 6,000 = 60%)")
+print(f"  Address C gained: {s2_gain:,} QU (expected 4,000 = 40%)")
 print(f"  ✅ 60/40 split verified!" if s1_gain == 6000 and s2_gain == 4000 else f"  ⚠ Unexpected split")
 
 # ============================================================
@@ -210,8 +210,8 @@ print(f"\n{'='*60}")
 print("STEP 3: UPDATE gate ratios to 20/80")
 print(f"{'='*60}")
 
-update_data = build_update_gate(gate_id, [PK1, PK2], [20, 80])
-out = send_contract_tx(SEED0, PROC_UPDATE_GATE, 0, update_data)
+update_data = build_update_gate(gate_id, [PK_B, PK_C], [20, 80])
+out = send_contract_tx(ADDR_A_SEED, PROC_UPDATE_GATE, 0, update_data)
 print(f"  Updating ratios from [60,40] to [20,80]...")
 wait_ticks(15)
 
@@ -228,21 +228,21 @@ print(f"\n{'='*60}")
 print("STEP 4: Send 10,000 QU — verify NEW 20/80 split")
 print(f"{'='*60}")
 
-bal1_before = get_balance(ID1)
-bal2_before = get_balance(ID2)
+bal1_before = get_balance(ADDR_B)
+bal2_before = get_balance(ADDR_C)
 
-out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 10000, send_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, send_data)
 print(f"  Sent 10,000 QU...")
 wait_ticks(15)
 
-bal1_after = get_balance(ID1)
-bal2_after = get_balance(ID2)
+bal1_after = get_balance(ADDR_B)
+bal2_after = get_balance(ADDR_C)
 s1_gain = bal1_after - bal1_before
 s2_gain = bal2_after - bal2_before
 gate = query_gate(gate_id)
 
-print(f"  Seed1 gained: {s1_gain:,} QU (expected 2,000 = 20%)")
-print(f"  Seed2 gained: {s2_gain:,} QU (expected 8,000 = 80%)")
+print(f"  Address B gained: {s1_gain:,} QU (expected 2,000 = 20%)")
+print(f"  Address C gained: {s2_gain:,} QU (expected 8,000 = 80%)")
 print(f"  Gate: received={gate['totalReceived']}, forwarded={gate['totalForwarded']}")
 
 if s1_gain == 2000 and s2_gain == 8000:
@@ -258,9 +258,9 @@ print("STEP 5: Non-owner tries to update — should fail")
 print(f"{'='*60}")
 
 gate_before = query_gate(gate_id)
-update_data2 = build_update_gate(gate_id, [PK1, PK2], [99, 1])
-out = send_contract_tx(SEED2, PROC_UPDATE_GATE, 0, update_data2)
-print(f"  Seed2 (non-owner) attempting to update ratios to [99,1]...")
+update_data2 = build_update_gate(gate_id, [PK_B, PK_C], [99, 1])
+out = send_contract_tx(ADDR_C_SEED, PROC_UPDATE_GATE, 0, update_data2)
+print(f"  Address C (non-owner) attempting to update ratios to [99,1]...")
 wait_ticks(15)
 
 gate_after = query_gate(gate_id)
@@ -275,8 +275,8 @@ print(f"\n{'='*60}")
 print("STEP 6: Update ratios again to 50/50")
 print(f"{'='*60}")
 
-update_data3 = build_update_gate(gate_id, [PK1, PK2], [50, 50])
-out = send_contract_tx(SEED0, PROC_UPDATE_GATE, 0, update_data3)
+update_data3 = build_update_gate(gate_id, [PK_B, PK_C], [50, 50])
+out = send_contract_tx(ADDR_A_SEED, PROC_UPDATE_GATE, 0, update_data3)
 print(f"  Updating ratios to [50,50]...")
 wait_ticks(15)
 
@@ -292,20 +292,20 @@ print(f"\n{'='*60}")
 print("STEP 7: Send 10,000 QU — verify 50/50 split")
 print(f"{'='*60}")
 
-bal1_before = get_balance(ID1)
-bal2_before = get_balance(ID2)
+bal1_before = get_balance(ADDR_B)
+bal2_before = get_balance(ADDR_C)
 
-out = send_contract_tx(SEED0, PROC_SEND_TO_GATE, 10000, send_data)
+out = send_contract_tx(ADDR_A_SEED, PROC_SEND_TO_GATE, 10000, send_data)
 print(f"  Sent 10,000 QU...")
 wait_ticks(15)
 
-bal1_after = get_balance(ID1)
-bal2_after = get_balance(ID2)
+bal1_after = get_balance(ADDR_B)
+bal2_after = get_balance(ADDR_C)
 s1_gain = bal1_after - bal1_before
 s2_gain = bal2_after - bal2_before
 
-print(f"  Seed1 gained: {s1_gain:,} QU (expected 5,000 = 50%)")
-print(f"  Seed2 gained: {s2_gain:,} QU (expected 5,000 = 50%)")
+print(f"  Address B gained: {s1_gain:,} QU (expected 5,000 = 50%)")
+print(f"  Address C gained: {s2_gain:,} QU (expected 5,000 = 50%)")
 if s1_gain == 5000 and s2_gain == 5000:
     print(f"  ✅ 50/50 split verified! Second update worked!")
 else:
@@ -316,7 +316,7 @@ print(f"\n{'='*60}")
 print("STEP 8: Close gate")
 print(f"{'='*60}")
 
-out = send_contract_tx(SEED0, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id))
+out = send_contract_tx(ADDR_A_SEED, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id))
 print(f"  Closing gate...")
 wait_ticks(15)
 
