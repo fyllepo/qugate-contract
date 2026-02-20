@@ -3,10 +3,11 @@
 QuGate V2 Attack Vector Tests
 Tests edge cases, unauthorized access, and potential exploits.
 """
+import os, shutil
 import struct, subprocess, json, base64, time, requests, sys
 
-CLI = "/home/phil/projects/qubic-cli/build/qubic-cli"
-ID_TOOL = "/home/phil/projects/qubic-cli/build/identity_tool"
+CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
+ID_TOOL = os.environ.get("QUBIC_ID_TOOL", shutil.which("identity_tool") or "identity_tool")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
 RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24

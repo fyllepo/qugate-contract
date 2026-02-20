@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """QuGate THRESHOLD Test - accumulate until threshold, then forward"""
+import os, shutil
 import struct, subprocess, json, base64, time, requests, sys
 
-CLI = "/home/phil/projects/qubic-cli/build/qubic-cli"
+CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
 RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24

@@ -3,10 +3,11 @@
 QuGate Testnet Scenario Tests
 Uses qubic-cli for transactions, HTTP RPC for queries.
 """
+import os, shutil
 import struct, subprocess, json, base64, time, requests, sys
 
-CLI = "/home/phil/projects/qubic-cli/build/qubic-cli"
-ID_TOOL = "/home/phil/projects/qubic-cli/build/identity_tool"
+CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
+ID_TOOL = os.environ.get("QUBIC_ID_TOOL", shutil.which("identity_tool") or "identity_tool")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
 RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
@@ -166,7 +167,7 @@ def restart_node():
     time.sleep(2)
     subprocess.Popen(
         ["./Qubic", "--ticking-delay", "5000"],
-        cwd="/home/phil/projects/core-lite/build/src",
+        cwd=os.environ.get("CORE_LITE_DIR", "."),
         stdout=open("/tmp/qubic.log", "w"),
         stderr=subprocess.STDOUT
     )

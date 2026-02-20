@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """QuGate testnet verification"""
+import os, shutil
 import subprocess, json, requests, time, base64, struct, sys
 
-CLI = "/home/phil/projects/qubic-cli/build/qubic-cli"
+CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 RPC = "http://localhost:41841"
 CONTRACT_IDX = 24
 CONTRACT = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
@@ -74,7 +75,7 @@ def identity_to_bytes(identity):
             v += (ord(c) - ord('A')) * (26 ** (len(identity) - 1 - i))
     # Actually this is wrong — Qubic uses a specific encoding
     # Let's use the identity_tool binary if available
-    r = subprocess.run(["/home/phil/projects/qubic-cli/build/identity_tool", identity],
+    r = subprocess.run([ID_TOOL, identity],
                       capture_output=True, text=True, timeout=10)
     if r.returncode == 0:
         # Parse hex output
@@ -86,7 +87,7 @@ def identity_to_bytes(identity):
 
 def seed_to_pubkey_bytes(seed):
     """Get pubkey bytes by using identity_tool with the seed"""
-    r = subprocess.run(["/home/phil/projects/qubic-cli/build/identity_tool", seed],
+    r = subprocess.run([ID_TOOL, seed],
                       capture_output=True, text=True, timeout=10)
     out = r.stdout.strip()
     # identity_tool outputs: Identity: XXX\nPublic key (hex): YYY

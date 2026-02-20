@@ -12,9 +12,10 @@ Gate distribution:
   - 10 RANDOM gates (2-3 recipients)
   - 5 CONDITIONAL gates (sender-restricted)
 """
+import os, shutil
 import struct, subprocess, json, base64, time, requests, sys, random
 
-CLI = "/home/phil/projects/qubic-cli/build/qubic-cli"
+CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
 RPC = "http://127.0.0.1:41841"
 QUGATE_INDEX = 24
