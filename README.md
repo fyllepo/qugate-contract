@@ -29,7 +29,7 @@ QuGate is a **network primitive** — shared, permissionless payment routing inf
 
 ## Overview
 
-QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of five modes. Gates are composable: the output of one gate can be the input of another, enabling arbitrarily complex payment pipelines without writing custom contracts.
+QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of five modes. Gates are composable: the output of one gate can be forwarded into another via an intermediary transaction (signed by a client app, bot, or oracle), enabling multi-stage payment pipelines without writing custom contracts. The contract does not auto-forward between gates — each hop requires a separate transaction.
 
 ### Constants
 
@@ -431,7 +431,7 @@ These five modes cover the most common payment routing patterns observed in bloc
 
 ### Why 8 max recipients?
 
-8 recipients keeps per-gate state under 400 bytes while covering the vast majority of practical use cases (team payrolls, multi-way splits, worker pools). Larger recipient sets can be achieved by chaining SPLIT gates.
+8 recipients keeps per-gate state under 400 bytes while covering the vast majority of practical use cases (team payrolls, multi-way splits, worker pools). Larger recipient sets can be achieved by chaining SPLIT gates via intermediary forwarding (each hop requires a separate transaction).
 
 ### Why ratio cap at 10,000?
 
@@ -592,7 +592,7 @@ See `TESTNET_RESULTS.md` for detailed results.
 
 5. **Shareholder governance is not yet wired.** Fee parameters are set at initialization and cannot be changed until `DEFINE_SHAREHOLDER_PROPOSAL_STORAGE` is enabled with a valid contract asset name.
 
-6. **Maximum 8 recipients per gate.** Larger distributions require chaining multiple SPLIT gates.
+6. **Maximum 8 recipients per gate.** Larger distributions require chaining multiple SPLIT gates via intermediary forwarding (each hop is a separate transaction).
 
 7. **Mode is immutable after creation.** To change a gate's mode, you must close it and create a new one.
 
