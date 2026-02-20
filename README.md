@@ -516,11 +516,10 @@ Accumulating fees in the contract would create a honeypot and complicate governa
 - Google Test (for unit tests)
 - C++17 compiler
 
-### Running Tests
+### Unit Tests
 
 ```bash
-cd tests/
-g++ -std=c++17 -I../  ../contract_qugate.cpp -lgtest -lgtest_main -o qugate_tests
+g++ -std=c++17 -I. contract_qugate.cpp -lgtest -lgtest_main -o qugate_tests
 ./qugate_tests
 ```
 
@@ -531,11 +530,49 @@ The test suite (`contract_qugate.cpp`) contains 40 unit tests covering:
 - Free-list slot reuse
 - totalBurned tracking
 
+### Testnet (Core-Lite)
+
+To run end-to-end tests against a live node:
+
+1. **Clone and build core-lite** with QuGate registered:
+
+```bash
+git clone https://github.com/qubic/core-lite
+cd core-lite
+
+# Copy QuGate.h into the contracts directory
+cp /path/to/QuGate.h src/contracts/QuGate.h
+
+# Register QuGate in src/contract_def.h:
+#   - Add QUGATE_CONTRACT_INDEX = 24 (or next available)
+#   - Add setContractFeeReserve(QUGATE_CONTRACT_INDEX, 100000000000LL)
+#   - Set constructionEpoch to match your starting epoch
+
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+```
+
+2. **Start the testnet node**:
+
+```bash
+./build/src/Qubic  # Listens on TCP 31841, HTTP RPC 41841
+```
+
+3. **Run the tests** (see `tests/README.md` for full details):
+
+```bash
+export QUBIC_CLI=/path/to/qubic-cli
+python3 tests/test_all_modes.py        # All 5 modes (21 checks)
+python3 tests/test_stress_50gates.py   # 50-gate stress test
+python3 tests/test_attack_vectors.py   # Security edge cases
+```
+
 ### Testnet Results
 
 Tested on Qubic Core-Lite (local testnet):
-- All 5 modes verified with real contract execution
-- 29 concurrent gates created and operated
+- All 5 modes verified with real contract execution (21/21 pass)
+- 50-gate stress test: 50/50 creates, sends across all modes, slot reuse verified
 - 7 attack vectors tested (unauthorized close, sends to non-existent/closed gates, double close, zero sends, slot reuse)
 - 4+ hours continuous operation, zero memory growth
 
@@ -572,12 +609,9 @@ See `TESTNET_RESULTS.md` for detailed results.
 | `QuGate.h` | Contract source code (QPI-compliant) |
 | `contract_qugate.cpp` | Test suite (40 unit tests, Google Test) |
 | `README.md` | Technical reference (this file) |
-| `PROPOSAL.md` | Deployment proposal for computor audience |
-| `TODO.md` | Remaining tasks and roadmap |
-| `TESTNET_RESULTS.md` | Testnet results |
-| `CODE_REVIEW.md` | Code review notes |
-| `FAILURE_LOG.md` | Test failure analysis |
-| `tests/` | Python testnet test scripts |
+| `TESTNET_RESULTS.md` | Testnet verification results |
+| `tests/` | Python testnet test scripts (11 scripts) |
+| `.github/workflows/` | CI: contract verification |
 
 ---
 
