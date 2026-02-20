@@ -1,0 +1,20 @@
+name: Contract Verification
+
+on:
+  push:
+    branches: [main]
+    paths: ['QuGate.h']
+  pull_request:
+    paths: ['QuGate.h']
+
+jobs:
+  contract_verify:
+    runs-on: ubuntu-latest
+    name: Verify QuGate.h compliance
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Contract verify
+        uses: Franziska-Mueller/qubic-contract-verify@v0.3.0-beta
+        with:
+          filepaths: 'QuGate.h'
