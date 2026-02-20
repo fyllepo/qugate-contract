@@ -318,9 +318,8 @@ QuGate is fully compliant with Qubic's QPI restrictions and follows established 
 - ✅ No C-style arrays — uses `Array<T,N>`
 - ✅ No division/modulo operators — uses `QPI::div()` / `QPI::mod()`
 - ✅ No inline local variables — uses `_locals` structs
-- ✅ No `++`/`--` operators — uses `+= 1` / `-= 1`
+- ✅ Uses `i++` convention (matches Qubic codebase style)
 - ✅ `REGISTER_CONTRACT_FUNCTIONS_AND_PROCEDURES` implemented
-- ✅ `EXPAND()` system procedure stub included
 - ✅ Proper epoch type (`uint16`) and amount type (`sint64`)
 - ✅ `QUGATE2` empty struct (Qubic convention for future extension)
 - ✅ `X_MULTIPLIER` for capacity scaling (follows MsVault, Quottery pattern)
@@ -417,8 +416,7 @@ The creativity is built on top. QuGate provides the plumbing — users wire it h
 
 QuGate is designed to evolve without redeployment:
 
-- **`EXPAND()`**: System procedure stub included. If state migration is needed (new fields, resized arrays), Qubic's core calls EXPAND during upgrades.
-- **`QUGATE2`**: Empty successor struct follows Qubic convention. If a fundamental redesign is needed beyond what EXPAND can handle, a successor contract can be deployed.
+- **`QUGATE2`**: Empty successor struct follows Qubic convention. If a fundamental redesign is needed, a successor contract can be deployed.
 - **Shareholder governance**: Three adjustable parameters — creation fee, minimum send amount, and expiry period.
 
 Possible future features (based on real-world usage patterns after mainnet):
