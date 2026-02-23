@@ -198,6 +198,8 @@ public:
         uint16 lastActivityEpoch;                       //
         Array<id, 8> recipients;
         Array<uint64, 8> ratios;
+        Array<id, 8> allowedSenders;
+        uint8 allowedSenderCount;
     };
 
     struct getGateCount_input
@@ -1075,7 +1077,9 @@ protected:
         {
             output.recipients.set(locals.i, locals.gate.recipients.get(locals.i));
             output.ratios.set(locals.i, locals.gate.ratios.get(locals.i));
+            output.allowedSenders.set(locals.i, locals.gate.allowedSenders.get(locals.i));
         }
+        output.allowedSenderCount = locals.gate.allowedSenderCount;
     }
 
     PUBLIC_FUNCTION(getGateCount)
