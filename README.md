@@ -615,6 +615,17 @@ See `TESTNET_RESULTS.md` for detailed results.
 
 ---
 
+## Roadmap
+
+- **Mainnet deployment** — pending computor vote on [Proposal PR #33](https://github.com/qubic/proposal/pull/33)
+- **`sendToGateVerified`** — optional procedure that validates gate state before accepting funds ([#1](https://github.com/fyllepo/qugate-contract/issues/1))
+- **Ecosystem tooling** — SDK helpers, explorer integration, documentation site
+- **Community adoption** — gather feedback from builders, iterate on governance parameters
+
+This is intentionally small. QuGate is a primitive — the roadmap is driven by what the ecosystem needs, not feature bloat.
+
+---
+
 ## Related Tools
 
 ### qubic-mcp — Model Context Protocol Server for Qubic
