@@ -35,6 +35,10 @@ constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
 // Gate expiry: gates with no activity for this many epochs auto-close
 constexpr uint64 QUGATE_DEFAULT_EXPIRY_EPOCHS = 50;
 
+// Query limits
+constexpr uint64 QUGATE_MAX_OWNER_GATES = 16;    // max gates returned by getGatesByOwner
+constexpr uint64 QUGATE_MAX_BATCH_GATES = 32;    // max gates in getGateBatch
+
 // Gate modes
 constexpr uint8 QUGATE_MODE_SPLIT = 0;
 constexpr uint8 QUGATE_MODE_ROUND_ROBIN = 1;
@@ -218,18 +222,18 @@ public:
     };
     struct getGatesByOwner_output
     {
-        Array<uint64, 16> gateIds;
+        Array<uint64, QUGATE_MAX_OWNER_GATES> gateIds;
         uint64 count;
     };
 
     // Batch gate query
     struct getGateBatch_input
     {
-        Array<uint64, 32> gateIds;
+        Array<uint64, QUGATE_MAX_BATCH_GATES> gateIds;
     };
     struct getGateBatch_output
     {
-        Array<getGate_output, 32> gates;
+        Array<getGate_output, QUGATE_MAX_BATCH_GATES> gates;
     };
 
     // Fee query — includes current escalated fee and expiry setting
@@ -849,7 +853,9 @@ protected:
         if (input.gateId == 0 || input.gateId > state._gateCount)
         {
             if (qpi.invocationReward() > 0)
+            {
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
@@ -861,7 +867,9 @@ protected:
         if (locals.gate.owner != qpi.invocator())
         {
             if (qpi.invocationReward() > 0)
+            {
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.status = QUGATE_UNAUTHORIZED;
             locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
             LOG_WARNING(locals.logger);
@@ -871,7 +879,9 @@ protected:
         if (locals.gate.active == 0)
         {
             if (qpi.invocationReward() > 0)
+            {
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
@@ -917,7 +927,9 @@ protected:
         if (input.gateId == 0 || input.gateId > state._gateCount)
         {
             if (qpi.invocationReward() > 0)
+            {
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
@@ -929,7 +941,9 @@ protected:
         if (locals.gate.owner != qpi.invocator())
         {
             if (qpi.invocationReward() > 0)
+            {
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.status = QUGATE_UNAUTHORIZED;
             locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
             LOG_WARNING(locals.logger);
@@ -939,7 +953,9 @@ protected:
         if (locals.gate.active == 0)
         {
             if (qpi.invocationReward() > 0)
+            {
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
@@ -950,7 +966,9 @@ protected:
         if (input.recipientCount == 0 || input.recipientCount > QUGATE_MAX_RECIPIENTS)
         {
             if (qpi.invocationReward() > 0)
+            {
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.status = QUGATE_INVALID_RECIPIENT_COUNT;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -961,7 +979,9 @@ protected:
         if (input.allowedSenderCount > QUGATE_MAX_RECIPIENTS)
         {
             if (qpi.invocationReward() > 0)
+            {
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.status = QUGATE_INVALID_SENDER_COUNT;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -977,7 +997,9 @@ protected:
                 if (input.ratios.get(locals.i) > QUGATE_MAX_RATIO)
                 {
                     if (qpi.invocationReward() > 0)
+                    {
                         qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                    }
                     output.status = QUGATE_INVALID_RATIO;
                     locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                     LOG_WARNING(locals.logger);
@@ -988,7 +1010,9 @@ protected:
             if (locals.totalRatio == 0)
             {
                 if (qpi.invocationReward() > 0)
+                {
                     qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                }
                 output.status = QUGATE_INVALID_RATIO;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                 LOG_WARNING(locals.logger);
@@ -1000,7 +1024,9 @@ protected:
         if (locals.gate.mode == QUGATE_MODE_THRESHOLD && input.threshold == 0)
         {
             if (qpi.invocationReward() > 0)
+            {
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.status = QUGATE_INVALID_THRESHOLD;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -1042,7 +1068,9 @@ protected:
         state._gates.set(input.gateId - 1, locals.gate);
 
         if (qpi.invocationReward() > 0)
+        {
             qpi.transfer(qpi.invocator(), qpi.invocationReward());
+        }
 
         // Log success
         locals.logger._type = QUGATE_LOG_GATE_UPDATED;
@@ -1092,7 +1120,7 @@ protected:
     PUBLIC_FUNCTION_WITH_LOCALS(getGatesByOwner)
     {
         output.count = 0;
-        for (locals.i = 0; locals.i < state._gateCount && output.count < 16; locals.i++)
+        for (locals.i = 0; locals.i < state._gateCount && output.count < QUGATE_MAX_OWNER_GATES; locals.i++)
         {
             if (state._gates.get(locals.i).owner == input.owner)
             {
@@ -1105,7 +1133,7 @@ protected:
     // Batch gate query — fetch up to 32 gates in one call
     PUBLIC_FUNCTION_WITH_LOCALS(getGateBatch)
     {
-        for (locals.i = 0; locals.i < 32; locals.i++)
+        for (locals.i = 0; locals.i < QUGATE_MAX_BATCH_GATES; locals.i++)
         {
             if (input.gateIds.get(locals.i) == 0 || input.gateIds.get(locals.i) > state._gateCount)
             {
