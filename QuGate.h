@@ -250,27 +250,25 @@ public:
 
 protected:
     // =============================================
-    // Contract state
+    // Contract state (wrapped in StateData for dirty-tracking)
     // =============================================
 
-    uint64 _gateCount;
-    uint64 _activeGates;
-    uint64 _totalBurned;        // cumulative QU burned
-    Array<GateConfig, QUGATE_MAX_GATES> _gates;
+    struct StateData
+    {
+        uint64 _gateCount;
+        uint64 _activeGates;
+        uint64 _totalBurned;        // cumulative QU burned
+        Array<GateConfig, QUGATE_MAX_GATES> _gates;
 
-    // Free-list for slot reuse
-    Array<uint64, QUGATE_MAX_GATES> _freeSlots;
-    uint64 _freeCount;
+        // Free-list for slot reuse
+        Array<uint64, QUGATE_MAX_GATES> _freeSlots;
+        uint64 _freeCount;
 
-    // Shareholder-adjustable parameters
-    uint64 _creationFee;        // base creation fee
-    uint64 _minSendAmount;
-    uint64 _expiryEpochs;      // epochs of inactivity before auto-close
-
-    // Shareholder proposal storage
-    // DEFINE_SHAREHOLDER_PROPOSAL_STORAGE(4, QUGATE_CONTRACT_ASSET_NAME);
-    // NOTE: Uncomment when QUGATE_CONTRACT_ASSET_NAME is set at registration time
-    // For now, fees are set in INITIALIZE and cannot be changed until shareholder infra is wired.
+        // Shareholder-adjustable parameters
+        uint64 _creationFee;        // base creation fee
+        uint64 _minSendAmount;
+        uint64 _expiryEpochs;      // epochs of inactivity before auto-close
+    };
 
     // =============================================
     // Locals — all variables declared here, not inline
@@ -445,7 +443,7 @@ protected:
         locals.logger.amount = qpi.invocationReward();
 
         // Calculate escalated fee: baseFee * (1 + activeGates / STEP)
-        locals.currentFee = state._creationFee * (1 + QPI::div(state._activeGates, QUGATE_FEE_ESCALATION_STEP));
+        locals.currentFee = state.get()._creationFee * (1 + QPI::div(state.get()._activeGates, QUGATE_FEE_ESCALATION_STEP));
 
         // Validate creation fee (escalated)
         if (qpi.invocationReward() < (sint64)locals.currentFee)
@@ -482,7 +480,7 @@ protected:
         }
 
         // Check capacity — try free-list first
-        if (state._freeCount == 0 && state._gateCount >= QUGATE_MAX_GATES)
+        if (state.get()._freeCount == 0 && state.get()._gateCount >= QUGATE_MAX_GATES)
         {
             qpi.transfer(qpi.invocator(), qpi.invocationReward());
             output.status = QUGATE_NO_FREE_SLOTS;
@@ -578,24 +576,24 @@ protected:
         }
 
         // Allocate slot — free-list first, then fresh
-        if (state._freeCount > 0)
+        if (state.get()._freeCount > 0)
         {
-            state._freeCount -= 1;
-            locals.slotIdx = state._freeSlots.get(state._freeCount);
+            state.mut()._freeCount -= 1;
+            locals.slotIdx = state.get()._freeSlots.get(state.get()._freeCount);
         }
         else
         {
-            locals.slotIdx = state._gateCount;
-            state._gateCount += 1;
+            locals.slotIdx = state.get()._gateCount;
+            state.mut()._gateCount += 1;
         }
 
-        state._gates.set(locals.slotIdx, locals.newGate);
+        state.mut()._gates.set(locals.slotIdx, locals.newGate);
         output.gateId = locals.slotIdx + 1;              // 1-indexed for users
-        state._activeGates += 1;
+        state.mut()._activeGates += 1;
 
         // Burn the escalated creation fee
         qpi.burn(locals.currentFee);
-        state._totalBurned += locals.currentFee;          //
+        state.mut()._totalBurned += locals.currentFee;          //
         output.feePaid = locals.currentFee;               //
 
         // Refund any excess
@@ -618,7 +616,7 @@ protected:
 
     PRIVATE_PROCEDURE_WITH_LOCALS(processSplit)
     {
-        locals.gate = state._gates.get(input.gateIdx);
+        locals.gate = state.get()._gates.get(input.gateIdx);
 
         locals.totalRatio = 0;
         for (locals.i = 0; locals.i < locals.gate.recipientCount; locals.i++)
@@ -647,25 +645,25 @@ protected:
         }
 
         locals.gate.totalForwarded += locals.distributed;
-        state._gates.set(input.gateIdx, locals.gate);
+        state.mut()._gates.set(input.gateIdx, locals.gate);
         output.forwarded = locals.distributed;
     }
 
     PRIVATE_PROCEDURE_WITH_LOCALS(processRoundRobin)
     {
-        locals.gate = state._gates.get(input.gateIdx);
+        locals.gate = state.get()._gates.get(input.gateIdx);
 
         qpi.transfer(locals.gate.recipients.get(locals.gate.roundRobinIndex), input.amount);
         locals.gate.totalForwarded += input.amount;
         locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
 
-        state._gates.set(input.gateIdx, locals.gate);
+        state.mut()._gates.set(input.gateIdx, locals.gate);
         output.forwarded = input.amount;
     }
 
     PRIVATE_PROCEDURE_WITH_LOCALS(processThreshold)
     {
-        locals.gate = state._gates.get(input.gateIdx);
+        locals.gate = state.get()._gates.get(input.gateIdx);
 
         locals.gate.currentBalance += input.amount;
         output.forwarded = 0;
@@ -678,24 +676,24 @@ protected:
             locals.gate.currentBalance = 0;
         }
 
-        state._gates.set(input.gateIdx, locals.gate);
+        state.mut()._gates.set(input.gateIdx, locals.gate);
     }
 
     PRIVATE_PROCEDURE_WITH_LOCALS(processRandom)
     {
-        locals.gate = state._gates.get(input.gateIdx);
+        locals.gate = state.get()._gates.get(input.gateIdx);
 
         locals.recipientIdx = QPI::mod(locals.gate.totalReceived + qpi.tick(), (uint64)locals.gate.recipientCount);
         qpi.transfer(locals.gate.recipients.get(locals.recipientIdx), input.amount);
         locals.gate.totalForwarded += input.amount;
 
-        state._gates.set(input.gateIdx, locals.gate);
+        state.mut()._gates.set(input.gateIdx, locals.gate);
         output.forwarded = input.amount;
     }
 
     PRIVATE_PROCEDURE_WITH_LOCALS(processConditional)
     {
-        locals.gate = state._gates.get(input.gateIdx);
+        locals.gate = state.get()._gates.get(input.gateIdx);
         output.status = QUGATE_SUCCESS;
         output.forwarded = 0;
 
@@ -720,7 +718,7 @@ protected:
             output.status = QUGATE_CONDITIONAL_REJECTED;
         }
 
-        state._gates.set(input.gateIdx, locals.gate);
+        state.mut()._gates.set(input.gateIdx, locals.gate);
     }
 
     // =============================================
@@ -736,7 +734,7 @@ protected:
         locals.logger.amount = qpi.invocationReward();
         locals.logger.gateId = input.gateId;
 
-        if (input.gateId == 0 || input.gateId > state._gateCount)
+        if (input.gateId == 0 || input.gateId > state.get()._gateCount)
         {
             if (qpi.invocationReward() > 0)
             {
@@ -749,7 +747,7 @@ protected:
         }
 
         locals.idx = input.gateId - 1;
-        locals.gate = state._gates.get(locals.idx);
+        locals.gate = state.get()._gates.get(locals.idx);
 
         if (locals.gate.active == 0)
         {
@@ -770,10 +768,10 @@ protected:
             return;
         }
 
-        if (locals.amount < (sint64)state._minSendAmount)
+        if (locals.amount < (sint64)state.get()._minSendAmount)
         {
             qpi.burn(locals.amount);
-            state._totalBurned += locals.amount;
+            state.mut()._totalBurned += locals.amount;
             output.status = QUGATE_DUST_AMOUNT;
             locals.logger._type = QUGATE_LOG_DUST_BURNED;
             LOG_INFO(locals.logger);
@@ -783,7 +781,7 @@ protected:
         // Update activity and track received
         locals.gate.lastActivityEpoch = qpi.epoch();
         locals.gate.totalReceived += locals.amount;
-        state._gates.set(locals.idx, locals.gate);
+        state.mut()._gates.set(locals.idx, locals.gate);
 
         // Dispatch to mode-specific handler
         if (locals.gate.mode == QUGATE_MODE_SPLIT)
@@ -850,7 +848,7 @@ protected:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        if (input.gateId == 0 || input.gateId > state._gateCount)
+        if (input.gateId == 0 || input.gateId > state.get()._gateCount)
         {
             if (qpi.invocationReward() > 0)
             {
@@ -862,7 +860,7 @@ protected:
             return;
         }
 
-        locals.gate = state._gates.get(input.gateId - 1);
+        locals.gate = state.get()._gates.get(input.gateId - 1);
 
         if (locals.gate.owner != qpi.invocator())
         {
@@ -896,12 +894,12 @@ protected:
         }
 
         locals.gate.active = 0;
-        state._gates.set(input.gateId - 1, locals.gate);
-        state._activeGates -= 1;
+        state.mut()._gates.set(input.gateId - 1, locals.gate);
+        state.mut()._activeGates -= 1;
 
         // Push slot onto free-list for reuse
-        state._freeSlots.set(state._freeCount, input.gateId - 1);
-        state._freeCount += 1;
+        state.mut()._freeSlots.set(state.get()._freeCount, input.gateId - 1);
+        state.mut()._freeCount += 1;
 
         // Refund invocation reward
         if (qpi.invocationReward() > 0)
@@ -924,7 +922,7 @@ protected:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        if (input.gateId == 0 || input.gateId > state._gateCount)
+        if (input.gateId == 0 || input.gateId > state.get()._gateCount)
         {
             if (qpi.invocationReward() > 0)
             {
@@ -936,7 +934,7 @@ protected:
             return;
         }
 
-        locals.gate = state._gates.get(input.gateId - 1);
+        locals.gate = state.get()._gates.get(input.gateId - 1);
 
         if (locals.gate.owner != qpi.invocator())
         {
@@ -1065,7 +1063,7 @@ protected:
             }
         }
 
-        state._gates.set(input.gateId - 1, locals.gate);
+        state.mut()._gates.set(input.gateId - 1, locals.gate);
 
         if (qpi.invocationReward() > 0)
         {
@@ -1083,13 +1081,13 @@ protected:
 
     PUBLIC_FUNCTION_WITH_LOCALS(getGate)
     {
-        if (input.gateId == 0 || input.gateId > state._gateCount)
+        if (input.gateId == 0 || input.gateId > state.get()._gateCount)
         {
             output.active = 0;
             return;
         }
 
-        locals.gate = state._gates.get(input.gateId - 1);
+        locals.gate = state.get()._gates.get(input.gateId - 1);
         output.mode = locals.gate.mode;
         output.recipientCount = locals.gate.recipientCount;
         output.active = locals.gate.active;
@@ -1112,17 +1110,17 @@ protected:
 
     PUBLIC_FUNCTION(getGateCount)
     {
-        output.totalGates = state._gateCount;
-        output.activeGates = state._activeGates;
-        output.totalBurned = state._totalBurned;         //
+        output.totalGates = state.get()._gateCount;
+        output.activeGates = state.get()._activeGates;
+        output.totalBurned = state.get()._totalBurned;         //
     }
 
     PUBLIC_FUNCTION_WITH_LOCALS(getGatesByOwner)
     {
         output.count = 0;
-        for (locals.i = 0; locals.i < state._gateCount && output.count < QUGATE_MAX_OWNER_GATES; locals.i++)
+        for (locals.i = 0; locals.i < state.get()._gateCount && output.count < QUGATE_MAX_OWNER_GATES; locals.i++)
         {
-            if (state._gates.get(locals.i).owner == input.owner)
+            if (state.get()._gates.get(locals.i).owner == input.owner)
             {
                 output.gateIds.set(output.count, locals.i + 1);
                 output.count += 1;
@@ -1135,7 +1133,7 @@ protected:
     {
         for (locals.i = 0; locals.i < QUGATE_MAX_BATCH_GATES; locals.i++)
         {
-            if (input.gateIds.get(locals.i) == 0 || input.gateIds.get(locals.i) > state._gateCount)
+            if (input.gateIds.get(locals.i) == 0 || input.gateIds.get(locals.i) > state.get()._gateCount)
             {
                 // Zero the entry for invalid IDs — clear all fields to avoid stale data
                 locals.entry.mode = 0;
@@ -1157,7 +1155,7 @@ protected:
             }
             else
             {
-                locals.gate = state._gates.get(input.gateIds.get(locals.i) - 1);
+                locals.gate = state.get()._gates.get(input.gateIds.get(locals.i) - 1);
 
                 locals.entry.mode = locals.gate.mode;
                 locals.entry.recipientCount = locals.gate.recipientCount;
@@ -1184,10 +1182,10 @@ protected:
     // Fee query
     PUBLIC_FUNCTION(getFees)
     {
-        output.creationFee = state._creationFee;
-        output.currentCreationFee = state._creationFee * (1 + QPI::div(state._activeGates, QUGATE_FEE_ESCALATION_STEP));
-        output.minSendAmount = state._minSendAmount;
-        output.expiryEpochs = state._expiryEpochs;
+        output.creationFee = state.get()._creationFee;
+        output.currentCreationFee = state.get()._creationFee * (1 + QPI::div(state.get()._activeGates, QUGATE_FEE_ESCALATION_STEP));
+        output.minSendAmount = state.get()._minSendAmount;
+        output.expiryEpochs = state.get()._expiryEpochs;
     }
 
     // =============================================
@@ -1213,13 +1211,13 @@ protected:
 
     INITIALIZE()
     {
-        state._gateCount = 0;
-        state._activeGates = 0;
-        state._freeCount = 0;
-        state._totalBurned = 0;                           //
-        state._creationFee = QUGATE_DEFAULT_CREATION_FEE;  //
-        state._minSendAmount = QUGATE_DEFAULT_MIN_SEND;    //
-        state._expiryEpochs = QUGATE_DEFAULT_EXPIRY_EPOCHS; //
+        state.mut()._gateCount = 0;
+        state.mut()._activeGates = 0;
+        state.mut()._freeCount = 0;
+        state.mut()._totalBurned = 0;                           //
+        state.mut()._creationFee = QUGATE_DEFAULT_CREATION_FEE;  //
+        state.mut()._minSendAmount = QUGATE_DEFAULT_MIN_SEND;    //
+        state.mut()._expiryEpochs = QUGATE_DEFAULT_EXPIRY_EPOCHS; //
     }
 
     BEGIN_EPOCH() {}
@@ -1227,13 +1225,13 @@ protected:
     END_EPOCH_WITH_LOCALS()
     {
         // Expire inactive gates
-        for (locals.i = 0; locals.i < state._gateCount; locals.i++)
+        for (locals.i = 0; locals.i < state.get()._gateCount; locals.i++)
         {
-            locals.gate = state._gates.get(locals.i);
+            locals.gate = state.get()._gates.get(locals.i);
 
-            if (locals.gate.active == 1 && state._expiryEpochs > 0)
+            if (locals.gate.active == 1 && state.get()._expiryEpochs > 0)
             {
-                if (qpi.epoch() - locals.gate.lastActivityEpoch >= state._expiryEpochs)
+                if (qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs)
                 {
                     // Refund any held balance (THRESHOLD mode)
                     if (locals.gate.currentBalance > 0)
@@ -1243,12 +1241,12 @@ protected:
                     }
 
                     locals.gate.active = 0;
-                    state._gates.set(locals.i, locals.gate);
-                    state._activeGates -= 1;
+                    state.mut()._gates.set(locals.i, locals.gate);
+                    state.mut()._activeGates -= 1;
 
                     // Push slot onto free-list
-                    state._freeSlots.set(state._freeCount, locals.i);
-                    state._freeCount += 1;
+                    state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
+                    state.mut()._freeCount += 1;
 
                     // Log expiry
                     locals.logger._contractIndex = CONTRACT_INDEX;
@@ -1264,7 +1262,7 @@ protected:
         // TODO: Check shareholder proposals and apply fee/expiry changes
         // When DEFINE_SHAREHOLDER_PROPOSAL_STORAGE is enabled:
         //   - Check if any proposal passed quorum
-        //   - If so, update state._creationFee, state._minSendAmount, state._expiryEpochs
+        //   - If so, update state.mut()._creationFee, state.mut()._minSendAmount, state.mut()._expiryEpochs
         //   - Log fee change event
     }
 
