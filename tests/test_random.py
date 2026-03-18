@@ -23,6 +23,12 @@ PROC_SEND_TO_GATE = 2
 PROC_CLOSE_GATE = 3
 MODE_RANDOM = 3
 
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
+
 def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
     return r.stdout + r.stderr
@@ -151,15 +157,14 @@ wait_ticks(15)
 
 total, active = query_gate_count()
 print(f"\n  Gate count: total={total}, active={active}")
-gate = query_gate(total)
-print(f"  Gate #{total}: mode={gate['mode']}, recipients={gate['recipientCount']}, active={gate['active']}")
+RND_GATE = encode_gate_id(total - 1)
+gate = query_gate(RND_GATE)
+print(f"  Gate #{RND_GATE}: mode={gate['mode']}, recipients={gate['recipientCount']}, active={gate['active']}")
 
 if gate['mode'] == 'RANDOM' and gate['active']:
     print("  ✅ RANDOM gate created!")
-    RND_GATE = total
 else:
     print("  ⚠ Unexpected")
-    RND_GATE = total
 
 # ━━━ Send 6 payments and track distribution ━━━
 print("\n" + "="*50)

@@ -41,6 +41,12 @@ FUNC_GET_GATE = 5
 FUNC_GET_COUNT = 6
 FUNC_GET_FEES = 9
 
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
+
 passed = 0
 failed = 0
 
@@ -207,7 +213,7 @@ send_tx(ADDR_A_KEY, PROC_CREATE, CREATION_FEE, data)
 wait()
 
 total, active = query_count()
-gate_id = total
+gate_id = encode_gate_id(total - 1)
 print(f"  (before={before_total}, after={total})")
 gate = query_gate(gate_id)
 check("Gate created", gate['active'] == 1, f"id={gate_id}, mode={gate['mode_name']}")
@@ -236,7 +242,7 @@ send_tx(ADDR_A_KEY, PROC_CREATE, CREATION_FEE, data)
 wait()
 
 total, _ = query_count()
-rr_id = total
+rr_id = encode_gate_id(total - 1)
 print(f"  (total={total})")
 gate = query_gate(rr_id)
 check("RR gate created", gate['active'] == 1, f"id={rr_id}")
@@ -277,7 +283,7 @@ send_tx(ADDR_A_KEY, PROC_CREATE, CREATION_FEE, data)
 wait()
 
 total, _ = query_count()
-th_id = total
+th_id = encode_gate_id(total - 1)
 print(f"  (total={total})")
 gate = query_gate(th_id)
 check("Threshold gate created", gate['active'] == 1 and gate['threshold'] == 15000)
@@ -320,7 +326,7 @@ send_tx(ADDR_A_KEY, PROC_CREATE, CREATION_FEE, data)
 wait()
 
 total, _ = query_count()
-rand_id = total
+rand_id = encode_gate_id(total - 1)
 print(f"  (total={total})")
 gate = query_gate(rand_id)
 check("Random gate created", gate['active'] == 1)
@@ -356,7 +362,7 @@ send_tx(ADDR_A_KEY, PROC_CREATE, CREATION_FEE, data)
 wait()
 
 total, _ = query_count()
-cond_id = total
+cond_id = encode_gate_id(total - 1)
 print(f"  (total={total})")
 gate = query_gate(cond_id)
 check("Conditional gate created", gate['active'] == 1)

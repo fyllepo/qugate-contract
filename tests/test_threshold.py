@@ -23,6 +23,12 @@ PROC_SEND_TO_GATE = 2
 PROC_CLOSE_GATE = 3
 MODE_THRESHOLD = 2
 
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
+
 def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
     return r.stdout + r.stderr
@@ -162,15 +168,14 @@ wait_ticks(15)
 
 total, active = query_gate_count()
 print(f"\n  Gate count: total={total}, active={active}")
-gate = query_gate(total)
-print(f"  Gate #{total}: mode={gate['mode']}, threshold={gate['threshold']}, active={gate['active']}")
+TH_GATE = encode_gate_id(total - 1)
+gate = query_gate(TH_GATE)
+print(f"  Gate #{TH_GATE}: mode={gate['mode']}, threshold={gate['threshold']}, active={gate['active']}")
 
 if gate['mode'] == 'THRESHOLD' and gate['active'] and gate['threshold'] == THRESHOLD_AMOUNT:
     print("  ✅ THRESHOLD gate created!")
-    TH_GATE = total
 else:
     print("  ⚠ Unexpected state")
-    TH_GATE = total
 
 # ━━━ Payment 1: 10,000 QU (below threshold — should accumulate) ━━━
 print("\n" + "="*50)

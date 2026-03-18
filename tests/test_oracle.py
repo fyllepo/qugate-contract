@@ -49,6 +49,12 @@ COND_TIME_AFTER  = 2
 TRIGGER_ONCE      = 0
 TRIGGER_RECURRING = 1
 
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
+
 passed = 0
 failed = 0
 
@@ -214,7 +220,7 @@ def main():
     wait()
 
     counts_after = query_count()
-    new_gate_id = counts_after['total']
+    new_gate_id = encode_gate_id(counts_after['total'] - 1)
     check("oracle gate created", counts_after['active'] == counts_before['active'] + 1)
 
     gate = query_gate(new_gate_id)
@@ -263,7 +269,7 @@ def main():
     wait()
 
     counts_recurring = query_count()
-    recurring_id = counts_recurring['total']
+    recurring_id = encode_gate_id(counts_recurring['total'] - 1)
     gate_recurring = query_gate(recurring_id)
     check("recurring gate created", gate_recurring['active'] == 1)
     check("recurring gate mode is ORACLE", gate_recurring['mode'] == MODE_ORACLE)

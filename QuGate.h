@@ -41,6 +41,10 @@ constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
 // Gate expiry: gates with no activity for this many epochs auto-close
 constexpr uint64 QUGATE_DEFAULT_EXPIRY_EPOCHS = 50;
 
+// Versioned gate ID encoding: gateId = ((generation+1) << SLOT_BITS) | slotIndex
+constexpr uint64 QUGATE_GATE_ID_SLOT_BITS = 20;
+constexpr uint64 QUGATE_GATE_ID_SLOT_MASK = (1ULL << QUGATE_GATE_ID_SLOT_BITS) - 1; // 0xFFFFF
+
 // Query limits
 constexpr uint64 QUGATE_MAX_OWNER_GATES = 16;    // max gates returned by getGatesByOwner
 constexpr uint64 QUGATE_MAX_BATCH_GATES = 32;    // max gates in getGateBatch
@@ -316,6 +320,9 @@ protected:
         uint64 _totalBurned;        // cumulative QU burned
         Array<GateConfig, QUGATE_MAX_GATES> _gates;
 
+        // Generation counter per slot — increments on reuse (versioned gate IDs)
+        Array<uint16, QUGATE_MAX_GATES> _gateGenerations;
+
         // Free-list for slot reuse
         Array<uint64, QUGATE_MAX_GATES> _freeSlots;
         uint64 _freeCount;
@@ -425,6 +432,8 @@ protected:
         GateConfig gate;
         sint64 amount;
         uint64 idx;
+        uint64 slotIdx;
+        uint64 encodedGen;
         processSplit_input splitIn;
         processSplit_output splitOut;
         processSplit_locals splitLocals;
@@ -446,6 +455,8 @@ protected:
     {
         QuGateLogger logger;
         GateConfig gate;
+        uint64 slotIdx;
+        uint64 encodedGen;
     };
 
     struct updateGate_locals
@@ -454,12 +465,16 @@ protected:
         GateConfig gate;
         uint64 totalRatio;
         uint64 i;
+        uint64 slotIdx;
+        uint64 encodedGen;
     };
 
     struct getGate_locals
     {
         GateConfig gate;
         uint64 i;
+        uint64 slotIdx;
+        uint64 encodedGen;
     };
 
     struct getGateBatch_locals                           //
@@ -468,6 +483,8 @@ protected:
         uint64 j;
         GateConfig gate;
         getGate_output entry;
+        uint64 slotIdx;
+        uint64 encodedGen;
     };
 
     struct getGatesByOwner_locals
@@ -486,6 +503,8 @@ protected:
     {
         QuGateLogger logger;
         GateConfig gate;
+        uint64 slotIdx;
+        uint64 encodedGen;
     };
 
     // Oracle notification callback types
@@ -715,7 +734,7 @@ protected:
         }
 
         state.mut()._gates.set(locals.slotIdx, locals.newGate);
-        output.gateId = locals.slotIdx + 1;              // 1-indexed for users
+        output.gateId = ((uint64)(state.get()._gateGenerations.get(locals.slotIdx) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.slotIdx;
         state.mut()._activeGates += 1;
 
         // Burn the escalated creation fee
@@ -869,7 +888,12 @@ protected:
         locals.logger.amount = qpi.invocationReward();
         locals.logger.gateId = input.gateId;
 
-        if (input.gateId == 0 || input.gateId > state.get()._gateCount)
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             if (qpi.invocationReward() > 0)
             {
@@ -881,7 +905,7 @@ protected:
             return;
         }
 
-        locals.idx = input.gateId - 1;
+        locals.idx = locals.slotIdx;
         locals.gate = state.get()._gates.get(locals.idx);
 
         if (locals.gate.active == 0)
@@ -992,7 +1016,12 @@ protected:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        if (input.gateId == 0 || input.gateId > state.get()._gateCount)
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             if (qpi.invocationReward() > 0)
             {
@@ -1004,7 +1033,7 @@ protected:
             return;
         }
 
-        locals.gate = state.get()._gates.get(input.gateId - 1);
+        locals.gate = state.get()._gates.get(locals.slotIdx);
 
         if (locals.gate.owner != qpi.invocator())
         {
@@ -1056,12 +1085,15 @@ protected:
         if (locals.gate.active == 1)
         {
             locals.gate.active = 0;
-            state.mut()._gates.set(input.gateId - 1, locals.gate);
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
             state.mut()._activeGates -= 1;
 
             // Push slot onto free-list for reuse
-            state.mut()._freeSlots.set(state.get()._freeCount, input.gateId - 1);
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
             state.mut()._freeCount += 1;
+
+            // Increment generation so recycled slot gets a new gateId
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
         }
 
         // Refund invocation reward
@@ -1085,7 +1117,12 @@ protected:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        if (input.gateId == 0 || input.gateId > state.get()._gateCount)
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             if (qpi.invocationReward() > 0)
             {
@@ -1097,7 +1134,7 @@ protected:
             return;
         }
 
-        locals.gate = state.get()._gates.get(input.gateId - 1);
+        locals.gate = state.get()._gates.get(locals.slotIdx);
 
         if (locals.gate.owner != qpi.invocator())
         {
@@ -1237,7 +1274,7 @@ protected:
             }
         }
 
-        state.mut()._gates.set(input.gateId - 1, locals.gate);
+        state.mut()._gates.set(locals.slotIdx, locals.gate);
 
         if (qpi.invocationReward() > 0)
         {
@@ -1262,7 +1299,12 @@ protected:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = qpi.invocationReward();
 
-        if (input.gateId <= 0 || input.gateId > (sint64)state.get()._gateCount)
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId <= 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             if (qpi.invocationReward() > 0)
             {
@@ -1274,7 +1316,7 @@ protected:
             return;
         }
 
-        locals.gate = state.get()._gates.get(input.gateId - 1);
+        locals.gate = state.get()._gates.get(locals.slotIdx);
 
         if (locals.gate.active == 0)
         {
@@ -1308,7 +1350,7 @@ protected:
 
         // Add invocationReward to oracle reserve — anyone can call, burns nothing
         locals.gate.oracleReserve += qpi.invocationReward();
-        state.mut()._gates.set(input.gateId - 1, locals.gate);
+        state.mut()._gates.set(locals.slotIdx, locals.gate);
         output.result = QUGATE_SUCCESS;
     }
 
@@ -1391,7 +1433,7 @@ protected:
                 // Log oracle triggered
                 locals.logger._contractIndex = CONTRACT_INDEX;
                 locals.logger._type = QUGATE_LOG_ORACLE_TRIGGERED;
-                locals.logger.gateId = locals.i + 1;
+                locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
                 locals.logger.sender = id::zero();
                 locals.logger.amount = locals.splitOut.forwarded;
                 LOG_INFO(locals.logger);
@@ -1413,6 +1455,9 @@ protected:
                     state.mut()._activeGates -= 1;
                     state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
                     state.mut()._freeCount += 1;
+
+                    // Increment generation so recycled slot gets a new gateId
+                    state.mut()._gateGenerations.set(locals.i, state.get()._gateGenerations.get(locals.i) + 1);
                 }
             }
 
@@ -1427,13 +1472,18 @@ protected:
 
     PUBLIC_FUNCTION_WITH_LOCALS(getGate)
     {
-        if (input.gateId == 0 || input.gateId > state.get()._gateCount)
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             output.active = 0;
             return;
         }
 
-        locals.gate = state.get()._gates.get(input.gateId - 1);
+        locals.gate = state.get()._gates.get(locals.slotIdx);
         output.mode = locals.gate.mode;
         output.recipientCount = locals.gate.recipientCount;
         output.active = locals.gate.active;
@@ -1470,7 +1520,8 @@ protected:
         {
             if (state.get()._gates.get(locals.i).owner == input.owner)
             {
-                output.gateIds.set(output.count, locals.i + 1);
+                output.gateIds.set(output.count,
+                    ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i);
                 output.count += 1;
             }
         }
@@ -1481,7 +1532,12 @@ protected:
     {
         for (locals.i = 0; locals.i < QUGATE_MAX_BATCH_GATES; locals.i++)
         {
-            if (input.gateIds.get(locals.i) == 0 || input.gateIds.get(locals.i) > state.get()._gateCount)
+            locals.slotIdx = input.gateIds.get(locals.i) & QUGATE_GATE_ID_SLOT_MASK;
+            locals.encodedGen = (input.gateIds.get(locals.i) >> QUGATE_GATE_ID_SLOT_BITS);
+            if (input.gateIds.get(locals.i) == 0
+                || locals.slotIdx >= state.get()._gateCount
+                || locals.encodedGen == 0
+                || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
             {
                 // Zero the entry for invalid IDs — clear all fields to avoid stale data
                 locals.entry.mode = 0;
@@ -1505,7 +1561,7 @@ protected:
             }
             else
             {
-                locals.gate = state.get()._gates.get(input.gateIds.get(locals.i) - 1);
+                locals.gate = state.get()._gates.get(locals.slotIdx);
 
                 locals.entry.mode = locals.gate.mode;
                 locals.entry.recipientCount = locals.gate.recipientCount;
@@ -1572,6 +1628,12 @@ protected:
         state.mut()._creationFee = QUGATE_DEFAULT_CREATION_FEE;  //
         state.mut()._minSendAmount = QUGATE_DEFAULT_MIN_SEND;    //
         state.mut()._expiryEpochs = QUGATE_DEFAULT_EXPIRY_EPOCHS; //
+
+        // Zero all generation counters
+        for (uint64 i = 0; i < QUGATE_MAX_GATES; i++)
+        {
+            state.mut()._gateGenerations.set(i, 0);
+        }
     }
 
     BEGIN_EPOCH_WITH_LOCALS()
@@ -1601,7 +1663,7 @@ protected:
 
                         locals.logger._contractIndex = CONTRACT_INDEX;
                         locals.logger._type = QUGATE_LOG_ORACLE_SUBSCRIBED;
-                        locals.logger.gateId = locals.i + 1;
+                        locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
                         locals.logger.sender = locals.gate.owner;
                         locals.logger.amount = QUGATE_ORACLE_SUBSCRIPTION_FEE;
                         LOG_INFO(locals.logger);
@@ -1612,7 +1674,7 @@ protected:
                     // Oracle reserve exhausted — log and subscription lapses
                     locals.logger._contractIndex = CONTRACT_INDEX;
                     locals.logger._type = QUGATE_LOG_ORACLE_EXHAUSTED;
-                    locals.logger.gateId = locals.i + 1;
+                    locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
                     locals.logger.sender = locals.gate.owner;
                     locals.logger.amount = locals.gate.oracleReserve;
                     LOG_INFO(locals.logger);
@@ -1655,10 +1717,13 @@ protected:
                     state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
                     state.mut()._freeCount += 1;
 
-                    // Log expiry
+                    // Log expiry (before generation increment, so we log the expired gate's ID)
                     locals.logger._contractIndex = CONTRACT_INDEX;
                     locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
-                    locals.logger.gateId = locals.i + 1;
+                    locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+
+                    // Increment generation so recycled slot gets a new gateId
+                    state.mut()._gateGenerations.set(locals.i, state.get()._gateGenerations.get(locals.i) + 1);
                     locals.logger.sender = locals.gate.owner;
                     locals.logger.amount = 0;
                     LOG_INFO(locals.logger);

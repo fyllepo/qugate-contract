@@ -26,7 +26,27 @@ PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
 PROC_CLOSE_GATE = 3
 
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
+
 results = []
+
+# Track generation per slot for versioned gate IDs.
+# When a gate is closed, the slot's generation increments; the next gate
+# created in that slot uses the new generation.
+_slot_generation = {}  # slot_idx -> current generation
+
+def next_gate_id_for_slot(slot_idx):
+    """Return the versioned gate ID for a newly created gate on *slot_idx*."""
+    gen = _slot_generation.get(slot_idx, 0)
+    return encode_gate_id(slot_idx, gen)
+
+def mark_slot_closed(slot_idx):
+    """Bump the generation so the next occupant of this slot gets a new ID."""
+    _slot_generation[slot_idx] = _slot_generation.get(slot_idx, 0) + 1
 
 def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
@@ -172,8 +192,9 @@ print("  Address A created gate (1000 QU fee)")
 wait_ticks(15)
 
 total, active = query_gate_count()
-gate_id = total  # latest gate
-print(f"  Gate #{gate_id} created, active={active}")
+slot_idx = total - 1
+gate_id = next_gate_id_for_slot(slot_idx)
+print(f"  Gate #{gate_id} created (slot={slot_idx}), active={active}")
 
 # Try to close as Address C (not the owner)
 close_data = struct.pack('<Q', gate_id)
@@ -191,6 +212,7 @@ wait_ticks(15)
 gate = query_gate(gate_id)
 record("Owner close succeeds", gate['active'] == 0,
        f"Gate active={gate['active']}")
+mark_slot_closed(slot_idx)
 print()
 
 # ============================================================
@@ -258,12 +280,13 @@ create_data = build_create_gate(0, [PK_B], [100])
 send_contract_tx(ADDR_A_KEY, PROC_CREATE_GATE, 1000, create_data)
 wait_ticks(15)
 total2, _ = query_gate_count()
-gate_id2 = total2
+slot_idx2 = total2 - 1
+gate_id2 = next_gate_id_for_slot(slot_idx2)
 
 bal1_before = get_balance(ADDR_B)
 send_data = struct.pack('<Q', gate_id2)
 out = send_contract_tx(ADDR_A_KEY, PROC_SEND_TO_GATE, 0, send_data)
-print(f"  Sent 0 QU to gate #{gate_id2}")
+print(f"  Sent 0 QU to gate #{gate_id2} (slot={slot_idx2})")
 wait_ticks(15)
 
 gate = query_gate(gate_id2)
@@ -274,6 +297,7 @@ record("Zero amount — no effect", gate['totalReceived'] == 0 and bal1_before =
 # Clean up
 send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id2))
 wait_ticks(15)
+mark_slot_closed(slot_idx2)
 print()
 
 # ============================================================
@@ -289,12 +313,15 @@ wait_ticks(15)
 total_after, active_after = query_gate_count()
 # If free-list works, total should stay same (slot reused) or increment by 1
 # After closing gates above, free slots should be available
+slot_idx6 = total_after - 1
+gate_id6 = next_gate_id_for_slot(slot_idx6)
 record("Gate slot reuse", total_after <= total_before + 1,
        f"Before: total={total_before}, After: total={total_after}, active={active_after}")
 
 # Clean up
-send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, struct.pack('<Q', total_after))
+send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, struct.pack('<Q', gate_id6))
 wait_ticks(15)
+mark_slot_closed(slot_idx6)
 print()
 
 # ============================================================

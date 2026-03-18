@@ -42,6 +42,12 @@ PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
 PROC_CLOSE_GATE = 3
 
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
+
 def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
     return r.stdout + r.stderr
@@ -188,7 +194,7 @@ print("  Address A creating Gate A (1000 QU fee)...")
 wait_ticks(15)
 
 total, active = query_gate_count()
-gate_a_id = total
+gate_a_id = encode_gate_id(total - 1)
 gate_a = query_gate(gate_a_id)
 print(f"  ✅ Gate A = #{gate_a_id}: mode={gate_a['mode']}, recipients={gate_a['recipientCount']}")
 
@@ -203,7 +209,7 @@ print("  Address B creating Gate B (1000 QU fee)...")
 wait_ticks(15)
 
 total, active = query_gate_count()
-gate_b_id = total
+gate_b_id = encode_gate_id(total - 1)
 gate_b = query_gate(gate_b_id)
 print(f"  ✅ Gate B = #{gate_b_id}: mode={gate_b['mode']}, threshold={gate_b['threshold']}")
 
