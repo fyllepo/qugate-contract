@@ -4,7 +4,7 @@ End-to-end tests that run against a live Qubic Core-Lite testnet node. Each scri
 
 ## Prerequisites
 
-- **Qubic Core-Lite** testnet running with QuGate registered at contract index 24
+- **Qubic Core-Lite** testnet running with QuGate registered at contract index 25
 - **qubic-cli** on your PATH (or set `QUBIC_CLI` env var)
 - **Python 3** with `requests` (`pip install requests`)
 - Node listening on `localhost:31841` (TCP) and `localhost:41841` (HTTP RPC)
@@ -32,6 +32,7 @@ End-to-end tests that run against a live Qubic Core-Lite testnet node. Each scri
 | `test_gate_lifecycle.py` | Full lifecycle: create → send → update → close |
 | `test_gate_chaining.py` | Multi-gate pipeline composability |
 | `test_multi_sender.py` | Multiple senders to same gate |
+| `test_oracle.py` | ORACLE mode: creation, fundGate, condition logic, ONCE/RECURRING |
 
 ## Running
 
@@ -53,7 +54,7 @@ All scripts use these defaults:
 ```python
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 RPC = "http://127.0.0.1:41841"
-CONTRACT_INDEX = 24
+CONTRACT_INDEX = 25
 ```
 
 ## Results

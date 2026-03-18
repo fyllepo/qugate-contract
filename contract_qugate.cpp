@@ -51,7 +51,17 @@ namespace QPI {
         void set(unsigned long long idx, const T& val) { _data[idx] = val; }
     };
 
+    typedef signed int sint32;
+
     struct ContractBase {};
+
+    // ContractState wrapper for dirty-tracking (Issue #7)
+    template<typename T>
+    struct TestContractState {
+        T _data;
+        const T& get() const { return _data; }
+        T& mut() { return _data; }
+    };
 
     inline uint64 div(uint64 a, uint64 b) { return b ? a / b : 0; }
     inline uint64 mod(uint64 a, uint64 b) { return b ? a % b : 0; }
@@ -148,6 +158,16 @@ constexpr uint8 MODE_ROUND_ROBIN = 1;
 constexpr uint8 MODE_THRESHOLD = 2;
 constexpr uint8 MODE_RANDOM = 3;
 constexpr uint8 MODE_CONDITIONAL = 4;
+constexpr uint8 MODE_ORACLE = 5;
+
+// Oracle constants
+constexpr uint8 QUGATE_ORACLE_COND_PRICE_ABOVE = 0;
+constexpr uint8 QUGATE_ORACLE_COND_PRICE_BELOW = 1;
+constexpr uint8 QUGATE_ORACLE_COND_TIME_AFTER  = 2;
+constexpr uint8 QUGATE_ORACLE_TRIGGER_ONCE      = 0;
+constexpr uint8 QUGATE_ORACLE_TRIGGER_RECURRING = 1;
+constexpr sint64 QUGATE_ORACLE_SUBSCRIPTION_FEE = 10000;
+constexpr sint64 QUGATE_INVALID_ORACLE_CONFIG = -13;
 
 constexpr sint64 QUGATE_SUCCESS = 0;
 constexpr sint64 QUGATE_INVALID_GATE_ID = -1;
@@ -183,6 +203,16 @@ struct GateConfig {
     Array<id, 8> recipients;
     Array<uint64, 8> ratios;
     Array<id, 8> allowedSenders;
+
+    // Oracle fields
+    id     oracleId;
+    id     oracleCurrency1;
+    id     oracleCurrency2;
+    uint8  oracleCondition;
+    uint8  oracleTriggerMode;
+    sint64 oracleThreshold;
+    sint64 oracleReserve;
+    sint32 oracleSubscriptionId;
 };
 
 // =============================================
@@ -213,6 +243,13 @@ struct createGate_input {
     uint64 threshold;
     Array<id, 8> allowedSenders;
     uint8 allowedSenderCount;
+    // Oracle fields
+    id     oracleId;
+    id     oracleCurrency1;
+    id     oracleCurrency2;
+    uint8  oracleCondition;
+    uint8  oracleTriggerMode;
+    sint64 oracleThreshold;
 };
 struct createGate_output {
     sint64 status;
@@ -237,6 +274,9 @@ struct updateGate_input {
 };
 struct updateGate_output { sint64 status; };
 
+struct fundGate_input { sint64 gateId; };
+struct fundGate_output { sint64 result; };
+
 struct getGate_output {
     uint8 mode;
     uint8 recipientCount;
@@ -250,6 +290,8 @@ struct getGate_output {
     uint16 lastActivityEpoch;
     Array<id, 8> recipients;
     Array<uint64, 8> ratios;
+    sint64 oracleReserve;
+    sint32 oracleSubscriptionId;
 };
 
 struct getGateCount_output {
@@ -271,23 +313,24 @@ struct getFees_output {
 
 class QuGateTest {
 public:
-    QuGateState* statePtr;
-    QuGateState& state;
+    // Use ContractState wrapper for dirty-tracking pattern (Issue #7)
+    QPI::TestContractState<QuGateState>* stateWrapperPtr;
+    QPI::TestContractState<QuGateState>& state;
     TestQpiContext qpi;
 
-    QuGateTest() : statePtr(new QuGateState()), state(*statePtr) {
-        memset(statePtr, 0, sizeof(QuGateState));
+    QuGateTest() : stateWrapperPtr(new QPI::TestContractState<QuGateState>()), state(*stateWrapperPtr) {
+        memset(&state.mut(), 0, sizeof(QuGateState));
         // INITIALIZE
-        state._gateCount = 0;
-        state._activeGates = 0;
-        state._freeCount = 0;
-        state._totalBurned = 0;
-        state._creationFee = QUGATE_DEFAULT_CREATION_FEE;
-        state._minSendAmount = QUGATE_DEFAULT_MIN_SEND;
-        state._expiryEpochs = QUGATE_DEFAULT_EXPIRY_EPOCHS;
+        state.mut()._gateCount = 0;
+        state.mut()._activeGates = 0;
+        state.mut()._freeCount = 0;
+        state.mut()._totalBurned = 0;
+        state.mut()._creationFee = QUGATE_DEFAULT_CREATION_FEE;
+        state.mut()._minSendAmount = QUGATE_DEFAULT_MIN_SEND;
+        state.mut()._expiryEpochs = QUGATE_DEFAULT_EXPIRY_EPOCHS;
     }
 
-    ~QuGateTest() { delete statePtr; }
+    ~QuGateTest() { delete stateWrapperPtr; }
 
     static id makeId(unsigned char val) {
         id result = m256i::zero();
@@ -297,7 +340,7 @@ public:
 
     // ---- escalated fee calculation ----
     uint64 currentEscalatedFee() const {
-        return state._creationFee * (1 + QPI::div(state._activeGates, QUGATE_FEE_ESCALATION_STEP));
+        return state.get()._creationFee * (1 + QPI::div(state.get()._activeGates, QUGATE_FEE_ESCALATION_STEP));
     }
 
     // ---- createGate (matches QuGate.h logic exactly) ----
@@ -311,14 +354,14 @@ public:
         output.gateId = 0;
         output.feePaid = 0;
 
-        uint64 currentFee = state._creationFee * (1 + QPI::div(state._activeGates, QUGATE_FEE_ESCALATION_STEP));
+        uint64 currentFee = state.get()._creationFee * (1 + QPI::div(state.get()._activeGates, QUGATE_FEE_ESCALATION_STEP));
 
         if (fee < (sint64)currentFee) {
             if (fee > 0) qpi.transfer(creator, fee);
             output.status = QUGATE_INSUFFICIENT_FEE;
             return output;
         }
-        if (input.mode > MODE_CONDITIONAL) {
+        if (input.mode > MODE_ORACLE) {
             qpi.transfer(creator, fee);
             output.status = QUGATE_INVALID_MODE;
             return output;
@@ -328,7 +371,7 @@ public:
             output.status = QUGATE_INVALID_RECIPIENT_COUNT;
             return output;
         }
-        if (state._freeCount == 0 && state._gateCount >= QUGATE_MAX_GATES) {
+        if (state.get()._freeCount == 0 && state.get()._gateCount >= QUGATE_MAX_GATES) {
             qpi.transfer(creator, fee);
             output.status = QUGATE_NO_FREE_SLOTS;
             return output;
@@ -360,6 +403,16 @@ public:
             output.status = QUGATE_INVALID_SENDER_COUNT;
             return output;
         }
+        // Validate ORACLE mode
+        if (input.mode == MODE_ORACLE) {
+            if (input.oracleCondition > QUGATE_ORACLE_COND_TIME_AFTER
+                || input.oracleThreshold <= 0
+                || input.oracleTriggerMode > QUGATE_ORACLE_TRIGGER_RECURRING) {
+                qpi.transfer(creator, fee);
+                output.status = QUGATE_INVALID_ORACLE_CONFIG;
+                return output;
+            }
+        }
 
         GateConfig g;
         memset(&g, 0, sizeof(g));
@@ -372,6 +425,18 @@ public:
         g.lastActivityEpoch = qpi.epoch();
         g.threshold = input.threshold;
         g.roundRobinIndex = 0;
+        g.oracleSubscriptionId = -1;
+
+        // Oracle fields
+        if (input.mode == MODE_ORACLE) {
+            g.oracleId = input.oracleId;
+            g.oracleCurrency1 = input.oracleCurrency1;
+            g.oracleCurrency2 = input.oracleCurrency2;
+            g.oracleCondition = input.oracleCondition;
+            g.oracleTriggerMode = input.oracleTriggerMode;
+            g.oracleThreshold = input.oracleThreshold;
+            g.oracleReserve = 0; // set below from excess
+        }
 
         for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++) {
             if (i < input.recipientCount) {
@@ -390,24 +455,31 @@ public:
         }
 
         uint64 slotIdx;
-        if (state._freeCount > 0) {
-            state._freeCount -= 1;
-            slotIdx = state._freeSlots.get(state._freeCount);
+        if (state.get()._freeCount > 0) {
+            state.mut()._freeCount -= 1;
+            slotIdx = state.get()._freeSlots.get(state.get()._freeCount);
         } else {
-            slotIdx = state._gateCount;
-            state._gateCount += 1;
+            slotIdx = state.get()._gateCount;
+            state.mut()._gateCount += 1;
         }
 
-        state._gates.set(slotIdx, g);
+        state.mut()._gates.set(slotIdx, g);
         output.gateId = slotIdx + 1;
-        state._activeGates += 1;
+        state.mut()._activeGates += 1;
 
         qpi.burn(currentFee);
-        state._totalBurned += currentFee;
+        state.mut()._totalBurned += currentFee;
         output.feePaid = currentFee;
 
-        if (fee > (sint64)currentFee)
-            qpi.transfer(creator, fee - (sint64)currentFee);
+        // Handle excess: ORACLE mode stores in oracleReserve, others get refund
+        if (fee > (sint64)currentFee) {
+            if (input.mode == MODE_ORACLE) {
+                g.oracleReserve = fee - (sint64)currentFee;
+                state.mut()._gates.set(slotIdx, g);
+            } else {
+                qpi.transfer(creator, fee - (sint64)currentFee);
+            }
+        }
 
         output.status = QUGATE_SUCCESS;
         return output;
@@ -444,14 +516,14 @@ public:
         sendToGate_output output;
         output.status = QUGATE_SUCCESS;
 
-        if (gateId == 0 || gateId > state._gateCount) {
+        if (gateId == 0 || gateId > state.get()._gateCount) {
             if (amount > 0) qpi.transfer(sender, amount);
             output.status = QUGATE_INVALID_GATE_ID;
             return output;
         }
 
         uint64 idx = gateId - 1;
-        GateConfig gate = state._gates.get(idx);
+        GateConfig gate = state.get()._gates.get(idx);
 
         if (gate.active == 0) {
             if (amount > 0) qpi.transfer(sender, amount);
@@ -465,9 +537,9 @@ public:
         }
 
         // Dust burn
-        if ((uint64)amount < state._minSendAmount) {
+        if ((uint64)amount < state.get()._minSendAmount) {
             qpi.burn(amount);
-            state._totalBurned += amount;
+            state.mut()._totalBurned += amount;
             output.status = QUGATE_DUST_AMOUNT;
             return output;
         }
@@ -525,8 +597,12 @@ public:
                 output.status = QUGATE_CONDITIONAL_REJECTED;
             }
         }
+        else if (gate.mode == MODE_ORACLE) {
+            // ORACLE mode: accumulate into currentBalance
+            gate.currentBalance += amount;
+        }
 
-        state._gates.set(gateId - 1, gate);
+        state.mut()._gates.set(gateId - 1, gate);
         return output;
     }
 
@@ -539,12 +615,12 @@ public:
         closeGate_output output;
         output.status = QUGATE_SUCCESS;
 
-        if (gateId == 0 || gateId > state._gateCount) {
+        if (gateId == 0 || gateId > state.get()._gateCount) {
             output.status = QUGATE_INVALID_GATE_ID;
             return output;
         }
 
-        GateConfig gate = state._gates.get(gateId - 1);
+        GateConfig gate = state.get()._gates.get(gateId - 1);
 
         if (!(gate.owner == caller)) {
             output.status = QUGATE_UNAUTHORIZED;
@@ -560,12 +636,18 @@ public:
             gate.currentBalance = 0;
         }
 
-        gate.active = 0;
-        state._gates.set(gateId - 1, gate);
-        state._activeGates -= 1;
+        // Refund oracle reserve
+        if (gate.mode == MODE_ORACLE && gate.oracleReserve > 0) {
+            qpi.transfer(gate.owner, gate.oracleReserve);
+            gate.oracleReserve = 0;
+        }
 
-        state._freeSlots.set(state._freeCount, gateId - 1);
-        state._freeCount += 1;
+        gate.active = 0;
+        state.mut()._gates.set(gateId - 1, gate);
+        state.mut()._activeGates -= 1;
+
+        state.mut()._freeSlots.set(state.get()._freeCount, gateId - 1);
+        state.mut()._freeCount += 1;
 
         if (reward > 0) qpi.transfer(caller, reward);
 
@@ -581,13 +663,13 @@ public:
         updateGate_output output;
         output.status = QUGATE_SUCCESS;
 
-        if (input.gateId == 0 || input.gateId > state._gateCount) {
+        if (input.gateId == 0 || input.gateId > state.get()._gateCount) {
             if (reward > 0) qpi.transfer(caller, reward);
             output.status = QUGATE_INVALID_GATE_ID;
             return output;
         }
 
-        GateConfig gate = state._gates.get(input.gateId - 1);
+        GateConfig gate = state.get()._gates.get(input.gateId - 1);
 
         if (!(gate.owner == caller)) {
             if (reward > 0) qpi.transfer(caller, reward);
@@ -651,7 +733,7 @@ public:
                 gate.allowedSenders.set(i, id::zero());
         }
 
-        state._gates.set(input.gateId - 1, gate);
+        state.mut()._gates.set(input.gateId - 1, gate);
 
         if (reward > 0) qpi.transfer(caller, reward);
         return output;
@@ -659,19 +741,23 @@ public:
 
     // ---- endEpoch (gate expiry) ----
     void endEpoch() {
-        for (uint64 i = 0; i < state._gateCount; i++) {
-            GateConfig gate = state._gates.get(i);
-            if (gate.active == 1 && state._expiryEpochs > 0) {
-                if ((uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state._expiryEpochs) {
+        for (uint64 i = 0; i < state.get()._gateCount; i++) {
+            GateConfig gate = state.get()._gates.get(i);
+            if (gate.active == 1 && state.get()._expiryEpochs > 0) {
+                if ((uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs) {
                     if (gate.currentBalance > 0) {
                         qpi.transfer(gate.owner, gate.currentBalance);
                         gate.currentBalance = 0;
                     }
+                    if (gate.mode == MODE_ORACLE && gate.oracleReserve > 0) {
+                        qpi.transfer(gate.owner, gate.oracleReserve);
+                        gate.oracleReserve = 0;
+                    }
                     gate.active = 0;
-                    state._gates.set(i, gate);
-                    state._activeGates -= 1;
-                    state._freeSlots.set(state._freeCount, i);
-                    state._freeCount += 1;
+                    state.mut()._gates.set(i, gate);
+                    state.mut()._activeGates -= 1;
+                    state.mut()._freeSlots.set(state.get()._freeCount, i);
+                    state.mut()._freeCount += 1;
                 }
             }
         }
@@ -681,8 +767,8 @@ public:
     getGate_output getGate(uint64 gateId) {
         getGate_output out;
         memset(&out, 0, sizeof(out));
-        if (gateId == 0 || gateId > state._gateCount) { out.active = 0; return out; }
-        GateConfig g = state._gates.get(gateId - 1);
+        if (gateId == 0 || gateId > state.get()._gateCount) { out.active = 0; return out; }
+        GateConfig g = state.get()._gates.get(gateId - 1);
         out.mode = g.mode;
         out.recipientCount = g.recipientCount;
         out.active = g.active;
@@ -693,6 +779,8 @@ public:
         out.threshold = g.threshold;
         out.createdEpoch = g.createdEpoch;
         out.lastActivityEpoch = g.lastActivityEpoch;
+        out.oracleReserve = g.oracleReserve;
+        out.oracleSubscriptionId = g.oracleSubscriptionId;
         for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++) {
             out.recipients.set(i, g.recipients.get(i));
             out.ratios.set(i, g.ratios.get(i));
@@ -703,20 +791,127 @@ public:
     // ---- getGateCount ----
     getGateCount_output getGateCount() {
         getGateCount_output out;
-        out.totalGates = state._gateCount;
-        out.activeGates = state._activeGates;
-        out.totalBurned = state._totalBurned;
+        out.totalGates = state.get()._gateCount;
+        out.activeGates = state.get()._activeGates;
+        out.totalBurned = state.get()._totalBurned;
         return out;
     }
 
     // ---- getFees ----
     getFees_output getFees() {
         getFees_output out;
-        out.creationFee = state._creationFee;
-        out.currentCreationFee = state._creationFee * (1 + QPI::div(state._activeGates, QUGATE_FEE_ESCALATION_STEP));
-        out.minSendAmount = state._minSendAmount;
-        out.expiryEpochs = state._expiryEpochs;
+        out.creationFee = state.get()._creationFee;
+        out.currentCreationFee = state.get()._creationFee * (1 + QPI::div(state.get()._activeGates, QUGATE_FEE_ESCALATION_STEP));
+        out.minSendAmount = state.get()._minSendAmount;
+        out.expiryEpochs = state.get()._expiryEpochs;
         return out;
+    }
+
+    // ---- fundGate ----
+    fundGate_output fundGate(const id& caller, sint64 gateId, sint64 amount) {
+        qpi.reset();
+        qpi._invocator = caller;
+        qpi._reward = amount;
+
+        fundGate_output output;
+        output.result = QUGATE_SUCCESS;
+
+        if (gateId <= 0 || gateId > (sint64)state.get()._gateCount) {
+            if (amount > 0) qpi.transfer(caller, amount);
+            output.result = QUGATE_INVALID_GATE_ID;
+            return output;
+        }
+
+        GateConfig gate = state.get()._gates.get(gateId - 1);
+        if (gate.active == 0) {
+            if (amount > 0) qpi.transfer(caller, amount);
+            output.result = QUGATE_GATE_NOT_ACTIVE;
+            return output;
+        }
+        if (gate.mode != MODE_ORACLE) {
+            if (amount > 0) qpi.transfer(caller, amount);
+            output.result = QUGATE_INVALID_ORACLE_CONFIG;
+            return output;
+        }
+        if (amount <= 0) {
+            output.result = QUGATE_DUST_AMOUNT;
+            return output;
+        }
+
+        gate.oracleReserve += amount;
+        state.mut()._gates.set(gateId - 1, gate);
+        return output;
+    }
+
+    // ---- evaluateOracleCondition (test helper for oracle condition logic) ----
+    // Simulates what OraclePriceNotification callback would do
+    struct OracleEvalResult {
+        uint8 conditionMet;
+        sint64 distributed;
+    };
+
+    OracleEvalResult evaluateOracleCondition(uint64 gateId, sint64 numerator, sint64 denominator) {
+        OracleEvalResult result;
+        result.conditionMet = 0;
+        result.distributed = 0;
+
+        if (gateId == 0 || gateId > state.get()._gateCount) return result;
+
+        GateConfig gate = state.get()._gates.get(gateId - 1);
+        if (gate.active == 0 || gate.mode != MODE_ORACLE) return result;
+
+        // Evaluate condition
+        if (gate.oracleCondition == QUGATE_ORACLE_COND_PRICE_ABOVE) {
+            if (denominator > 0) {
+                sint64 priceScaled = numerator * 1000000 / denominator;
+                if (priceScaled > gate.oracleThreshold) result.conditionMet = 1;
+            }
+        } else if (gate.oracleCondition == QUGATE_ORACLE_COND_PRICE_BELOW) {
+            if (denominator > 0) {
+                sint64 priceScaled = numerator * 1000000 / denominator;
+                if (priceScaled < gate.oracleThreshold) result.conditionMet = 1;
+            }
+        } else if (gate.oracleCondition == QUGATE_ORACLE_COND_TIME_AFTER) {
+            if ((sint64)qpi.tick() > gate.oracleThreshold) result.conditionMet = 1;
+        }
+
+        if (result.conditionMet && gate.currentBalance > 0) {
+            qpi.reset();
+            // SPLIT-style equal payout
+            uint64 distributed = 0;
+            for (uint64 j = 0; j < gate.recipientCount; j++) {
+                uint64 share;
+                if (j == (uint64)(gate.recipientCount - 1)) {
+                    share = gate.currentBalance - distributed;
+                } else {
+                    share = gate.currentBalance / gate.recipientCount;
+                }
+                if (share > 0) {
+                    qpi.transfer(gate.recipients.get(j), share);
+                    distributed += share;
+                }
+            }
+            gate.totalForwarded += distributed;
+            gate.currentBalance = 0;
+            result.distributed = distributed;
+
+            // If ONCE mode, close gate
+            if (gate.oracleTriggerMode == QUGATE_ORACLE_TRIGGER_ONCE) {
+                if (gate.oracleReserve > 0) {
+                    qpi.transfer(gate.owner, gate.oracleReserve);
+                    gate.oracleReserve = 0;
+                }
+                gate.oracleSubscriptionId = -1;
+                gate.active = 0;
+                state.mut()._activeGates -= 1;
+                state.mut()._freeSlots.set(state.get()._freeCount, gateId - 1);
+                state.mut()._freeCount += 1;
+            }
+
+            state.mut()._gates.set(gateId - 1, gate);
+        }
+
+        return result;
     }
 };
 
@@ -880,8 +1075,8 @@ TEST(QuGate, GateCountTracking) {
     makeSimpleGate(env, ALICE, 1000, MODE_ROUND_ROBIN, 1, recips, ratios);
     makeSimpleGate(env, BOB, 1000, MODE_THRESHOLD, 1, recips, ratios, 1000);
 
-    EXPECT_EQ(env.state._gateCount, 3ULL);
-    EXPECT_EQ(env.state._activeGates, 3ULL);
+    EXPECT_EQ(env.state.get()._gateCount, 3ULL);
+    EXPECT_EQ(env.state.get()._activeGates, 3ULL);
 }
 
 // =============================================
@@ -906,7 +1101,7 @@ TEST(QuGateV3, EscalatingFeeAtZeroGates) {
 TEST(QuGateV3, EscalatingFeeAt1024Gates) {
     QuGateTest env;
     // Simulate 1024 active gates
-    state_hack: env.state._activeGates = 1024;
+    state_hack: env.state.mut()._activeGates = 1024;
 
     // fee = 1000 * (1 + 1024/1024) = 2000
     auto fees = env.getFees();
@@ -919,14 +1114,14 @@ TEST(QuGateV3, EscalatingFeeAt1024Gates) {
     EXPECT_EQ(out.feePaid, 2000ULL);
 
     // Insufficient at old price
-    env.state._activeGates = 1025; // now fee is still 2000
+    env.state.mut()._activeGates = 1025; // now fee is still 2000
     auto out2 = makeSimpleGate(env, ALICE, 1999, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(out2.status, QUGATE_INSUFFICIENT_FEE);
 }
 
 TEST(QuGateV3, EscalatingFeeAt2048Gates) {
     QuGateTest env;
-    env.state._activeGates = 2048;
+    env.state.mut()._activeGates = 2048;
     // fee = 1000 * (1 + 2048/1024) = 3000
     auto fees = env.getFees();
     EXPECT_EQ(fees.currentCreationFee, 3000ULL);
@@ -965,7 +1160,7 @@ TEST(QuGateV3, DustBurnBelowMinSend) {
     EXPECT_EQ(sendOut.status, QUGATE_DUST_AMOUNT);
     EXPECT_EQ(env.qpi.totalBurned, 5);
     EXPECT_EQ(env.qpi.transferCount, 0); // no transfers, burned
-    EXPECT_EQ(env.state._totalBurned, 1000 + 5); // creation fee + dust
+    EXPECT_EQ(env.state.get()._totalBurned, 1000 + 5); // creation fee + dust
 }
 
 TEST(QuGateV3, ExactMinSendNotDust) {
@@ -1080,19 +1275,19 @@ TEST(QuGateV3, FreeListSlotReuse) {
     auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(g1.gateId, 1ULL);
     EXPECT_EQ(g2.gateId, 2ULL);
-    EXPECT_EQ(env.state._gateCount, 2ULL);
+    EXPECT_EQ(env.state.get()._gateCount, 2ULL);
 
     // Close gate 1
     env.closeGate(ALICE, 1);
-    EXPECT_EQ(env.state._freeCount, 1ULL);
-    EXPECT_EQ(env.state._activeGates, 1ULL);
+    EXPECT_EQ(env.state.get()._freeCount, 1ULL);
+    EXPECT_EQ(env.state.get()._activeGates, 1ULL);
 
     // Create again — should reuse slot 0 (gateId 1)
     auto g3 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(g3.gateId, 1ULL); // reused!
-    EXPECT_EQ(env.state._freeCount, 0ULL);
-    EXPECT_EQ(env.state._gateCount, 2ULL); // didn't grow
-    EXPECT_EQ(env.state._activeGates, 2ULL);
+    EXPECT_EQ(env.state.get()._freeCount, 0ULL);
+    EXPECT_EQ(env.state.get()._gateCount, 2ULL); // didn't grow
+    EXPECT_EQ(env.state.get()._activeGates, 2ULL);
 }
 
 // ---- Gate expiry ----
@@ -1113,8 +1308,8 @@ TEST(QuGateV3, GateExpiryAutoClose) {
 
     auto gate = env.getGate(out.gateId);
     EXPECT_EQ(gate.active, 0); // auto-closed
-    EXPECT_EQ(env.state._activeGates, 0ULL);
-    EXPECT_EQ(env.state._freeCount, 1ULL);
+    EXPECT_EQ(env.state.get()._activeGates, 0ULL);
+    EXPECT_EQ(env.state.get()._freeCount, 1ULL);
 }
 
 TEST(QuGateV3, GateExpiryRefundsBalance) {
@@ -1171,15 +1366,15 @@ TEST(QuGateV3, TotalBurnedTracking) {
 
     // Create gate → burns 1000
     makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    EXPECT_EQ(env.state._totalBurned, 1000ULL);
+    EXPECT_EQ(env.state.get()._totalBurned, 1000ULL);
 
     // Dust burn → burns 5
     env.sendToGate(ALICE, 1, 5);
-    EXPECT_EQ(env.state._totalBurned, 1005ULL);
+    EXPECT_EQ(env.state.get()._totalBurned, 1005ULL);
 
     // Create another → burns 1000
     makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    EXPECT_EQ(env.state._totalBurned, 2005ULL);
+    EXPECT_EQ(env.state.get()._totalBurned, 2005ULL);
 
     auto count = env.getGateCount();
     EXPECT_EQ(count.totalBurned, 2005ULL);
@@ -1196,7 +1391,7 @@ TEST(QuGateV3, GetFeesReturnsCorrectValues) {
     EXPECT_EQ(fees.expiryEpochs, 50ULL);
 
     // With active gates
-    env.state._activeGates = 2048;
+    env.state.mut()._activeGates = 2048;
     fees = env.getFees();
     EXPECT_EQ(fees.currentCreationFee, 3000ULL);
 }
@@ -1254,11 +1449,11 @@ TEST(QuGateV3, FeePaidMatchesEscalatedFee) {
     EXPECT_EQ(out1.feePaid, 1000ULL);
 
     // Set active gates to 1024 (minus the 1 just created, so set to 1024 total)
-    env.state._activeGates = 1024;
+    env.state.mut()._activeGates = 1024;
     auto out2 = makeSimpleGate(env, ALICE, 5000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(out2.feePaid, 2000ULL);
 
-    env.state._activeGates = 3072;
+    env.state.mut()._activeGates = 3072;
     auto out3 = makeSimpleGate(env, ALICE, 5000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(out3.feePaid, 4000ULL);
 }
@@ -1273,7 +1468,7 @@ TEST(QuGateV3, CloseGateSuccess) {
 
     auto closeOut = env.closeGate(ALICE, out.gateId);
     EXPECT_EQ(closeOut.status, QUGATE_SUCCESS);
-    EXPECT_EQ(env.state._activeGates, 0ULL);
+    EXPECT_EQ(env.state.get()._activeGates, 0ULL);
 }
 
 TEST(QuGateV3, CloseAlreadyClosedGate) {
@@ -1318,4 +1513,272 @@ TEST(QuGateV3, InsufficientFeeRefundsPayment) {
     EXPECT_EQ(out.status, QUGATE_INSUFFICIENT_FEE);
     // The 500 should be refunded
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 500);
+}
+
+// =============================================
+// ORACLE MODE TESTS
+// =============================================
+
+static createGate_output makeOracleGate(QuGateTest& env, const id& owner, sint64 fee,
+                                         uint8 recipientCount, id* recips,
+                                         uint8 oracleCondition, sint64 oracleThreshold,
+                                         uint8 triggerMode = QUGATE_ORACLE_TRIGGER_ONCE) {
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_ORACLE;
+    in.recipientCount = recipientCount;
+    in.oracleCondition = oracleCondition;
+    in.oracleThreshold = oracleThreshold;
+    in.oracleTriggerMode = triggerMode;
+    in.oracleId = QuGateTest::makeId(99); // mock oracle id
+    for (uint8 i = 0; i < recipientCount && i < 8; i++) {
+        in.recipients.set(i, recips[i]);
+    }
+    return env.createGate(owner, fee, in);
+}
+
+TEST(QuGateOracle, CreateOracleGateSuccess) {
+    QuGateTest env;
+    id recips[] = { BOB, CHARLIE };
+    // Fee = 1000 (creation) + 5000 (oracle reserve) = 6000
+    auto out = makeOracleGate(env, ALICE, 6000, 2, recips,
+                               QUGATE_ORACLE_COND_PRICE_ABOVE, 50000000);
+    EXPECT_EQ(out.status, QUGATE_SUCCESS);
+    EXPECT_NE(out.gateId, 0ULL);
+    EXPECT_EQ(out.feePaid, 1000ULL);
+
+    // Check oracle reserve = 6000 - 1000 = 5000
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.oracleReserve, 5000);
+    EXPECT_EQ(gate.oracleSubscriptionId, -1);
+}
+
+TEST(QuGateOracle, CreateOracleGateInvalidCondition) {
+    QuGateTest env;
+    id recips[] = { BOB };
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_ORACLE;
+    in.recipientCount = 1;
+    in.recipients.set(0, BOB);
+    in.oracleCondition = 5; // invalid
+    in.oracleThreshold = 1000;
+    auto out = env.createGate(ALICE, 5000, in);
+    EXPECT_EQ(out.status, QUGATE_INVALID_ORACLE_CONFIG);
+}
+
+TEST(QuGateOracle, CreateOracleGateZeroThreshold) {
+    QuGateTest env;
+    id recips[] = { BOB };
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_ORACLE;
+    in.recipientCount = 1;
+    in.recipients.set(0, BOB);
+    in.oracleCondition = QUGATE_ORACLE_COND_PRICE_ABOVE;
+    in.oracleThreshold = 0; // invalid
+    auto out = env.createGate(ALICE, 5000, in);
+    EXPECT_EQ(out.status, QUGATE_INVALID_ORACLE_CONFIG);
+}
+
+TEST(QuGateOracle, FundGateSuccess) {
+    QuGateTest env;
+    id recips[] = { BOB };
+    auto gateOut = makeOracleGate(env, ALICE, 2000, 1, recips,
+                                   QUGATE_ORACLE_COND_PRICE_ABOVE, 50000000);
+    ASSERT_EQ(gateOut.status, QUGATE_SUCCESS);
+
+    // Initial reserve = 2000 - 1000 = 1000
+    auto gate = env.getGate(gateOut.gateId);
+    EXPECT_EQ(gate.oracleReserve, 1000);
+
+    // Fund with 3000 more
+    auto fundOut = env.fundGate(CHARLIE, gateOut.gateId, 3000);
+    EXPECT_EQ(fundOut.result, QUGATE_SUCCESS);
+
+    gate = env.getGate(gateOut.gateId);
+    EXPECT_EQ(gate.oracleReserve, 4000); // 1000 + 3000
+}
+
+TEST(QuGateOracle, FundGateNonOracle) {
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto gateOut = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(gateOut.status, QUGATE_SUCCESS);
+
+    // fundGate on non-oracle gate should fail
+    auto fundOut = env.fundGate(CHARLIE, gateOut.gateId, 3000);
+    EXPECT_EQ(fundOut.result, QUGATE_INVALID_ORACLE_CONFIG);
+    // Refunded
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 3000);
+}
+
+TEST(QuGateOracle, FundGateInvalidId) {
+    QuGateTest env;
+    auto fundOut = env.fundGate(ALICE, 999, 1000);
+    EXPECT_EQ(fundOut.result, QUGATE_INVALID_GATE_ID);
+}
+
+TEST(QuGateOracle, OracleConditionPriceAbove) {
+    QuGateTest env;
+    id recips[] = { BOB, CHARLIE };
+    auto gateOut = makeOracleGate(env, ALICE, 2000, 2, recips,
+                                   QUGATE_ORACLE_COND_PRICE_ABOVE, 50000000); // threshold: 50.0
+    ASSERT_EQ(gateOut.status, QUGATE_SUCCESS);
+
+    // Send funds to accumulate in currentBalance
+    env.sendToGate(DAVE, gateOut.gateId, 1000);
+    auto gate = env.getGate(gateOut.gateId);
+    EXPECT_EQ(gate.currentBalance, 1000ULL);
+
+    // Price = 40/1 = 40.0 (below threshold) → condition NOT met
+    auto result = env.evaluateOracleCondition(gateOut.gateId, 40, 1);
+    EXPECT_EQ(result.conditionMet, 0);
+    EXPECT_EQ(result.distributed, 0);
+
+    // Price = 60/1 = 60.0 (above threshold) → condition MET
+    result = env.evaluateOracleCondition(gateOut.gateId, 60, 1);
+    EXPECT_EQ(result.conditionMet, 1);
+    EXPECT_EQ(result.distributed, 1000);
+
+    // Funds distributed equally to BOB and CHARLIE
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 500);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 500);
+}
+
+TEST(QuGateOracle, OracleConditionPriceBelow) {
+    QuGateTest env;
+    id recips[] = { BOB };
+    auto gateOut = makeOracleGate(env, ALICE, 2000, 1, recips,
+                                   QUGATE_ORACLE_COND_PRICE_BELOW, 100000000); // threshold: 100.0
+    ASSERT_EQ(gateOut.status, QUGATE_SUCCESS);
+
+    env.sendToGate(DAVE, gateOut.gateId, 500);
+
+    // Price = 120/1 = 120.0 (above threshold) → NOT met
+    auto result = env.evaluateOracleCondition(gateOut.gateId, 120, 1);
+    EXPECT_EQ(result.conditionMet, 0);
+
+    // Price = 80/1 = 80.0 (below threshold) → MET
+    result = env.evaluateOracleCondition(gateOut.gateId, 80, 1);
+    EXPECT_EQ(result.conditionMet, 1);
+    EXPECT_EQ(result.distributed, 500);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 500);
+}
+
+TEST(QuGateOracle, OracleConditionTimeAfter) {
+    QuGateTest env;
+    id recips[] = { BOB };
+    auto gateOut = makeOracleGate(env, ALICE, 2000, 1, recips,
+                                   QUGATE_ORACLE_COND_TIME_AFTER, 10000); // threshold tick = 10000
+    ASSERT_EQ(gateOut.status, QUGATE_SUCCESS);
+
+    env.sendToGate(DAVE, gateOut.gateId, 500);
+
+    // Tick = 12345 (default) > 10000 → MET
+    auto result = env.evaluateOracleCondition(gateOut.gateId, 0, 0);
+    EXPECT_EQ(result.conditionMet, 1);
+    EXPECT_EQ(result.distributed, 500);
+}
+
+TEST(QuGateOracle, OracleOnceClosesAfterTrigger) {
+    QuGateTest env;
+    id recips[] = { BOB };
+    auto gateOut = makeOracleGate(env, ALICE, 2000, 1, recips,
+                                   QUGATE_ORACLE_COND_PRICE_ABOVE, 50000000,
+                                   QUGATE_ORACLE_TRIGGER_ONCE);
+    ASSERT_EQ(gateOut.status, QUGATE_SUCCESS);
+
+    env.sendToGate(DAVE, gateOut.gateId, 1000);
+
+    // Trigger — price above threshold
+    auto result = env.evaluateOracleCondition(gateOut.gateId, 60, 1);
+    EXPECT_EQ(result.conditionMet, 1);
+
+    // Gate should be closed after ONCE trigger
+    auto gate = env.getGate(gateOut.gateId);
+    EXPECT_EQ(gate.active, 0);
+    EXPECT_EQ(env.state.get()._activeGates, 0ULL);
+
+    // Oracle reserve refunded to owner
+    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 1000); // oracleReserve = 2000-1000 = 1000
+}
+
+TEST(QuGateOracle, OracleRecurringStaysOpen) {
+    QuGateTest env;
+    id recips[] = { BOB };
+    auto gateOut = makeOracleGate(env, ALICE, 2000, 1, recips,
+                                   QUGATE_ORACLE_COND_PRICE_ABOVE, 50000000,
+                                   QUGATE_ORACLE_TRIGGER_RECURRING);
+    ASSERT_EQ(gateOut.status, QUGATE_SUCCESS);
+
+    env.sendToGate(DAVE, gateOut.gateId, 1000);
+
+    // Trigger
+    auto result = env.evaluateOracleCondition(gateOut.gateId, 60, 1);
+    EXPECT_EQ(result.conditionMet, 1);
+    EXPECT_EQ(result.distributed, 1000);
+
+    // Gate stays active for RECURRING mode
+    auto gate = env.getGate(gateOut.gateId);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(env.state.get()._activeGates, 1ULL);
+
+    // Can send more and trigger again
+    env.sendToGate(DAVE, gateOut.gateId, 500);
+    result = env.evaluateOracleCondition(gateOut.gateId, 60, 1);
+    EXPECT_EQ(result.conditionMet, 1);
+    EXPECT_EQ(result.distributed, 500);
+}
+
+TEST(QuGateOracle, OracleReserveExhaustion) {
+    QuGateTest env;
+    id recips[] = { BOB };
+    // Only pay creation fee, no extra for reserve
+    auto gateOut = makeOracleGate(env, ALICE, 1000, 1, recips,
+                                   QUGATE_ORACLE_COND_PRICE_ABOVE, 50000000);
+    ASSERT_EQ(gateOut.status, QUGATE_SUCCESS);
+
+    auto gate = env.getGate(gateOut.gateId);
+    EXPECT_EQ(gate.oracleReserve, 0); // no reserve
+}
+
+TEST(QuGateOracle, CloseOracleGateRefundsReserve) {
+    QuGateTest env;
+    id recips[] = { BOB };
+    auto gateOut = makeOracleGate(env, ALICE, 6000, 1, recips,
+                                   QUGATE_ORACLE_COND_PRICE_ABOVE, 50000000);
+    ASSERT_EQ(gateOut.status, QUGATE_SUCCESS);
+
+    // oracleReserve = 5000, also send some to currentBalance
+    env.sendToGate(DAVE, gateOut.gateId, 2000);
+
+    auto closeOut = env.closeGate(ALICE, gateOut.gateId);
+    EXPECT_EQ(closeOut.status, QUGATE_SUCCESS);
+
+    // Should refund currentBalance (2000) + oracleReserve (5000) = 7000
+    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 7000);
+
+    auto gate = env.getGate(gateOut.gateId);
+    EXPECT_EQ(gate.active, 0);
+}
+
+TEST(QuGateOracle, OracleNoDistributionIfNoBalance) {
+    QuGateTest env;
+    id recips[] = { BOB };
+    auto gateOut = makeOracleGate(env, ALICE, 2000, 1, recips,
+                                   QUGATE_ORACLE_COND_PRICE_ABOVE, 50000000);
+    ASSERT_EQ(gateOut.status, QUGATE_SUCCESS);
+
+    // Don't send any funds — currentBalance = 0
+    // Condition met but nothing to distribute
+    auto result = env.evaluateOracleCondition(gateOut.gateId, 60, 1);
+    EXPECT_EQ(result.conditionMet, 1);
+    EXPECT_EQ(result.distributed, 0);
+
+    // Gate should still be active (even for ONCE, no distribution happened)
+    auto gate = env.getGate(gateOut.gateId);
+    EXPECT_EQ(gate.active, 1);
 }
