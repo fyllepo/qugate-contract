@@ -495,13 +495,14 @@ protected:
     struct OraclePriceNotification_locals
     {
         uint64 i;
-        uint64 j;
         GateConfig gate;
         QuGateLogger logger;
         uint8 conditionMet;
         sint64 priceScaled;
-        uint64 share;
-        uint64 distributed;
+        sint64 splitAmount;
+        processSplit_input splitIn;
+        processSplit_output splitOut;
+        processSplit_locals splitLocals;
     };
 
     struct BEGIN_EPOCH_locals
@@ -622,6 +623,7 @@ protected:
         }
 
         // Validate ORACLE mode
+        // NOTE: TIME_AFTER (condition 2) requires an oracle whose reply.numerator encodes unix time
         if (input.mode == QUGATE_MODE_ORACLE)
         {
             if (input.oracleCondition > QUGATE_ORACLE_COND_TIME_AFTER
@@ -1050,13 +1052,17 @@ protected:
             }
         }
 
-        locals.gate.active = 0;
-        state.mut()._gates.set(input.gateId - 1, locals.gate);
-        state.mut()._activeGates -= 1;
+        // Guard against double-close underflow
+        if (locals.gate.active == 1)
+        {
+            locals.gate.active = 0;
+            state.mut()._gates.set(input.gateId - 1, locals.gate);
+            state.mut()._activeGates -= 1;
 
-        // Push slot onto free-list for reuse
-        state.mut()._freeSlots.set(state.get()._freeCount, input.gateId - 1);
-        state.mut()._freeCount += 1;
+            // Push slot onto free-list for reuse
+            state.mut()._freeSlots.set(state.get()._freeCount, input.gateId - 1);
+            state.mut()._freeCount += 1;
+        }
 
         // Refund invocation reward
         if (qpi.invocationReward() > 0)
@@ -1113,6 +1119,17 @@ protected:
             }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Oracle gates with pending balance cannot change recipients — prevents rug-pull of accumulated funds
+        if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.currentBalance > 0)
+        {
+            if (qpi.invocationReward() > 0)
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            output.status = QUGATE_UNAUTHORIZED;
+            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
             LOG_WARNING(locals.logger);
             return;
         }
@@ -1347,7 +1364,9 @@ protected:
             }
             else if (locals.gate.oracleCondition == QUGATE_ORACLE_COND_TIME_AFTER)
             {
-                if ((sint64)qpi.tick() > locals.gate.oracleThreshold)
+                // TIME_AFTER: treat oracle reply numerator as a timestamp-like value;
+                // use a time oracle or a price oracle whose numerator encodes unix time
+                if (input.reply.numerator > locals.gate.oracleThreshold)
                 {
                     locals.conditionMet = 1;
                 }
@@ -1355,38 +1374,30 @@ protected:
 
             if (locals.conditionMet && locals.gate.currentBalance > 0)
             {
-                // SPLIT-style equal payout to all recipients
-                locals.distributed = 0;
-                for (locals.j = 0; locals.j < locals.gate.recipientCount; locals.j++)
-                {
-                    if (locals.j == (uint64)(locals.gate.recipientCount - 1))
-                    {
-                        locals.share = locals.gate.currentBalance - locals.distributed;
-                    }
-                    else
-                    {
-                        locals.share = locals.gate.currentBalance / locals.gate.recipientCount;
-                    }
-                    if (locals.share > 0)
-                    {
-                        qpi.transfer(locals.gate.recipients.get(locals.j), locals.share);
-                        locals.distributed += locals.share;
-                    }
-                }
-
-                locals.gate.totalForwarded += locals.distributed;
+                // Store amount, zero balance, and write gate back BEFORE calling processSplit
+                // (processSplit reads from state so the gate must be persisted first)
+                locals.splitAmount = locals.gate.currentBalance;
                 locals.gate.currentBalance = 0;
+                state.mut()._gates.set(locals.i, locals.gate);
+
+                // Distribute using ratio-aware split
+                locals.splitIn.gateIdx = locals.i;
+                locals.splitIn.amount = locals.splitAmount;
+                processSplit(qpi, state, locals.splitIn, locals.splitOut, locals.splitLocals);
+
+                // Re-read gate after processSplit updated totalForwarded
+                locals.gate = state.get()._gates.get(locals.i);
 
                 // Log oracle triggered
                 locals.logger._contractIndex = CONTRACT_INDEX;
                 locals.logger._type = QUGATE_LOG_ORACLE_TRIGGERED;
                 locals.logger.gateId = locals.i + 1;
                 locals.logger.sender = id::zero();
-                locals.logger.amount = locals.distributed;
+                locals.logger.amount = locals.splitOut.forwarded;
                 LOG_INFO(locals.logger);
 
-                // If ONCE mode, close gate after trigger
-                if (locals.gate.oracleTriggerMode == QUGATE_ORACLE_TRIGGER_ONCE)
+                // If ONCE mode, close gate after trigger (guard against double-close underflow)
+                if (locals.gate.oracleTriggerMode == QUGATE_ORACLE_TRIGGER_ONCE && locals.gate.active == 1)
                 {
                     if (locals.gate.oracleReserve > 0)
                     {
@@ -1617,6 +1628,7 @@ protected:
         {
             locals.gate = state.get()._gates.get(locals.i);
 
+            // active==1 guard prevents double-close / activeGates underflow (intentional)
             if (locals.gate.active == 1 && state.get()._expiryEpochs > 0)
             {
                 if (qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs)
