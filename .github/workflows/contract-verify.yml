@@ -1,14 +1,16 @@
-name: Contract Verification
+# Branch: main receives merged PRs only.
+# Feature branches use feature/YYYY-MM-DD-Name convention per qubic/core contributing.md
+
+name: CI
 
 on:
   push:
-    branches: [main]
-    paths: ['QuGate.h']
+    branches: [main, 'feature/**']
   pull_request:
-    paths: ['QuGate.h']
 
 jobs:
-  contract_verify:
+  # ── Contract verification ──────────────────────────────────────────────
+  contract-verify:
     runs-on: ubuntu-latest
     name: Verify QuGate.h compliance
     steps:
@@ -18,3 +20,54 @@ jobs:
         uses: Franziska-Mueller/qubic-contract-verify@v0.3.0-beta
         with:
           filepaths: 'QuGate.h'
+
+  # ── Style lint (best-effort) ───────────────────────────────────────────
+  # Best-effort brace-style check.  May produce false positives on
+  # multi-line macros or string literals — treat warnings accordingly.
+  lint:
+    runs-on: ubuntu-latest
+    name: Style lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Check brace style
+        run: |
+          status=0
+
+          # Same-line opening braces:  ) {  or  ) { //
+          if grep -rn --include='*.h' --include='*.cpp' -P '\)\s*\{' .; then
+            echo "::warning::Found same-line opening braces (expected brace on next line)"
+            status=1
+          fi
+
+          # } else {  on one line
+          if grep -rn --include='*.h' --include='*.cpp' -P '\}\s*else' .; then
+            echo "::warning::Found '} else' on same line (expected else on its own line)"
+            status=1
+          fi
+
+          if [ "$status" -ne 0 ]; then
+            echo "Style issues detected (see above)."
+            exit 1
+          fi
+          echo "Brace style OK"
+
+  # ── Python tests ───────────────────────────────────────────────────────
+  test-python:
+    runs-on: ubuntu-latest
+    name: Python tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          pip install pytest requests
+      - name: Run tests
+        run: |
+          pytest tests/ \
+            --ignore=tests/test_testnet.py \
+            -v --tb=short

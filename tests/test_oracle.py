@@ -19,6 +19,10 @@ import base64
 import time
 import requests
 import sys
+import pytest
+
+LIVE_NODE = os.environ.get("QUBIC_NODE")
+pytestmark = pytest.mark.skipif(not LIVE_NODE, reason="Requires live Qubic node (set QUBIC_NODE env var)")
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]

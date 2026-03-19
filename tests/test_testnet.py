@@ -7,6 +7,10 @@ import requests
 import time
 import base64
 import struct
+import pytest
+
+LIVE_NODE = os.environ.get("QUBIC_NODE")
+pytestmark = pytest.mark.skipif(not LIVE_NODE, reason="Requires live Qubic node (set QUBIC_NODE env var)")
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 ID_TOOL = os.environ.get("QUBIC_ID_TOOL", shutil.which("identity_tool") or "identity_tool")
