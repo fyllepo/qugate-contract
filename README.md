@@ -85,6 +85,11 @@ recipientIdx = mod(totalReceived + tick(), recipientCount)
 
 Where `totalReceived` is the gate's cumulative received amount (already incremented by the current payment) and `tick()` is the current Qubic tick number. The tick number is not controllable by the sender, providing sufficient unpredictability for payment routing, though this is not cryptographic randomness.
 
+> **Warning:** RANDOM mode uses on-chain tick + totalReceived as entropy. Both values are publicly
+> observable before a transaction is submitted, making recipient selection predictable to
+> a determined observer. Suitable for non-adversarial fair distribution. Not suitable for
+> use cases requiring cryptographic randomness.
+
 ### QUGATE_MODE_CONDITIONAL (4) — Sender-Restricted Forwarding
 
 Only forwards payments from addresses in the gate's `allowedSenders` list. Payments from unauthorized senders are bounced back (transferred back to the sender) with status `QUGATE_CONDITIONAL_REJECTED`.
