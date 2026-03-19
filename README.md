@@ -32,7 +32,11 @@ QuGate is a **network primitive** — shared, permissionless payment routing inf
 
 ## Overview
 
-QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of five modes. Gates are composable: the output of one gate can be forwarded into another via an intermediary transaction (signed by a client app, bot, or oracle), enabling multi-stage payment pipelines without writing custom contracts. The contract does not auto-forward between gates — each hop requires a separate transaction.
+QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of six modes (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, ORACLE). Gates are composable: the output of one gate can be forwarded into another, enabling multi-stage payment pipelines without writing custom contracts.
+
+Gate-to-gate forwarding can happen in two ways:
+1. **Manual forwarding**: An external actor (client app, bot) calls sendToGate on the next gate.
+2. **Automatic chain forwarding**: Gates configured with chainNextGateId auto-forward after each payout — no external transaction required (max 3 hops).
 
 ### Constants
 
@@ -174,7 +178,7 @@ Creates a new gate. Requires payment of the current escalated creation fee.
 
 | Field | Type | Size | Description |
 |-------|------|------|-------------|
-| mode | uint8 | 1 | Gate mode (0-4) |
+| mode | uint8 | 1 | Gate mode (0-5) |
 | recipientCount | uint8 | 1 | Number of recipients (1-8) |
 | recipients | Array\<id, 8\> | 256 | Recipient public keys (32 bytes each) |
 | ratios | Array\<uint64, 8\> | 64 | Ratio per recipient (SPLIT mode) |
@@ -274,12 +278,19 @@ Returns full gate configuration and statistics.
 | owner | id | Gate owner public key |
 | totalReceived | uint64 | Cumulative QU received |
 | totalForwarded | uint64 | Cumulative QU forwarded |
-| currentBalance | uint64 | Held balance (THRESHOLD mode) |
+| currentBalance | uint64 | Held balance (THRESHOLD/ORACLE mode) |
 | threshold | uint64 | Threshold amount |
 | createdEpoch | uint16 | Epoch when gate was created |
 | lastActivityEpoch | uint16 | Epoch of last send/update |
 | recipients | Array\<id, 8\> | Recipient addresses |
 | ratios | Array\<uint64, 8\> | Recipient ratios |
+| allowedSenders | Array\<id, 8\> | Allowed sender addresses (CONDITIONAL mode) |
+| allowedSenderCount | uint8 | Number of allowed senders |
+| oracleReserve | sint64 | QU remaining in oracle subscription reserve |
+| oracleSubscriptionId | sint32 | Current oracle subscription ID (-1 if not subscribed) |
+| chainNextGateId | sint64 | Versioned gate ID of next gate in chain (-1 if no chain) |
+| chainReserve | sint64 | QU remaining in chain hop fee reserve |
+| chainDepth | uint8 | This gate's position in its chain (0 = root) |
 
 Returns `active=0` for invalid gate IDs.
 
@@ -326,6 +337,63 @@ Performs a linear scan of all gate slots. Returns up to 16 gates.
 | currentCreationFee | uint64 | Actual fee after escalation |
 | minSendAmount | uint64 | Minimum send amount |
 | expiryEpochs | uint64 | Epochs of inactivity before expiry |
+
+#### fundGate (Input Type 10)
+
+Adds QU to a gate's oracle reserve or chain reserve. Anyone can fund a gate.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | sint64 | 8 | Target gate ID |
+| reserveTarget | uint8 | 1 | 0 = oracleReserve, 1 = chainReserve |
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| result | sint64 | 0 on success, negative on error |
+
+**Behaviour**: Validates the gate exists and is active. For `reserveTarget=0`, the gate must be ORACLE mode. For `reserveTarget=1`, the gate must have a chain link (`chainNextGateId != -1`). Attached QU is deposited into the specified reserve.
+
+#### setChain (Input Type 11)
+
+Sets or clears the chain link on an existing gate. Owner only. Burns one hop fee.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | sint64 | 8 | Source gate ID |
+| nextGateId | sint64 | 8 | Target gate ID to chain to (-1 to clear chain) |
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| result | sint64 | 0 on success, negative on error |
+
+**Behaviour**: Validates ownership and active status. Requires `QUGATE_CHAIN_HOP_FEE` as invocation reward (burned). Validates the target gate exists, is active, and the resulting chain depth does not exceed `QUGATE_MAX_CHAIN_DEPTH`. Performs cycle detection by walking forward from the target. Setting `nextGateId=-1` clears the chain link.
+
+#### sendToGateVerified (Input Type 12)
+
+Like `sendToGate`, but additionally asserts that `gate.owner == expectedOwner` before routing. Full refund if mismatch. Prevents payments to a recycled slot whose new gate has a different owner.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | uint64 | 8 | Target gate ID |
+| expectedOwner | id | 32 | Expected gate owner public key |
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| status | sint64 | 0 on success, negative on error |
+
+**Behaviour**: Identical to `sendToGate` except for the owner check. Returns `QUGATE_OWNER_MISMATCH` (-15) with full refund if `gate.owner != expectedOwner`. All other validation, dust burn, and routing logic is the same as `sendToGate`.
 
 ---
 
@@ -389,7 +457,7 @@ _expiryEpochs   uint64                          Inactivity epochs before expiry 
 
 ```
 owner               id (32 bytes)       Gate creator
-mode                uint8               Gate mode (0-4, immutable)
+mode                uint8               Gate mode (0-5, immutable)
 recipientCount      uint8               Active recipients (1-8)
 active              uint8               1 = active, 0 = closed/expired
 allowedSenderCount  uint8               Allowed senders for CONDITIONAL
@@ -397,12 +465,23 @@ createdEpoch        uint16              Creation epoch
 lastActivityEpoch   uint16              Last send/update/create epoch
 totalReceived       uint64              Cumulative QU received
 totalForwarded      uint64              Cumulative QU forwarded
-currentBalance      uint64              Held balance (THRESHOLD mode)
+currentBalance      uint64              Held balance (THRESHOLD/ORACLE mode)
 threshold           uint64              Threshold amount
 roundRobinIndex     uint64              Next recipient index (ROUND_ROBIN)
 recipients          Array<id, 8>        Recipient addresses (256 bytes)
 ratios              Array<uint64, 8>    Ratios (64 bytes)
 allowedSenders      Array<id, 8>        Allowed senders (256 bytes)
+oracleId            id (32 bytes)       Oracle provider identity (ORACLE mode)
+oracleCurrency1     id (32 bytes)       First currency of price pair (ORACLE mode)
+oracleCurrency2     id (32 bytes)       Second currency of price pair (ORACLE mode)
+oracleCondition     uint8               Trigger condition type (ORACLE mode)
+oracleTriggerMode   uint8               ONCE (0) or RECURRING (1) (ORACLE mode)
+oracleThreshold     sint64              Price ratio * 1e6 or timestamp (ORACLE mode)
+oracleReserve       sint64              QU reserve for subscription fees (ORACLE mode)
+oracleSubscriptionId sint32             Subscription ID; -1 if not subscribed (ORACLE mode)
+chainNextGateId     sint64              Next gate in chain; -1 if terminal
+chainReserve        sint64              QU reserve for hop fees
+chainDepth          uint8               Position in chain (0 = root)
 ```
 
 ### Free-List
@@ -557,18 +636,21 @@ The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_
 | Code | Constant | Description |
 |------|----------|-------------|
 | 0 | `QUGATE_SUCCESS` | Operation succeeded |
-| -1 | `QUGATE_INVALID_GATE_ID` | Gate ID is 0 or exceeds gateCount |
-| -2 | `QUGATE_GATE_NOT_ACTIVE` | Gate exists but is inactive |
+| -1 | `QUGATE_INVALID_GATE_ID` | Gate ID is 0, exceeds gateCount, or wrong generation |
+| -2 | `QUGATE_GATE_NOT_ACTIVE` | Gate exists but has been closed or expired |
 | -3 | `QUGATE_UNAUTHORIZED` | Caller is not the gate owner |
-| -4 | `QUGATE_INVALID_MODE` | Mode value > 4 |
+| -4 | `QUGATE_INVALID_MODE` | Mode value exceeds QUGATE_MODE_ORACLE (5) |
 | -5 | `QUGATE_INVALID_RECIPIENT_COUNT` | Recipient count is 0 or > 8 |
-| -6 | `QUGATE_INVALID_RATIO` | Ratio > 10,000 or total ratio is 0 |
+| -6 | `QUGATE_INVALID_RATIO` | Individual ratio > 10,000 or total ratio is 0 |
 | -7 | `QUGATE_INSUFFICIENT_FEE` | Invocation reward < escalated creation fee |
-| -8 | `QUGATE_NO_FREE_SLOTS` | No free-list slots and gateCount at capacity |
-| -9 | `QUGATE_DUST_AMOUNT` | Send amount is 0 or below minimum |
+| -8 | `QUGATE_NO_FREE_SLOTS` | Free-list empty and gateCount at QUGATE_MAX_GATES |
+| -9 | `QUGATE_DUST_AMOUNT` | Send amount is 0 or below minimum (burned) |
 | -10 | `QUGATE_INVALID_THRESHOLD` | Threshold is 0 for THRESHOLD mode |
-| -11 | `QUGATE_INVALID_SENDER_COUNT` | Allowed sender count > 8 |
+| -11 | `QUGATE_INVALID_SENDER_COUNT` | allowedSenderCount exceeds QUGATE_MAX_RECIPIENTS |
 | -12 | `QUGATE_CONDITIONAL_REJECTED` | Sender not in allowed list (funds bounced) |
+| -13 | `QUGATE_INVALID_ORACLE_CONFIG` | Invalid oracle condition, threshold, or trigger mode |
+| -14 | `QUGATE_INVALID_CHAIN` | Chain target invalid, depth exceeded, or cycle detected |
+| -15 | `QUGATE_OWNER_MISMATCH` | gate.owner != expectedOwner in sendToGateVerified |
 
 ---
 
@@ -586,6 +668,12 @@ The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_
 | 6 | `QUGATE_LOG_DUST_BURNED` | Dust amount burned |
 | 7 | `QUGATE_LOG_FEE_CHANGED` | Fee parameter changed (future) |
 | 8 | `QUGATE_LOG_GATE_EXPIRED` | Gate auto-closed due to inactivity |
+| 9 | `QUGATE_LOG_ORACLE_TRIGGERED` | Oracle condition met; accumulated balance distributed |
+| 10 | `QUGATE_LOG_ORACLE_EXHAUSTED` | Oracle reserve insufficient for subscription fee |
+| 11 | `QUGATE_LOG_ORACLE_SUBSCRIBED` | Oracle subscription established for this epoch |
+| 12 | `QUGATE_LOG_CHAIN_HOP` | Chain hop executed — funds routed to next gate |
+| 13 | `QUGATE_LOG_CHAIN_CYCLE` | Chain cycle detected or max depth exceeded |
+| 14 | `QUGATE_LOG_CHAIN_HOP_INSUFFICIENT` | Hop fee not payable; funds stranded in currentBalance |
 
 ### Failure Events (high range)
 
@@ -597,6 +685,7 @@ The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_
 | 103 | `QUGATE_LOG_FAIL_INVALID_PARAMS` | Invalid parameters |
 | 104 | `QUGATE_LOG_FAIL_INSUFFICIENT_FEE` | Fee too low |
 | 105 | `QUGATE_LOG_FAIL_NO_SLOTS` | No slots available |
+| 106 | `QUGATE_LOG_FAIL_OWNER_MISMATCH` | Owner verification failed (sendToGateVerified) |
 
 ### Log Structures
 
@@ -620,8 +709,10 @@ g++ -std=c++17 -I. contract_qugate.cpp -lgtest -lgtest_main -o qugate_tests
 ./qugate_tests
 ```
 
-The test suite (`contract_qugate.cpp`) contains 40 unit tests covering:
-- All 5 gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce)
+The test suite (`contract_qugate.cpp`) contains 50+ unit tests covering:
+- All 6 gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, oracle trigger/distribution)
+- Chain gates (hop fees, chain reserve, depth limits, cycle detection)
+- Versioned gate IDs and sendToGateVerified
 - Anti-spam features (escalating fees at 0/1024/2048 gates, dust burn, fee overpayment refund, gate expiry with balance refund, activity epoch tracking)
 - Error cases (invalid gate ID, unauthorized close/update, insufficient fee, invalid mode/ratio/threshold/sender count)
 - Free-list slot reuse
@@ -689,7 +780,7 @@ See `TESTNET_RESULTS.md` for detailed results.
 
 5. **Shareholder governance is not yet wired.** Fee parameters are set at initialization and cannot be changed until `DEFINE_SHAREHOLDER_PROPOSAL_STORAGE` is enabled with a valid contract asset name.
 
-6. **Maximum 8 recipients per gate.** Larger distributions require chaining multiple SPLIT gates via intermediary forwarding (each hop is a separate transaction).
+6. **Maximum 8 recipients per gate.** Larger distributions can be achieved by chaining multiple SPLIT gates via chain gates (automatic forwarding, max 3 hops) or manual intermediary forwarding.
 
 7. **Mode is immutable after creation.** To change a gate's mode, you must close it and create a new one.
 
@@ -704,10 +795,10 @@ See `TESTNET_RESULTS.md` for detailed results.
 | File | Description |
 |------|-------------|
 | `QuGate.h` | Contract source code (QPI-compliant) |
-| `contract_qugate.cpp` | Test suite (40 unit tests, Google Test) |
+| `contract_qugate.cpp` | Test suite (50+ unit tests, Google Test) |
 | `README.md` | Technical reference (this file) |
 | `TESTNET_RESULTS.md` | Testnet verification results |
-| `tests/` | Python testnet test scripts (11 scripts) |
+| `tests/` | Python testnet test scripts (15 scripts) |
 | `.github/workflows/` | CI: contract verification |
 
 ---
@@ -715,7 +806,6 @@ See `TESTNET_RESULTS.md` for detailed results.
 ## Roadmap
 
 - **Mainnet deployment** — pending computor vote on [Proposal PR #33](https://github.com/qubic/proposal/pull/33)
-- **`sendToGateVerified`** — optional procedure that validates gate state before accepting funds ([#1](https://github.com/fyllepo/qugate-contract/issues/1))
 - **Ecosystem tooling** — SDK helpers, explorer integration, documentation site
 - **Community adoption** — gather feedback from builders, iterate on governance parameters
 

@@ -18,7 +18,25 @@
 //   - Dust burn: sends below minimum are burned
 //   - All fees are deflationary (burned, not accumulated)
 
-// Architecture overview: Gates stored in fixed Array indexed by slot. External gateId = ((generation+1) << 20) | slotIndex prevents ID reuse attacks. Oracle gates subscribe each epoch via BEGIN_EPOCH. Chain gates forward funds after payout (max 3 hops). All fees burned.
+//
+// Architecture:
+//   Gates are stored in a flat Array<GateConfig, QUGATE_MAX_GATES> indexed by slot (0-based
+//   internally). External callers use versioned gate IDs:
+//     gateId = ((generation + 1) << QUGATE_GATE_ID_SLOT_BITS) | slotIndex
+//   The generation counter increments each time a slot is recycled, making stale IDs invalid.
+//
+//   Oracle gates (QUGATE_MODE_ORACLE) subscribe to a Qubic price oracle at the start of each
+//   epoch (BEGIN_EPOCH). The oracle callback (OraclePriceNotification) fires once per configured
+//   interval; when the trigger condition is met, accumulated funds are distributed and optionally
+//   forwarded via chain gates.
+//
+//   Chain gates link up to QUGATE_MAX_CHAIN_DEPTH gates in sequence. After a gate distributes
+//   funds, the forwarded amount is passed to the next gate in the chain (routeToGate). Each hop
+//   burns QUGATE_CHAIN_HOP_FEE QU as an anti-spam measure.
+//
+//   All fees (creation, dust, chain hops) are burned via qpi.burn(). No QU accumulates in the
+//   contract. The contract is purely deflationary.
+//
 
 using namespace QPI;
 
@@ -75,27 +93,27 @@ constexpr uint32 QUGATE_ORACLE_NOTIFY_PERIOD_MS = 60000; // 1 minute
 // Chain gate constants
 constexpr uint8  QUGATE_MAX_CHAIN_DEPTH            = 3;
 constexpr sint64 QUGATE_CHAIN_HOP_FEE              = 1000;
-constexpr sint64 QUGATE_INVALID_CHAIN              = -14;
 constexpr uint32 QUGATE_LOG_CHAIN_HOP              = 12;
 constexpr uint32 QUGATE_LOG_CHAIN_CYCLE            = 13;
 constexpr uint32 QUGATE_LOG_CHAIN_HOP_INSUFFICIENT = 14;
 
 // Status codes — used in procedure outputs and logger _type
-constexpr sint64 QUGATE_SUCCESS = 0;
-constexpr sint64 QUGATE_INVALID_GATE_ID = -1;
-constexpr sint64 QUGATE_GATE_NOT_ACTIVE = -2;
-constexpr sint64 QUGATE_UNAUTHORIZED = -3;
-constexpr sint64 QUGATE_INVALID_MODE = -4;
-constexpr sint64 QUGATE_INVALID_RECIPIENT_COUNT = -5;
-constexpr sint64 QUGATE_INVALID_RATIO = -6;
-constexpr sint64 QUGATE_INSUFFICIENT_FEE = -7;
-constexpr sint64 QUGATE_NO_FREE_SLOTS = -8;
-constexpr sint64 QUGATE_DUST_AMOUNT = -9;
-constexpr sint64 QUGATE_INVALID_THRESHOLD = -10;
-constexpr sint64 QUGATE_INVALID_SENDER_COUNT = -11;
-constexpr sint64 QUGATE_CONDITIONAL_REJECTED = -12;
-constexpr sint64 QUGATE_INVALID_ORACLE_CONFIG = -13;
-constexpr sint64 QUGATE_OWNER_MISMATCH = -15;
+constexpr sint64 QUGATE_SUCCESS                = 0;   // Operation completed successfully
+constexpr sint64 QUGATE_INVALID_GATE_ID        = -1;  // gateId is 0, exceeds gateCount, or wrong generation
+constexpr sint64 QUGATE_GATE_NOT_ACTIVE        = -2;  // Gate exists but has been closed or expired
+constexpr sint64 QUGATE_UNAUTHORIZED           = -3;  // Caller is not the gate owner
+constexpr sint64 QUGATE_INVALID_MODE           = -4;  // Mode value exceeds QUGATE_MODE_ORACLE (5)
+constexpr sint64 QUGATE_INVALID_RECIPIENT_COUNT = -5; // recipientCount is 0 or exceeds QUGATE_MAX_RECIPIENTS
+constexpr sint64 QUGATE_INVALID_RATIO          = -6;  // Individual ratio exceeds QUGATE_MAX_RATIO, or total ratio is 0
+constexpr sint64 QUGATE_INSUFFICIENT_FEE       = -7;  // invocationReward < escalated creation fee
+constexpr sint64 QUGATE_NO_FREE_SLOTS          = -8;  // Free-list empty and gateCount at QUGATE_MAX_GATES
+constexpr sint64 QUGATE_DUST_AMOUNT            = -9;  // Send amount is 0 or below _minSendAmount (burned)
+constexpr sint64 QUGATE_INVALID_THRESHOLD      = -10; // Threshold is 0 for QUGATE_MODE_THRESHOLD gates
+constexpr sint64 QUGATE_INVALID_SENDER_COUNT   = -11; // allowedSenderCount exceeds QUGATE_MAX_RECIPIENTS
+constexpr sint64 QUGATE_CONDITIONAL_REJECTED   = -12; // Sender not in allowedSenders list; amount bounced
+constexpr sint64 QUGATE_INVALID_ORACLE_CONFIG  = -13; // Invalid oracle condition, threshold, or trigger mode
+constexpr sint64 QUGATE_INVALID_CHAIN          = -14; // Chain target invalid, depth exceeded, or cycle detected
+constexpr sint64 QUGATE_OWNER_MISMATCH         = -15; // gate.owner != expectedOwner in sendToGateVerified
 
 // Log type constants (positive = success events, high numbers = actions)
 constexpr uint32 QUGATE_LOG_GATE_CREATED = 1;
@@ -106,9 +124,9 @@ constexpr uint32 QUGATE_LOG_PAYMENT_BOUNCED = 5;
 constexpr uint32 QUGATE_LOG_DUST_BURNED = 6;
 constexpr uint32 QUGATE_LOG_FEE_CHANGED = 7;
 constexpr uint32 QUGATE_LOG_GATE_EXPIRED = 8;
-constexpr sint64 QUGATE_LOG_ORACLE_TRIGGERED  = 9;
-constexpr sint64 QUGATE_LOG_ORACLE_EXHAUSTED  = 10;
-constexpr sint64 QUGATE_LOG_ORACLE_SUBSCRIBED = 11;
+constexpr uint32 QUGATE_LOG_ORACLE_TRIGGERED  = 9;
+constexpr uint32 QUGATE_LOG_ORACLE_EXHAUSTED  = 10;
+constexpr uint32 QUGATE_LOG_ORACLE_SUBSCRIBED = 11;
 
 // Failure log types use high range
 constexpr uint32 QUGATE_LOG_FAIL_INVALID_GATE = 100;
@@ -150,42 +168,43 @@ public:
 
     struct GateConfig
     {
-        id owner;
-        uint8 mode;
-        uint8 recipientCount;
-        uint8 active;
-        uint8 allowedSenderCount;
-        uint16 createdEpoch;                            // epoch() returns uint16
-        uint16 lastActivityEpoch;                       // updated on create/send/update
-        uint64 totalReceived;
-        uint64 totalForwarded;
-        uint64 currentBalance;
-        uint64 threshold;
-        uint64 roundRobinIndex;
-        Array<id, 8> recipients;
-        Array<uint64, 8> ratios;
-        Array<id, 8> allowedSenders;
+        id     owner;               // Public key of the address that created this gate; only owner can close/update
+        uint8  mode;                // Gate routing mode; one of QUGATE_MODE_* constants; immutable after creation
+        uint8  recipientCount;      // Number of active recipients (1 to QUGATE_MAX_RECIPIENTS)
+        uint8  active;              // 1 = gate is active and routing; 0 = closed or expired
+        uint8  allowedSenderCount;  // Number of addresses in allowedSenders (0 to QUGATE_MAX_RECIPIENTS)
+        uint16 createdEpoch;        // Network epoch when this gate was created
+        uint16 lastActivityEpoch;   // Network epoch of last sendToGate or updateGate call; used for expiry
+        uint64 totalReceived;       // Cumulative QU received by this gate across all sendToGate calls
+        uint64 totalForwarded;      // Cumulative QU forwarded to recipients (excludes dust burns)
+        uint64 currentBalance;      // Held balance awaiting release: THRESHOLD mode accumulates here; ORACLE mode accumulates here between oracle triggers
+        uint64 threshold;           // Release threshold for THRESHOLD mode; 0 for other modes
+        uint64 roundRobinIndex;     // Next recipient index for ROUND_ROBIN mode; wraps at recipientCount
+        Array<id, 8> recipients;     // Recipient public keys; indices beyond recipientCount are zeroed
+        Array<uint64, 8> ratios;         // Ratio per recipient for SPLIT and ORACLE modes; others may zero these
+        Array<id, 8> allowedSenders; // Whitelist for CONDITIONAL mode; indices beyond allowedSenderCount are zeroed
 
-        // Oracle mode fields (only used when mode == QUGATE_MODE_ORACLE)
-        id     oracleId;               // e.g. Price::getBinanceOracleId()
-        id     oracleCurrency1;        // first currency of pair
-        id     oracleCurrency2;        // second currency of pair
-        uint8  oracleCondition;        // QUGATE_ORACLE_COND_PRICE_ABOVE/BELOW/TIME_AFTER
-        uint8  oracleTriggerMode;      // QUGATE_ORACLE_TRIGGER_ONCE / RECURRING
-        sint64 oracleThreshold;        // price ratio * 1e6, or unix timestamp
-        sint64 oracleReserve;          // QU reserve to pay subscription fees
-        sint32 oracleSubscriptionId;   // -1 if not subscribed
+        // Oracle mode fields — only populated when mode == QUGATE_MODE_ORACLE
+        id     oracleId;               // Oracle provider identity (e.g. Price::getBinanceOracleId())
+        id     oracleCurrency1;        // First currency of the price pair query
+        id     oracleCurrency2;        // Second currency of the price pair query
+        uint8  oracleCondition;        // Trigger condition type: QUGATE_ORACLE_COND_PRICE_ABOVE/BELOW/TIME_AFTER
+        uint8  oracleTriggerMode;      // QUGATE_ORACLE_TRIGGER_ONCE (auto-close) or RECURRING (reset and continue)
+        sint64 oracleThreshold;        // Trigger threshold: price ratio scaled by 1e6, or numerator value for TIME_AFTER
+        sint64 oracleReserve;          // QU reserve to fund per-epoch oracle subscription fee (QUGATE_ORACLE_SUBSCRIPTION_FEE)
+        sint32 oracleSubscriptionId;   // Subscription ID returned by SUBSCRIBE_ORACLE; -1 if not subscribed
 
-        // Chain gate fields
-        sint64 chainNextGateId;        // versioned gate ID to forward to after payout (-1 = no chain)
-        sint64 chainReserve;           // QU reserve to cover hop fees when forwarded amount runs dry
-        uint8  chainDepth;             // hop depth of this gate (0 = root, max QUGATE_MAX_CHAIN_DEPTH-1)
+        // Chain gate fields — only active when chainNextGateId != -1
+        sint64 chainNextGateId;   // Versioned gate ID of next gate in chain; -1 if this is a terminal gate
+        sint64 chainReserve;      // QU reserve to pay hop fees when forwarded amount is insufficient
+        uint8  chainDepth;        // This gate's position in its chain (0 = root/trigger, increments toward leaf)
     };
 
     // =============================================
     // Procedure inputs/outputs
     // =============================================
 
+    // Parameters for creating a new gate. Fields irrelevant to the chosen mode should be zeroed.
     struct createGate_input
     {
         uint8 mode;
@@ -214,6 +233,7 @@ public:
         uint64 feePaid;         // actual fee charged (for transparency)
     };
 
+    // Target gate to route QU through. Attach QU as invocationReward.
     struct sendToGate_input
     {
         uint64 gateId;
@@ -223,6 +243,7 @@ public:
         sint64 status;          //
     };
 
+    // Closes gate and refunds held balance to owner. Gate must be active and caller must be owner.
     struct closeGate_input
     {
         uint64 gateId;
@@ -232,6 +253,7 @@ public:
         sint64 status;          //
     };
 
+    // Updates gate recipients/ratios/threshold. Mode cannot be changed. Owner only.
     struct updateGate_input
     {
         uint64 gateId;
@@ -247,6 +269,7 @@ public:
         sint64 status;          //
     };
 
+    // Adds invocationReward to a gate reserve. reserveTarget: 0=oracleReserve, 1=chainReserve.
     struct fundGate_input
     {
         sint64 gateId;
@@ -257,7 +280,7 @@ public:
         sint64 result;
     };
 
-    // setChain — update chain link on an existing gate
+    // Sets or clears the chain link on a gate. nextGateId=-1 clears the chain. Owner only. Burns QUGATE_CHAIN_HOP_FEE.
     struct setChain_input
     {
         sint64 gateId;
@@ -268,7 +291,7 @@ public:
         sint64 result;
     };
 
-    // sendToGateVerified — owner-checked send
+    // Like sendToGate, but asserts gate.owner == expectedOwner before routing. Full refund if mismatch.
     struct sendToGateVerified_input
     {
         uint64 gateId;
@@ -483,7 +506,6 @@ protected:
         QuGateLogger logger;
         GateConfig gate;
         sint64 amount;
-        uint64 idx;
         uint64 slotIdx;
         uint64 encodedGen;
         processSplit_input splitIn;
@@ -1144,7 +1166,18 @@ protected:
     // routeToGate — single-hop chain routing (non-recursive)
     // =============================================
 
-    // routeToGate: executes one hop. Called iteratively from OraclePriceNotification (not recursively) because QPI locals structs require compile-time size. Caller loops up to QUGATE_MAX_CHAIN_DEPTH times.
+    // routeToGate — executes a single routing hop for chain forwarding.
+    // Routes `input.amount` (minus hop fee) through the gate at `input.slotIdx` according to
+    // that gate's mode. Does NOT recurse or continue the chain — the caller (OraclePriceNotification)
+    // is responsible for iterating subsequent hops.
+    //
+    // Hop fee priority:
+    //   1. Deducted from forwarded amount if amount > QUGATE_CHAIN_HOP_FEE
+    //   2. Deducted from gate.chainReserve if amount <= QUGATE_CHAIN_HOP_FEE and reserve is sufficient
+    //   3. Funds stranded in gate.currentBalance if both are insufficient (QUGATE_LOG_CHAIN_HOP_INSUFFICIENT)
+    //
+    // input.hopCount is checked against QUGATE_MAX_CHAIN_DEPTH as a runtime safety guard.
+    // The caller should never exceed this, but the guard prevents runaway execution if it does.
     PRIVATE_PROCEDURE_WITH_LOCALS(routeToGate)
     {
         output.forwarded = 0;
@@ -1273,8 +1306,7 @@ protected:
             return;
         }
 
-        locals.idx = locals.slotIdx;
-        locals.gate = state.get()._gates.get(locals.idx);
+        locals.gate = state.get()._gates.get(locals.slotIdx);
 
         if (locals.gate.active == 0)
         {
@@ -1308,12 +1340,12 @@ protected:
         // Update activity and track received
         locals.gate.lastActivityEpoch = qpi.epoch();
         locals.gate.totalReceived += locals.amount;
-        state.mut()._gates.set(locals.idx, locals.gate);
+        state.mut()._gates.set(locals.slotIdx, locals.gate);
 
         // Dispatch to mode-specific handler
         if (locals.gate.mode == QUGATE_MODE_SPLIT)
         {
-            locals.splitIn.gateIdx = locals.idx;
+            locals.splitIn.gateIdx = locals.slotIdx;
             locals.splitIn.amount = locals.amount;
             processSplit(qpi, state, locals.splitIn, locals.splitOut, locals.splitLocals);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
@@ -1321,7 +1353,7 @@ protected:
         }
         else if (locals.gate.mode == QUGATE_MODE_ROUND_ROBIN)
         {
-            locals.rrIn.gateIdx = locals.idx;
+            locals.rrIn.gateIdx = locals.slotIdx;
             locals.rrIn.amount = locals.amount;
             processRoundRobin(qpi, state, locals.rrIn, locals.rrOut, locals.rrLocals);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
@@ -1329,7 +1361,7 @@ protected:
         }
         else if (locals.gate.mode == QUGATE_MODE_THRESHOLD)
         {
-            locals.threshIn.gateIdx = locals.idx;
+            locals.threshIn.gateIdx = locals.slotIdx;
             locals.threshIn.amount = locals.amount;
             processThreshold(qpi, state, locals.threshIn, locals.threshOut, locals.threshLocals);
             if (locals.threshOut.forwarded > 0)
@@ -1340,7 +1372,7 @@ protected:
         }
         else if (locals.gate.mode == QUGATE_MODE_RANDOM)
         {
-            locals.randIn.gateIdx = locals.idx;
+            locals.randIn.gateIdx = locals.slotIdx;
             locals.randIn.amount = locals.amount;
             processRandom(qpi, state, locals.randIn, locals.randOut, locals.randLocals);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
@@ -1348,7 +1380,7 @@ protected:
         }
         else if (locals.gate.mode == QUGATE_MODE_CONDITIONAL)
         {
-            locals.condIn.gateIdx = locals.idx;
+            locals.condIn.gateIdx = locals.slotIdx;
             locals.condIn.amount = locals.amount;
             processConditional(qpi, state, locals.condIn, locals.condOut, locals.condLocals);
             if (locals.condOut.status == QUGATE_SUCCESS)
@@ -1366,9 +1398,9 @@ protected:
         else if (locals.gate.mode == QUGATE_MODE_ORACLE)
         {
             // ORACLE mode: accumulate into currentBalance, oracle callback distributes
-            locals.gate = state.get()._gates.get(locals.idx);
+            locals.gate = state.get()._gates.get(locals.slotIdx);
             locals.gate.currentBalance += locals.amount;
-            state.mut()._gates.set(locals.idx, locals.gate);
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }

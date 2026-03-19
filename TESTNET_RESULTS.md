@@ -36,3 +36,7 @@
 - **Addresses:** 3 test addresses (Address A = gate owner, Address B/C = recipients)
 - **Creation fee:** 100,000 QU per gate
 - **Min send:** 1,000 QU
+
+## Note on Newer Features
+
+Oracle mode (QUGATE_MODE_ORACLE=5), chain gates, versioned gate IDs, and sendToGateVerified were added after the testnet results documented here. These features require live oracle infrastructure and are pending testnet verification.
