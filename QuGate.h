@@ -18,6 +18,8 @@
 //   - Dust burn: sends below minimum are burned
 //   - All fees are deflationary (burned, not accumulated)
 
+// Architecture overview: Gates stored in fixed Array indexed by slot. External gateId = ((generation+1) << 20) | slotIndex prevents ID reuse attacks. Oracle gates subscribe each epoch via BEGIN_EPOCH. Chain gates forward funds after payout (max 3 hops). All fees burned.
+
 using namespace QPI;
 
 // Contract index — Pulse took index 24, QuGate uses 25
@@ -365,6 +367,7 @@ protected:
         uint64 _minSendAmount;
         uint64 _expiryEpochs;      // epochs of inactivity before auto-close
 
+        // O(1) oracle callback lookup. Maintained by BEGIN_EPOCH and all close paths.
         // O(1) reverse lookup: oracleSubscriptionId → slot index
         HashMap<sint32, uint64, 512> _subscriptionToSlot;
     };
@@ -830,6 +833,7 @@ protected:
         // Validate chain if specified
         if (input.chainNextGateId != -1)
         {
+            // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
             // Decode target slot from versioned gate ID
             uint64 chainTargetSlot = (uint64)(input.chainNextGateId) & QUGATE_GATE_ID_SLOT_MASK;
             uint64 chainTargetGen = (uint64)(input.chainNextGateId) >> QUGATE_GATE_ID_SLOT_BITS;
@@ -838,6 +842,7 @@ protected:
                 || chainTargetGen == 0
                 || state.get()._gateGenerations.get(chainTargetSlot) != (uint16)(chainTargetGen - 1))
             {
+                // Rollback: fresh slot decrements _gateCount; recycled slot returns to free-list.
                 // Undo slot allocation — return slot to free-list or decrement gateCount
                 if (locals.slotIdx < state.get()._gateCount - 1)
                 {
@@ -1072,6 +1077,7 @@ protected:
     // routeToGate — single-hop chain routing (non-recursive)
     // =============================================
 
+    // routeToGate: executes one hop. Called iteratively from OraclePriceNotification (not recursively) because QPI locals structs require compile-time size. Caller loops up to QUGATE_MAX_CHAIN_DEPTH times.
     PRIVATE_PROCEDURE_WITH_LOCALS(routeToGate)
     {
         output.forwarded = 0;
@@ -1156,6 +1162,7 @@ protected:
             state.mut()._gates.set(input.slotIdx, locals.gate);
             output.forwarded = locals.amountAfterFee;
         }
+        // NOTE: CONDITIONAL mode as chain target requires SELF in allowedSenders — invocator here is the contract, not an external sender.
 
         // Log hop
         locals.logger._contractIndex = CONTRACT_INDEX;
@@ -1178,6 +1185,7 @@ protected:
         locals.logger.amount = qpi.invocationReward();
         locals.logger.gateId = input.gateId;
 
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
         locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
         if (input.gateId == 0
@@ -1306,6 +1314,7 @@ protected:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
         locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
         if (input.gateId == 0
@@ -1415,6 +1424,7 @@ protected:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
         locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
         if (input.gateId == 0
@@ -1597,6 +1607,7 @@ protected:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = qpi.invocationReward();
 
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
         locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
         if (input.gateId <= 0
@@ -1824,6 +1835,7 @@ protected:
 
     PUBLIC_FUNCTION_WITH_LOCALS(getGate)
     {
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
         locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
         if (input.gateId == 0
@@ -1887,6 +1899,7 @@ protected:
     {
         for (locals.i = 0; locals.i < QUGATE_MAX_BATCH_GATES; locals.i++)
         {
+            // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
             locals.slotIdx = input.gateIds.get(locals.i) & QUGATE_GATE_ID_SLOT_MASK;
             locals.encodedGen = (input.gateIds.get(locals.i) >> QUGATE_GATE_ID_SLOT_BITS);
             if (input.gateIds.get(locals.i) == 0
@@ -1970,6 +1983,7 @@ protected:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
         // Decode source gate
         locals.slotIdx = (uint64)(input.gateId) & QUGATE_GATE_ID_SLOT_MASK;
         locals.encodedGen = (uint64)(input.gateId) >> QUGATE_GATE_ID_SLOT_BITS;
@@ -2028,6 +2042,7 @@ protected:
             return;
         }
 
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
         // Decode target gate
         locals.targetSlot = (uint64)(input.nextGateId) & QUGATE_GATE_ID_SLOT_MASK;
         locals.targetEncodedGen = (uint64)(input.nextGateId) >> QUGATE_GATE_ID_SLOT_BITS;
@@ -2111,6 +2126,7 @@ protected:
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
     {
+        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain
         REGISTER_USER_PROCEDURE(createGate, 1);
         REGISTER_USER_PROCEDURE(sendToGate, 2);
         REGISTER_USER_PROCEDURE(closeGate, 3);

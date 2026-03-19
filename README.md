@@ -12,18 +12,21 @@ QuGate is a **network primitive** — shared, permissionless payment routing inf
 
 1. [Overview](#overview)
 2. [Gate Modes](#gate-modes)
-3. [Contract Interface](#contract-interface)
-4. [Wire Format](#wire-format)
-5. [State Architecture](#state-architecture)
-6. [Anti-Spam Mechanisms](#anti-spam-mechanisms)
-7. [Fee Economics](#fee-economics)
-8. [Shareholder Governance](#shareholder-governance)
-9. [Design Decisions](#design-decisions)
-10. [Status Codes](#status-codes)
-11. [Log Types](#log-types)
-12. [Building and Testing](#building-and-testing)
-13. [Known Limitations](#known-limitations)
-14. [File Listing](#file-listing)
+3. [Chain Gates](#chain-gates)
+4. [Gate ID Format](#gate-id-format)
+5. [Contract Interface](#contract-interface)
+6. [Wire Format](#wire-format)
+7. [State Architecture](#state-architecture)
+8. [Anti-Spam Mechanisms](#anti-spam-mechanisms)
+9. [Fee Economics](#fee-economics)
+10. [Shareholder Governance](#shareholder-governance)
+11. [Design Decisions](#design-decisions)
+12. [Security Model](#security-model)
+13. [Status Codes](#status-codes)
+14. [Log Types](#log-types)
+15. [Building and Testing](#building-and-testing)
+16. [Known Limitations](#known-limitations)
+17. [File Listing](#file-listing)
 
 ---
 
@@ -97,6 +100,63 @@ Only forwards payments from addresses in the gate's `allowedSenders` list. Payme
 When the sender is authorized, the full amount is forwarded to recipient 0.
 
 **Validation**: `allowedSenderCount` must be <= 8.
+
+### QUGATE_MODE_ORACLE (5) — Oracle-Triggered Distribution
+
+Accumulates incoming QU in `currentBalance`. An oracle subscription fires each epoch; when the configured condition (price above/below, or time-after) is met, the entire balance is distributed to recipients via SPLIT ratios.
+
+**Condition types**: `PRICE_ABOVE` (0), `PRICE_BELOW` (1), `TIME_AFTER` (2). Threshold is a price ratio scaled by 1e6, or a unix timestamp for `TIME_AFTER`.
+
+**Trigger modes**: `ONCE` (0) — gate auto-closes after first trigger. `RECURRING` (1) — gate resets and continues accumulating.
+
+**Oracle reserve**: The gate maintains an `oracleReserve` (QU) to pay the per-epoch subscription fee (10,000 QU). When the reserve is exhausted, the subscription lapses until re-funded via `fundGate`. Excess QU sent at creation (above the creation fee) is deposited into the oracle reserve.
+
+**Validation**: `oracleCondition` must be 0-2. `oracleThreshold` must be > 0. `oracleTriggerMode` must be 0 or 1.
+
+---
+
+## Chain Gates
+
+Gates can be linked into chains (max 3 hops) for multi-stage payment pipelines. When a gate completes its payout, funds are automatically forwarded to the next gate in the chain — no external transaction required.
+
+### Flow
+
+1. Payment arrives at Gate A via `sendToGate`
+2. Gate A processes the payment according to its mode (SPLIT, ROUND_ROBIN, etc.)
+3. If Gate A has `chainNextGateId` set, the forwarded amount is routed to Gate B
+4. Gate B processes the forwarded amount, then forwards to Gate C if chained
+5. Each hop continues until the chain ends or `QUGATE_MAX_CHAIN_DEPTH` (3) is reached
+
+### Hop Fees and Reserves
+
+Each chain hop burns a `QUGATE_CHAIN_HOP_FEE` (1,000 QU). If the forwarded amount exceeds the hop fee, the fee is deducted from the amount. If the forwarded amount is too small to cover the hop fee, the gate's `chainReserve` pays instead. If neither can cover the fee, the funds are stranded in `currentBalance`.
+
+Fund a gate's chain reserve via `fundGate` with `reserveTarget = 1`. The chain reserve is refunded to the owner on gate close or expiry.
+
+### Setting Up Chains
+
+- At creation: set `chainNextGateId` in `createGate_input`
+- After creation: use `setChain` (costs one hop fee, burned)
+- Clear a chain: call `setChain` with `nextGateId = -1`
+
+**Note:** CONDITIONAL mode as a chain target requires the contract's own address in `allowedSenders`, because the invocator during chain routing is the contract itself, not the original external sender.
+
+---
+
+## Gate ID Format
+
+Gate IDs use a versioned encoding to prevent slot-reuse squatting attacks:
+
+```
+gateId = ((generation + 1) << 20) | slotIndex
+```
+
+- **Lower 20 bits**: slot index in the `_gates` array (supports up to 1,048,575 slots)
+- **Upper bits**: generation counter + 1 (incremented each time a slot is recycled)
+
+When a gate is closed or expires, its slot's generation counter increments. Any stored gate ID referencing the old generation becomes invalid, preventing an attacker from creating a new gate in a recycled slot and intercepting payments meant for the previous occupant.
+
+Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 
 ---
 
@@ -457,6 +517,38 @@ Accumulating fees in the contract would create a honeypot and complicate governa
 ### Why tick entropy for RANDOM?
 
 `qpi.tick()` provides the only source of non-deterministic data available within the QPI. While not cryptographically random, the tick number is not controllable by the sender at the time of transaction submission, providing sufficient unpredictability for payment routing. The formula `mod(totalReceived + tick(), recipientCount)` ensures each payment produces a different selection even within the same tick.
+
+---
+
+## Security Model
+
+### Deflationary Design
+
+All fees (creation fees, dust burns, chain hop fees) are destroyed via `qpi.burn()`. No QU accumulates in the contract. No rent-seeking, no honeypot.
+
+### No Rug-Pull
+
+Oracle gates with a non-zero `currentBalance` cannot have their recipients changed via `updateGate`. This prevents an owner from redirecting accumulated funds to a different address after senders have deposited.
+
+### Versioned Gate IDs
+
+Gate IDs encode a generation counter to prevent slot-reuse attacks. See [Gate ID Format](#gate-id-format).
+
+### Chain Cycle Prevention
+
+Chain links are validated at creation and update time. The contract walks forward from the target gate (up to `QUGATE_MAX_CHAIN_DEPTH` steps) to detect cycles. Depth is capped at 3 hops.
+
+### RANDOM Entropy Warning
+
+RANDOM mode uses `mod(totalReceived + tick(), recipientCount)` as entropy. Both `totalReceived` and `tick()` are publicly observable before transaction submission, making recipient selection predictable to a determined observer. Not suitable for use cases requiring cryptographic randomness.
+
+### TIME_AFTER Oracle Requirement
+
+The `TIME_AFTER` condition type (oracle condition 2) interprets the oracle reply's `numerator` field as a tick-derived timestamp. This requires a Price oracle whose reply encodes time in the numerator — not all oracles do this. Verify oracle compatibility before configuring `TIME_AFTER` gates.
+
+### activeGates Underflow Guard
+
+The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_EPOCH`, and oracle ONCE-mode auto-close prevents underflow from double-close scenarios.
 
 ---
 
