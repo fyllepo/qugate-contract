@@ -866,8 +866,14 @@ protected:
             {
                 // Undo slot allocation
                 if (locals.slotIdx < state.get()._gateCount - 1)
-                { state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx); state.mut()._freeCount += 1; }
-                else { state.mut()._gateCount -= 1; }
+                {
+                    state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+                    state.mut()._freeCount += 1;
+                }
+                else
+                {
+                    state.mut()._gateCount -= 1;
+                }
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
                 output.status = QUGATE_INVALID_CHAIN;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
@@ -880,8 +886,14 @@ protected:
             if (newDepth >= QUGATE_MAX_CHAIN_DEPTH)
             {
                 if (locals.slotIdx < state.get()._gateCount - 1)
-                { state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx); state.mut()._freeCount += 1; }
-                else { state.mut()._gateCount -= 1; }
+                {
+                    state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+                    state.mut()._freeCount += 1;
+                }
+                else
+                {
+                    state.mut()._gateCount -= 1;
+                }
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
                 output.status = QUGATE_INVALID_CHAIN;
                 locals.logger._type = QUGATE_LOG_CHAIN_CYCLE;
@@ -898,8 +910,14 @@ protected:
                     if (walkSlot == locals.slotIdx)
                     {
                         if (locals.slotIdx < state.get()._gateCount - 1)
-                        { state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx); state.mut()._freeCount += 1; }
-                        else { state.mut()._gateCount -= 1; }
+                        {
+                            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+                            state.mut()._freeCount += 1;
+                        }
+                        else
+                        {
+                            state.mut()._gateCount -= 1;
+                        }
                         qpi.transfer(qpi.invocator(), qpi.invocationReward());
                         output.status = QUGATE_INVALID_CHAIN;
                         locals.logger._type = QUGATE_LOG_CHAIN_CYCLE;
@@ -916,8 +934,14 @@ protected:
                 if (walkSlot == locals.slotIdx)
                 {
                     if (locals.slotIdx < state.get()._gateCount - 1)
-                    { state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx); state.mut()._freeCount += 1; }
-                    else { state.mut()._gateCount -= 1; }
+                    {
+                        state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+                        state.mut()._freeCount += 1;
+                    }
+                    else
+                    {
+                        state.mut()._gateCount -= 1;
+                    }
                     qpi.transfer(qpi.invocator(), qpi.invocationReward());
                     output.status = QUGATE_INVALID_CHAIN;
                     locals.logger._type = QUGATE_LOG_CHAIN_CYCLE;
@@ -1093,7 +1117,10 @@ protected:
         }
 
         locals.gate = state.get()._gates.get(input.slotIdx);
-        if (locals.gate.active == 0) { return; }
+        if (locals.gate.active == 0)
+        {
+            return;
+        }
 
         // Hop fee resolution
         locals.amountAfterFee = input.amount;
@@ -2279,8 +2306,12 @@ protected:
         //   - Log fee change event
     }
 
-    BEGIN_TICK() {}
-    END_TICK() {}
+    BEGIN_TICK()
+    {
+    }
+    END_TICK()
+    {
+    }
 
 };
 
