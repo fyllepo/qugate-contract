@@ -95,6 +95,7 @@ constexpr sint64 QUGATE_INVALID_THRESHOLD = -10;
 constexpr sint64 QUGATE_INVALID_SENDER_COUNT = -11;
 constexpr sint64 QUGATE_CONDITIONAL_REJECTED = -12;
 constexpr sint64 QUGATE_INVALID_ORACLE_CONFIG = -13;
+constexpr sint64 QUGATE_OWNER_MISMATCH = -15;
 
 // Log type constants (positive = success events, high numbers = actions)
 constexpr uint32 QUGATE_LOG_GATE_CREATED = 1;
@@ -116,6 +117,7 @@ constexpr uint32 QUGATE_LOG_FAIL_UNAUTHORIZED = 102;
 constexpr uint32 QUGATE_LOG_FAIL_INVALID_PARAMS = 103;
 constexpr uint32 QUGATE_LOG_FAIL_INSUFFICIENT_FEE = 104;
 constexpr uint32 QUGATE_LOG_FAIL_NO_SLOTS = 105;
+constexpr uint32 QUGATE_LOG_FAIL_OWNER_MISMATCH = 106;
 
 // Asset name for shareholder proposals
 constexpr uint64 QUGATE_CONTRACT_ASSET_NAME = 76228174763345ULL; // "QUGATE" as uint64 little-endian
@@ -264,6 +266,17 @@ public:
     struct setChain_output
     {
         sint64 result;
+    };
+
+    // sendToGateVerified — owner-checked send
+    struct sendToGateVerified_input
+    {
+        uint64 gateId;
+        id     expectedOwner;   // must match gate.owner — full refund if mismatch
+    };
+    struct sendToGateVerified_output
+    {
+        sint64 status;
     };
 
     // =============================================
@@ -471,6 +484,30 @@ protected:
         GateConfig gate;
         sint64 amount;
         uint64 idx;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        processSplit_input splitIn;
+        processSplit_output splitOut;
+        processSplit_locals splitLocals;
+        processRoundRobin_input rrIn;
+        processRoundRobin_output rrOut;
+        processRoundRobin_locals rrLocals;
+        processThreshold_input threshIn;
+        processThreshold_output threshOut;
+        processThreshold_locals threshLocals;
+        processRandom_input randIn;
+        processRandom_output randOut;
+        processRandom_locals randLocals;
+        processConditional_input condIn;
+        processConditional_output condOut;
+        processConditional_locals condLocals;
+    };
+
+    struct sendToGateVerified_locals
+    {
+        QuGateLogger logger;
+        GateConfig gate;
+        sint64 amount;
         uint64 slotIdx;
         uint64 encodedGen;
         processSplit_input splitIn;
@@ -1332,6 +1369,146 @@ protected:
             locals.gate = state.get()._gates.get(locals.idx);
             locals.gate.currentBalance += locals.amount;
             state.mut()._gates.set(locals.idx, locals.gate);
+            locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+            LOG_INFO(locals.logger);
+        }
+    }
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(sendToGateVerified)
+    {
+        output.status = QUGATE_SUCCESS;
+
+        locals.logger._contractIndex = CONTRACT_INDEX;
+        locals.logger.sender = qpi.invocator();
+        locals.logger.amount = qpi.invocationReward();
+        locals.logger.gateId = input.gateId;
+
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
+            output.status = QUGATE_INVALID_GATE_ID;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+
+        if (locals.gate.active == 0)
+        {
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Owner verification — refund and reject if mismatch
+        if (locals.gate.owner != input.expectedOwner)
+        {
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
+            output.status = QUGATE_OWNER_MISMATCH;
+            locals.logger._type = QUGATE_LOG_FAIL_OWNER_MISMATCH;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.amount = qpi.invocationReward();
+        if (locals.amount <= 0)
+        {
+            output.status = QUGATE_DUST_AMOUNT;
+            return;
+        }
+
+        if (locals.amount < (sint64)state.get()._minSendAmount)
+        {
+            qpi.burn(locals.amount);
+            state.mut()._totalBurned += locals.amount;
+            output.status = QUGATE_DUST_AMOUNT;
+            locals.logger._type = QUGATE_LOG_DUST_BURNED;
+            LOG_INFO(locals.logger);
+            return;
+        }
+
+        // Update activity and track received
+        locals.gate.lastActivityEpoch = qpi.epoch();
+        locals.gate.totalReceived += locals.amount;
+        state.mut()._gates.set(locals.slotIdx, locals.gate);
+
+        // Dispatch to mode-specific handler
+        if (locals.gate.mode == QUGATE_MODE_SPLIT)
+        {
+            locals.splitIn.gateIdx = locals.slotIdx;
+            locals.splitIn.amount = locals.amount;
+            processSplit(qpi, state, locals.splitIn, locals.splitOut, locals.splitLocals);
+            locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+            LOG_INFO(locals.logger);
+        }
+        else if (locals.gate.mode == QUGATE_MODE_ROUND_ROBIN)
+        {
+            locals.rrIn.gateIdx = locals.slotIdx;
+            locals.rrIn.amount = locals.amount;
+            processRoundRobin(qpi, state, locals.rrIn, locals.rrOut, locals.rrLocals);
+            locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+            LOG_INFO(locals.logger);
+        }
+        else if (locals.gate.mode == QUGATE_MODE_THRESHOLD)
+        {
+            locals.threshIn.gateIdx = locals.slotIdx;
+            locals.threshIn.amount = locals.amount;
+            processThreshold(qpi, state, locals.threshIn, locals.threshOut, locals.threshLocals);
+            if (locals.threshOut.forwarded > 0)
+            {
+                locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+                LOG_INFO(locals.logger);
+            }
+        }
+        else if (locals.gate.mode == QUGATE_MODE_RANDOM)
+        {
+            locals.randIn.gateIdx = locals.slotIdx;
+            locals.randIn.amount = locals.amount;
+            processRandom(qpi, state, locals.randIn, locals.randOut, locals.randLocals);
+            locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+            LOG_INFO(locals.logger);
+        }
+        else if (locals.gate.mode == QUGATE_MODE_CONDITIONAL)
+        {
+            locals.condIn.gateIdx = locals.slotIdx;
+            locals.condIn.amount = locals.amount;
+            processConditional(qpi, state, locals.condIn, locals.condOut, locals.condLocals);
+            if (locals.condOut.status == QUGATE_SUCCESS)
+            {
+                locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+                LOG_INFO(locals.logger);
+            }
+            else
+            {
+                output.status = locals.condOut.status;
+                locals.logger._type = QUGATE_LOG_PAYMENT_BOUNCED;
+                LOG_INFO(locals.logger);
+            }
+        }
+        else if (locals.gate.mode == QUGATE_MODE_ORACLE)
+        {
+            // ORACLE mode: accumulate into currentBalance, oracle callback distributes
+            locals.gate = state.get()._gates.get(locals.slotIdx);
+            locals.gate.currentBalance += locals.amount;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }
@@ -2207,7 +2384,7 @@ protected:
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
     {
-        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain
+        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified
         REGISTER_USER_PROCEDURE(createGate, 1);
         REGISTER_USER_PROCEDURE(sendToGate, 2);
         REGISTER_USER_PROCEDURE(closeGate, 3);
@@ -2219,6 +2396,7 @@ protected:
         REGISTER_USER_FUNCTION(getFees, 9);
         REGISTER_USER_PROCEDURE(fundGate, 10);
         REGISTER_USER_PROCEDURE(setChain, 11);
+        REGISTER_USER_PROCEDURE(sendToGateVerified, 12);
         REGISTER_USER_PROCEDURE_NOTIFICATION(OraclePriceNotification);
     }
 
