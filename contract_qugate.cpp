@@ -265,6 +265,7 @@ struct QuGateState {
     uint64 _activeGates;
     uint64 _totalBurned;
     Array<GateConfig, QUGATE_MAX_GATES> _gates;
+    Array<uint16, QUGATE_MAX_GATES> _gateGenerations;
     Array<uint64, QUGATE_MAX_GATES> _freeSlots;
     uint64 _freeCount;
     uint64 _creationFee;
@@ -835,11 +836,17 @@ public:
                         qpi.transfer(gate.owner, gate.oracleReserve);
                         gate.oracleReserve = 0;
                     }
+                    if (gate.chainReserve > 0) {
+                        qpi.transfer(gate.owner, gate.chainReserve);
+                        gate.chainReserve = 0;
+                    }
                     gate.active = 0;
                     state.mut()._gates.set(i, gate);
                     state.mut()._activeGates -= 1;
                     state.mut()._freeSlots.set(state.get()._freeCount, i);
                     state.mut()._freeCount += 1;
+                    // Increment generation so recycled slot gets a new gateId
+                    state.mut()._gateGenerations.set(i, state.get()._gateGenerations.get(i) + 1);
                 }
             }
         }
@@ -2347,4 +2354,63 @@ TEST(QuGateChain, CloseGateRefundsChainReserve) {
     EXPECT_EQ(closeOut.status, QUGATE_SUCCESS);
     // Chain reserve (3000) refunded to owner
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 3000);
+}
+
+// ---- END_EPOCH comprehensive expiry test (cyber-pc review request) ----
+
+TEST(QuGateV3, EndEpochExpiryFullLifecycle) {
+    // Verifies all END_EPOCH expiry side-effects:
+    //   1. Gate marked inactive
+    //   2. currentBalance refunded to owner
+    //   3. Slot added to free-list
+    //   4. Generation incremented (prevents stale gateId reuse)
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    // Use a short expiry for the test
+    env.state.mut()._expiryEpochs = 5;
+
+    // Create a THRESHOLD gate at epoch 100 so it can hold a balance
+    env.qpi._epoch = 100;
+    auto out = makeSimpleGate(env, ALICE, 1000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    uint64 gateId = out.gateId;
+    uint64 slotIdx = gateId - 1;
+
+    // Send funds that accumulate in threshold balance (below threshold, won't forward)
+    env.sendToGate(CHARLIE, gateId, 2000);
+    auto gateBefore = env.getGate(gateId);
+    EXPECT_EQ(gateBefore.active, 1);
+    EXPECT_EQ(gateBefore.currentBalance, 2000ULL);
+    EXPECT_EQ(env.state.get()._activeGates, 1ULL);
+    uint16 genBefore = env.state.get()._gateGenerations.get(slotIdx);
+
+    // Advance epoch past expiry (lastActivityEpoch=100 from send, expiryEpochs=5)
+    env.qpi._epoch = 106;
+    env.qpi.reset();
+    env.endEpoch();
+
+    // 1. Gate marked inactive
+    auto gateAfter = env.getGate(gateId);
+    EXPECT_EQ(gateAfter.active, 0);
+
+    // 2. currentBalance refunded to owner (ALICE)
+    EXPECT_GE(env.qpi.totalTransferredTo(ALICE), 2000);
+    EXPECT_EQ(gateAfter.currentBalance, 0ULL);
+
+    // 3. Slot added to free-list
+    EXPECT_EQ(env.state.get()._freeCount, 1ULL);
+    EXPECT_EQ(env.state.get()._freeSlots.get(0), slotIdx);
+    EXPECT_EQ(env.state.get()._activeGates, 0ULL);
+
+    // 4. Generation incremented
+    uint16 genAfter = env.state.get()._gateGenerations.get(slotIdx);
+    EXPECT_EQ(genAfter, genBefore + 1);
+
+    // Verify a new gate created in the reused slot gets a different generation
+    env.qpi._epoch = 107;
+    auto out2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out2.status, QUGATE_SUCCESS);
+    EXPECT_EQ(env.state.get()._freeCount, 0ULL); // slot was reused from free-list
 }

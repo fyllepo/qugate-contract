@@ -925,9 +925,15 @@ protected:
                         return;
                     }
                     GateConfig walkGate = state.get()._gates.get(walkSlot);
-                    if (walkGate.chainNextGateId == -1) break;
+                    if (walkGate.chainNextGateId == -1)
+                    {
+                        break;
+                    }
                     uint64 nextWalkSlot = (uint64)(walkGate.chainNextGateId) & QUGATE_GATE_ID_SLOT_MASK;
-                    if (nextWalkSlot >= state.get()._gateCount) break;
+                    if (nextWalkSlot >= state.get()._gateCount)
+                    {
+                        break;
+                    }
                     walkSlot = nextWalkSlot;
                     walkStep++;
                 }
@@ -1499,7 +1505,9 @@ protected:
         if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.currentBalance > 0)
         {
             if (qpi.invocationReward() > 0)
+            {
                 qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.status = QUGATE_UNAUTHORIZED;
             locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
             LOG_WARNING(locals.logger);
@@ -1740,11 +1748,20 @@ protected:
         {
             locals.slotIdx = state.get()._subscriptionToSlot.get(input.subscriptionId);
         }
-        if (locals.slotIdx >= state.get()._gateCount) return; // not found
+        if (locals.slotIdx >= state.get()._gateCount)
+        {
+            return; // not found
+        }
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
-        if (locals.gate.active == 0 || locals.gate.mode != QUGATE_MODE_ORACLE) return;
-        if (locals.gate.oracleSubscriptionId != input.subscriptionId) return; // safety check
+        if (locals.gate.active == 0 || locals.gate.mode != QUGATE_MODE_ORACLE)
+        {
+            return;
+        }
+        if (locals.gate.oracleSubscriptionId != input.subscriptionId)
+        {
+            return; // safety check
+        }
 
         // Evaluate condition
         locals.conditionMet = 0;
@@ -1921,7 +1938,7 @@ protected:
         }
     }
 
-    // Batch gate query — fetch up to 32 gates in one call
+    // Batch gate query — fetch up to QUGATE_MAX_BATCH_GATES gates in one call
     PUBLIC_FUNCTION_WITH_LOCALS(getGateBatch)
     {
         for (locals.i = 0; locals.i < QUGATE_MAX_BATCH_GATES; locals.i++)
@@ -2019,7 +2036,10 @@ protected:
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.result = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
@@ -2030,7 +2050,10 @@ protected:
 
         if (locals.gate.owner != qpi.invocator())
         {
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.result = QUGATE_UNAUTHORIZED;
             locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
             LOG_WARNING(locals.logger);
@@ -2039,7 +2062,10 @@ protected:
 
         if (locals.gate.active == 0)
         {
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.result = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
@@ -2049,7 +2075,10 @@ protected:
         // Require hop fee as update cost
         if (qpi.invocationReward() < QUGATE_CHAIN_HOP_FEE)
         {
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.result = QUGATE_INSUFFICIENT_FEE;
             locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
             LOG_WARNING(locals.logger);
@@ -2064,7 +2093,9 @@ protected:
             state.mut()._gates.set(locals.slotIdx, locals.gate);
             qpi.burn(QUGATE_CHAIN_HOP_FEE);
             if (qpi.invocationReward() > QUGATE_CHAIN_HOP_FEE)
+            {
                 qpi.transfer(qpi.invocator(), qpi.invocationReward() - QUGATE_CHAIN_HOP_FEE);
+            }
             output.result = QUGATE_SUCCESS;
             return;
         }
@@ -2078,7 +2109,10 @@ protected:
             || locals.targetEncodedGen == 0
             || state.get()._gateGenerations.get(locals.targetSlot) != (uint16)(locals.targetEncodedGen - 1))
         {
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.result = QUGATE_INVALID_CHAIN;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -2088,7 +2122,10 @@ protected:
         locals.targetGate = state.get()._gates.get(locals.targetSlot);
         if (locals.targetGate.active == 0)
         {
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.result = QUGATE_INVALID_CHAIN;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -2099,7 +2136,10 @@ protected:
         locals.newDepth = locals.targetGate.chainDepth + 1;
         if (locals.newDepth >= QUGATE_MAX_CHAIN_DEPTH)
         {
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.result = QUGATE_INVALID_CHAIN;
             locals.logger._type = QUGATE_LOG_CHAIN_CYCLE;
             LOG_WARNING(locals.logger);
@@ -2113,22 +2153,34 @@ protected:
         {
             if (locals.walkSlot == locals.slotIdx)
             {
-                if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                if (qpi.invocationReward() > 0)
+                {
+                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                }
                 output.result = QUGATE_INVALID_CHAIN;
                 locals.logger._type = QUGATE_LOG_CHAIN_CYCLE;
                 LOG_WARNING(locals.logger);
                 return;
             }
             locals.walkGate = state.get()._gates.get(locals.walkSlot);
-            if (locals.walkGate.chainNextGateId == -1) break;
+            if (locals.walkGate.chainNextGateId == -1)
+            {
+                break;
+            }
             uint64 nextWalkSlot = (uint64)(locals.walkGate.chainNextGateId) & QUGATE_GATE_ID_SLOT_MASK;
-            if (nextWalkSlot >= state.get()._gateCount) break;
+            if (nextWalkSlot >= state.get()._gateCount)
+            {
+                break;
+            }
             locals.walkSlot = nextWalkSlot;
             locals.walkStep++;
         }
         if (locals.walkSlot == locals.slotIdx)
         {
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
             output.result = QUGATE_INVALID_CHAIN;
             locals.logger._type = QUGATE_LOG_CHAIN_CYCLE;
             LOG_WARNING(locals.logger);
@@ -2142,7 +2194,9 @@ protected:
 
         qpi.burn(QUGATE_CHAIN_HOP_FEE);
         if (qpi.invocationReward() > QUGATE_CHAIN_HOP_FEE)
+        {
             qpi.transfer(qpi.invocator(), qpi.invocationReward() - QUGATE_CHAIN_HOP_FEE);
+        }
 
         output.result = QUGATE_SUCCESS;
     }
