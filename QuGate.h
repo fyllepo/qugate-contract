@@ -606,6 +606,11 @@ public:
         processConditional_input condIn;
         processConditional_output condOut;
         processConditional_locals condLocals;
+        // Chain forwarding
+        routeToGate_input chainIn;
+        routeToGate_output chainOut;
+        routeToGate_locals chainLocals;
+        GateConfig nextChainGate;
     };
 
     struct closeGate_locals
@@ -1406,6 +1411,58 @@ public:
             state.mut()._gates.set(locals.slotIdx, locals.gate);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
+        }
+
+        // Chain forwarding: if this gate has a chain link, forward to the next gate
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+        if (locals.gate.chainNextGateId != -1 && locals.gate.mode != QUGATE_MODE_ORACLE)
+        {
+            // Determine forwarded amount from mode handler outputs
+            sint64 chainAmount = 0;
+            if (locals.gate.mode == QUGATE_MODE_SPLIT)
+            {
+                chainAmount = locals.splitOut.forwarded;
+            }
+            else if (locals.gate.mode == QUGATE_MODE_ROUND_ROBIN)
+            {
+                chainAmount = locals.rrOut.forwarded;
+            }
+            else if (locals.gate.mode == QUGATE_MODE_THRESHOLD)
+            {
+                chainAmount = locals.threshOut.forwarded;
+            }
+            else if (locals.gate.mode == QUGATE_MODE_RANDOM)
+            {
+                chainAmount = locals.randOut.forwarded;
+            }
+            else if (locals.gate.mode == QUGATE_MODE_CONDITIONAL && locals.condOut.status == QUGATE_SUCCESS)
+            {
+                chainAmount = locals.condOut.forwarded;
+            }
+
+            if (chainAmount > 0)
+            {
+                sint64 currentChainGateId = locals.gate.chainNextGateId;
+                uint8 hop = 0;
+                while (hop < QUGATE_MAX_CHAIN_DEPTH && currentChainGateId != -1 && chainAmount > 0)
+                {
+                    uint64 nextSlot = (uint64)currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
+                    uint64 nextGen = (uint64)currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
+                    if (nextSlot >= state.get()._gateCount || nextGen == 0
+                        || state.get()._gateGenerations.get(nextSlot) != (uint16)(nextGen - 1))
+                    {
+                        break; // dead link
+                    }
+                    locals.chainIn.slotIdx = nextSlot;
+                    locals.chainIn.amount = chainAmount;
+                    locals.chainIn.hopCount = hop;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    chainAmount = locals.chainOut.forwarded;
+                    locals.nextChainGate = state.get()._gates.get(nextSlot);
+                    currentChainGateId = locals.nextChainGate.chainNextGateId;
+                    hop += 1;
+                }
+            }
         }
     }
 
