@@ -1242,6 +1242,11 @@ public:
             locals.amountAfterFee = input.amount - QUGATE_CHAIN_HOP_FEE;
         }
 
+        // Update totalReceived and activity for the chained gate
+        locals.gate.totalReceived += locals.amountAfterFee;
+        locals.gate.lastActivityEpoch = qpi.epoch();
+        state.mut()._gates.set(input.slotIdx, locals.gate);
+
         // Route through this gate's mode
         if (locals.gate.mode == QUGATE_MODE_SPLIT)
         {
