@@ -379,7 +379,7 @@ public:
         uint64 expiryEpochs;       //
     };
 
-protected:
+public:
     // =============================================
     // Contract state (wrapped in StateData for dirty-tracking)
     // =============================================
@@ -501,7 +501,63 @@ protected:
     };
 
 
-    struct sendToGate_locals
+    // routeToGate — single-hop chain routing (non-recursive)
+    struct routeToGate_input
+    {
+        uint64 slotIdx;
+        sint64 amount;
+        uint8  hopCount;
+    };
+    struct routeToGate_output
+    {
+        sint64 forwarded;
+    };
+    struct routeToGate_locals
+    {
+        GateConfig gate;
+        sint64 amountAfterFee;
+        QuGateLogger logger;
+        processSplit_input splitIn;
+        processSplit_output splitOut;
+        processSplit_locals splitLocals;
+        processRoundRobin_input rrIn;
+        processRoundRobin_output rrOut;
+        processRoundRobin_locals rrLocals;
+        processThreshold_input threshIn;
+        processThreshold_output threshOut;
+        processThreshold_locals threshLocals;
+        processRandom_input randIn;
+        processRandom_output randOut;
+        processRandom_locals randLocals;
+        processConditional_input condIn;
+        processConditional_output condOut;
+        processConditional_locals condLocals;
+    };
+
+    struct fundGate_locals
+    {
+        QuGateLogger logger;
+        GateConfig gate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+    };
+
+    struct setChain_locals
+    {
+        QuGateLogger logger;
+        GateConfig gate;
+        GateConfig targetGate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        uint64 targetSlot;
+        uint64 targetEncodedGen;
+        uint8 newDepth;
+        uint64 walkSlot;
+        uint8 walkStep;
+        GateConfig walkGate;
+    };
+
+    struct sendToGateVerified_locals
     {
         QuGateLogger logger;
         GateConfig gate;
@@ -523,9 +579,12 @@ protected:
         processConditional_input condIn;
         processConditional_output condOut;
         processConditional_locals condLocals;
+        routeToGate_input chainIn;
+        routeToGate_output chainOut;
+        routeToGate_locals chainLocals;
     };
 
-    struct sendToGateVerified_locals
+    struct sendToGate_locals
     {
         QuGateLogger logger;
         GateConfig gate;
@@ -597,64 +656,8 @@ protected:
         GateConfig gate;
     };
 
-    struct fundGate_locals
-    {
-        QuGateLogger logger;
-        GateConfig gate;
-        uint64 slotIdx;
-        uint64 encodedGen;
-    };
-
-    // routeToGate — single-hop chain routing (non-recursive)
-    struct routeToGate_input
-    {
-        uint64 slotIdx;
-        sint64 amount;
-        uint8  hopCount;
-    };
-    struct routeToGate_output
-    {
-        sint64 forwarded;
-    };
-    struct routeToGate_locals
-    {
-        GateConfig gate;
-        sint64 amountAfterFee;
-        QuGateLogger logger;
-        processSplit_input splitIn;
-        processSplit_output splitOut;
-        processSplit_locals splitLocals;
-        processRoundRobin_input rrIn;
-        processRoundRobin_output rrOut;
-        processRoundRobin_locals rrLocals;
-        processThreshold_input threshIn;
-        processThreshold_output threshOut;
-        processThreshold_locals threshLocals;
-        processRandom_input randIn;
-        processRandom_output randOut;
-        processRandom_locals randLocals;
-        processConditional_input condIn;
-        processConditional_output condOut;
-        processConditional_locals condLocals;
-    };
-
-    struct setChain_locals
-    {
-        QuGateLogger logger;
-        GateConfig gate;
-        GateConfig targetGate;
-        uint64 slotIdx;
-        uint64 encodedGen;
-        uint64 targetSlot;
-        uint64 targetEncodedGen;
-        uint8 newDepth;
-        uint64 walkSlot;
-        uint8 walkStep;
-        GateConfig walkGate;
-    };
-
     // Oracle notification callback types
-    typedef OracleNotificationInput<Price> OraclePriceNotification_input;
+    typedef OracleNotificationInput<OI::Price> OraclePriceNotification_input;
     typedef NoData OraclePriceNotification_output;
 
     struct OraclePriceNotification_locals
@@ -1617,7 +1620,7 @@ protected:
             }
             if (locals.gate.oracleSubscriptionId >= 0)
             {
-                state.mut()._subscriptionToSlot.remove(locals.gate.oracleSubscriptionId);
+                state.mut()._subscriptionToSlot.removeByKey(locals.gate.oracleSubscriptionId);
                 qpi.unsubscribeOracle(locals.gate.oracleSubscriptionId);
                 locals.gate.oracleSubscriptionId = -1;
             }
@@ -1953,9 +1956,9 @@ protected:
 
         // O(1) lookup via HashMap
         locals.slotIdx = QUGATE_MAX_GATES; // sentinel = not found
-        if (state.get()._subscriptionToSlot.has(input.subscriptionId))
+        if (state.get()._subscriptionToSlot.contains(input.subscriptionId))
         {
-            locals.slotIdx = state.get()._subscriptionToSlot.get(input.subscriptionId);
+            state.get()._subscriptionToSlot.get(input.subscriptionId, locals.slotIdx);
         }
         if (locals.slotIdx >= state.get()._gateCount)
         {
@@ -2065,7 +2068,7 @@ protected:
                 }
                 if (locals.gate.oracleSubscriptionId >= 0)
                 {
-                    state.mut()._subscriptionToSlot.remove(locals.gate.oracleSubscriptionId);
+                    state.mut()._subscriptionToSlot.removeByKey(locals.gate.oracleSubscriptionId);
                     qpi.unsubscribeOracle(locals.gate.oracleSubscriptionId);
                     locals.gate.oracleSubscriptionId = -1;
                 }
@@ -2464,12 +2467,12 @@ protected:
                 if (locals.gate.oracleReserve >= QUGATE_ORACLE_SUBSCRIPTION_FEE)
                 {
                     // Construct the Price oracle query
-                    Price::OracleQuery query;
+                    OI::Price::OracleQuery query;
                     query.oracle = locals.gate.oracleId;
                     query.currency1 = locals.gate.oracleCurrency1;
                     query.currency2 = locals.gate.oracleCurrency2;
 
-                    locals.subId = SUBSCRIBE_ORACLE(Price, query, OraclePriceNotification,
+                    locals.subId = SUBSCRIBE_ORACLE(OI::Price, query, OraclePriceNotification,
                         QUGATE_ORACLE_NOTIFY_PERIOD_MS, true);
 
                     if (locals.subId >= 0)
@@ -2530,7 +2533,7 @@ protected:
                         }
                         if (locals.gate.oracleSubscriptionId >= 0)
                         {
-                            state.mut()._subscriptionToSlot.remove(locals.gate.oracleSubscriptionId);
+                            state.mut()._subscriptionToSlot.removeByKey(locals.gate.oracleSubscriptionId);
                         }
                     }
 
