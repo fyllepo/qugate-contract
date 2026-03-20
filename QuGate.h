@@ -1118,9 +1118,15 @@ public:
 
         if (locals.gate.currentBalance >= locals.gate.threshold)
         {
-            qpi.transfer(locals.gate.recipients.get(0), locals.gate.currentBalance);
             output.forwarded = locals.gate.currentBalance;
             locals.gate.totalForwarded += locals.gate.currentBalance;
+
+            // If chained, don't transfer to recipient — chain code will handle forwarding
+            if (locals.gate.chainNextGateId == -1)
+            {
+                qpi.transfer(locals.gate.recipients.get(0), locals.gate.currentBalance);
+            }
+
             locals.gate.currentBalance = 0;
         }
 
