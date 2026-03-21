@@ -76,7 +76,7 @@ constexpr uint8 QUGATE_MODE_THRESHOLD = 2;
 constexpr uint8 QUGATE_MODE_RANDOM = 3;
 constexpr uint8 QUGATE_MODE_CONDITIONAL = 4;
 constexpr uint8 QUGATE_MODE_ORACLE = 5;
-constexpr uint8 QUGATE_MODE_HEARTBEAT = 6;  // Heartbeat gate — keepAlive() or epoch-triggered payout
+constexpr uint8 QUGATE_MODE_HEARTBEAT = 6;  // Heartbeat gate — heartbeat() or epoch-triggered payout
 constexpr uint8 QUGATE_MODE_MULTISIG = 7;     // M-of-N guardian approval before funds release
 
 // Oracle condition types
@@ -116,9 +116,9 @@ constexpr sint64 QUGATE_CONDITIONAL_REJECTED   = -12; // Sender not in allowedSe
 constexpr sint64 QUGATE_INVALID_ORACLE_CONFIG  = -13; // Invalid oracle condition, threshold, or trigger mode
 constexpr sint64 QUGATE_INVALID_CHAIN          = -14; // Chain target invalid, depth exceeded, or cycle detected
 constexpr sint64 QUGATE_OWNER_MISMATCH         = -15; // gate.owner != expectedOwner in sendToGateVerified
-constexpr sint64 QUGATE_HEARTBEAT_TRIGGERED  = -16; // keepAlive() called after inheritance already triggered
-constexpr sint64 QUGATE_HEARTBEAT_NOT_ACTIVE = -17; // keepAlive() or configureHeartbeat() on non-INHERITANCE gate
-constexpr sint64 QUGATE_HEARTBEAT_INVALID    = -18; // Invalid inheritance config (bad shares, percent, threshold)
+constexpr sint64 QUGATE_HEARTBEAT_TRIGGERED  = -16; // heartbeat() called after heartbeat already triggered
+constexpr sint64 QUGATE_HEARTBEAT_NOT_ACTIVE = -17; // heartbeat() or configureHeartbeat() on non-HEARTBEAT gate
+constexpr sint64 QUGATE_HEARTBEAT_INVALID    = -18; // Invalid heartbeat config (bad shares, percent, threshold)
 constexpr sint64 QUGATE_MULTISIG_NOT_GUARDIAN    = -19; // sender not in guardian list
 constexpr sint64 QUGATE_MULTISIG_ALREADY_VOTED   = -20; // guardian already voted this proposal
 constexpr sint64 QUGATE_MULTISIG_INVALID_CONFIG  = -21; // bad guardians/required config
@@ -137,8 +137,8 @@ constexpr uint32 QUGATE_LOG_ORACLE_TRIGGERED  = 9;
 constexpr uint32 QUGATE_LOG_ORACLE_EXHAUSTED  = 10;
 constexpr uint32 QUGATE_LOG_ORACLE_SUBSCRIBED = 11;
 constexpr uint32 QUGATE_LOG_HEARTBEAT_CONFIGURED = 15;  // configureHeartbeat() called
-constexpr uint32 QUGATE_LOG_HEARTBEAT_PULSE  = 16;  // keepAlive() called, epoch reset
-constexpr uint32 QUGATE_LOG_HEARTBEAT_TRIGGERED  = 17;  // threshold exceeded, inheritance triggered
+constexpr uint32 QUGATE_LOG_HEARTBEAT_PULSE  = 16;  // heartbeat() called, epoch reset
+constexpr uint32 QUGATE_LOG_HEARTBEAT_TRIGGERED  = 17;  // threshold exceeded, heartbeat triggered
 constexpr uint32 QUGATE_LOG_HEARTBEAT_PAYOUT     = 18;  // recurring payout dispatched
 constexpr uint32 QUGATE_LOG_MULTISIG_VOTE       = 19; // guardian voted
 constexpr uint32 QUGATE_LOG_MULTISIG_EXECUTED   = 20; // threshold reached, funds released
@@ -163,18 +163,18 @@ struct QUGATE2
 };
 
 // =============================================
-// Inheritance gate supporting structs
+// Heartbeat gate supporting structs
 // (defined outside QUGATE so they can be used in StateData)
 // =============================================
 
-// Per-gate inheritance configuration
+// Per-gate heartbeat configuration
 struct HeartbeatConfig
 {
-    uint32  thresholdEpochs;       // epochs without keepAlive() before trigger (>= 1)
-    uint32  lastKeepAliveEpoch;    // epoch of last keepAlive() call (or configureHeartbeat)
+    uint32  thresholdEpochs;       // epochs without heartbeat() before trigger (>= 1)
+    uint32  lastHeartbeatEpoch;    // epoch of last heartbeat() call (or configureHeartbeat)
     uint8   payoutPercentPerEpoch; // % of balance to pay each epoch after trigger (1-100)
     sint64  minimumBalance;        // stop paying when balance drops below this
-    uint8   active;                // 1 = inheritance mode enabled on this gate
+    uint8   active;                // 1 = heartbeat mode enabled on this gate
     uint8   triggered;             // 1 once threshold exceeded
     uint32  triggerEpoch;          // epoch when triggered
 };
@@ -196,7 +196,7 @@ struct MultisigConfig
     uint8        proposalActive;        // 1 if proposal in progress
 };
 
-// Per-beneficiary entry for inheritance distribution
+// Per-beneficiary entry for heartbeat distribution
 struct HeartbeatBeneficiary
 {
     id      address;
@@ -360,7 +360,7 @@ public:
         sint64 status;
     };
 
-    // Configure inheritance mode on an INHERITANCE gate.
+    // Configure heartbeat mode on a HEARTBEAT gate.
     // Owner-only. Must be called before the gate can trigger.
     struct configureHeartbeat_input
     {
@@ -377,18 +377,18 @@ public:
         sint64 status;
     };
 
-    // Reset the keepAlive epoch counter. Owner-only. Rejected after trigger.
-    struct keepAlive_input
+    // Reset the heartbeat epoch counter. Owner-only. Rejected after trigger.
+    struct heartbeat_input
     {
         uint64 gateId;
     };
-    struct keepAlive_output
+    struct heartbeat_output
     {
         sint64 status;
         uint32 epochRecorded;
     };
 
-    // Query inheritance config and beneficiaries for a gate.
+    // Query heartbeat config and beneficiaries for a gate.
     struct getHeartbeat_input
     {
         uint64 gateId;
@@ -398,7 +398,7 @@ public:
         uint8   active;
         uint8   triggered;
         uint32  thresholdEpochs;
-        uint32  lastKeepAliveEpoch;
+        uint32  lastHeartbeatEpoch;
         uint32  triggerEpoch;
         uint8   payoutPercentPerEpoch;
         sint64  minimumBalance;
@@ -542,7 +542,7 @@ public:
         // O(1) reverse lookup: oracleSubscriptionId → slot index
         HashMap<sint32, uint64, 512> _subscriptionToSlot;
 
-        // Inheritance mode state — indexed by gate slot (same index as _gates)
+        // Heartbeat mode state — indexed by gate slot (same index as _gates)
         Array<HeartbeatConfig, QUGATE_MAX_GATES> _heartbeatConfigs;
         // Flat beneficiary storage: index = slotIdx * 8 + beneficiaryIndex
         Array<HeartbeatBeneficiary, QUGATE_MAX_GATES * 8> _heartbeatBeneficiaries;
@@ -813,7 +813,7 @@ public:
         uint64 i;
         QuGateLogger logger;
         GateConfig gate;
-        // Inheritance processing
+        // Heartbeat processing
         HeartbeatConfig inhCfg;
         sint64 inhBalance;
         sint64 inhPayoutTotal;
@@ -871,7 +871,7 @@ public:
         HeartbeatBeneficiary bene;
     };
 
-    struct keepAlive_locals
+    struct heartbeat_locals
     {
         QuGateLogger logger;
         GateConfig gate;
@@ -2119,11 +2119,11 @@ public:
             locals.gate.chainReserve = 0;
         }
 
-        // Clear inheritance config on close
+        // Clear heartbeat config on close
         if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
         {
             locals.hbZeroCfg.thresholdEpochs = 0;
-            locals.hbZeroCfg.lastKeepAliveEpoch = 0;
+            locals.hbZeroCfg.lastHeartbeatEpoch = 0;
             locals.hbZeroCfg.payoutPercentPerEpoch = 0;
             locals.hbZeroCfg.minimumBalance = 0;
             locals.hbZeroCfg.active = 0;
@@ -2931,7 +2931,7 @@ public:
     }
 
     // =============================================
-    // configureHeartbeat — set up dead man's switch on an INHERITANCE gate
+    // configureHeartbeat — configure HEARTBEAT gate — epoch-based trigger
     // =============================================
 
     PUBLIC_PROCEDURE_WITH_LOCALS(configureHeartbeat)
@@ -3044,7 +3044,7 @@ public:
 
         // Store config
         locals.cfg.thresholdEpochs = input.thresholdEpochs;
-        locals.cfg.lastKeepAliveEpoch = (uint32)qpi.epoch();
+        locals.cfg.lastHeartbeatEpoch = (uint32)qpi.epoch();
         locals.cfg.payoutPercentPerEpoch = input.payoutPercentPerEpoch;
         locals.cfg.minimumBalance = input.minimumBalance;
         locals.cfg.active = 1;
@@ -3078,10 +3078,10 @@ public:
     }
 
     // =============================================
-    // keepAlive — reset the epoch counter (owner only, before trigger)
+    // heartbeat — reset the epoch counter (owner only, before trigger)
     // =============================================
 
-    PUBLIC_PROCEDURE_WITH_LOCALS(keepAlive)
+    PUBLIC_PROCEDURE_WITH_LOCALS(heartbeat)
     {
         output.status = QUGATE_SUCCESS;
         output.epochRecorded = 0;
@@ -3142,7 +3142,7 @@ public:
 
         locals.cfg = state.get()._heartbeatConfigs.get(locals.slotIdx);
 
-        // Inheritance must be configured (active)
+        // Heartbeat must be configured (active)
         if (locals.cfg.active == 0)
         {
             output.status = QUGATE_HEARTBEAT_NOT_ACTIVE;
@@ -3151,7 +3151,7 @@ public:
             return;
         }
 
-        // Cannot keepAlive after trigger
+        // Cannot heartbeat after trigger
         if (locals.cfg.triggered == 1)
         {
             output.status = QUGATE_HEARTBEAT_TRIGGERED;
@@ -3161,22 +3161,22 @@ public:
         }
 
         // Reset the epoch counter
-        locals.cfg.lastKeepAliveEpoch = (uint32)qpi.epoch();
+        locals.cfg.lastHeartbeatEpoch = (uint32)qpi.epoch();
         state.mut()._heartbeatConfigs.set(locals.slotIdx, locals.cfg);
 
         // Update gate activity
         locals.gate.lastActivityEpoch = qpi.epoch();
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
-        output.epochRecorded = locals.cfg.lastKeepAliveEpoch;
+        output.epochRecorded = locals.cfg.lastHeartbeatEpoch;
 
         locals.logger._type = QUGATE_LOG_HEARTBEAT_PULSE;
-        locals.logger.amount = locals.cfg.lastKeepAliveEpoch;
+        locals.logger.amount = locals.cfg.lastHeartbeatEpoch;
         LOG_INFO(locals.logger);
     }
 
     // =============================================
-    // getHeartbeat — read-only query for inheritance config
+    // getHeartbeat — read-only query for heartbeat config
     // =============================================
 
     PUBLIC_FUNCTION_WITH_LOCALS(getHeartbeat)
@@ -3184,7 +3184,7 @@ public:
         output.active = 0;
         output.triggered = 0;
         output.thresholdEpochs = 0;
-        output.lastKeepAliveEpoch = 0;
+        output.lastHeartbeatEpoch = 0;
         output.triggerEpoch = 0;
         output.payoutPercentPerEpoch = 0;
         output.minimumBalance = 0;
@@ -3211,7 +3211,7 @@ public:
         output.active = locals.cfg.active;
         output.triggered = locals.cfg.triggered;
         output.thresholdEpochs = locals.cfg.thresholdEpochs;
-        output.lastKeepAliveEpoch = locals.cfg.lastKeepAliveEpoch;
+        output.lastHeartbeatEpoch = locals.cfg.lastHeartbeatEpoch;
         output.triggerEpoch = locals.cfg.triggerEpoch;
         output.payoutPercentPerEpoch = locals.cfg.payoutPercentPerEpoch;
         output.minimumBalance = locals.cfg.minimumBalance;
@@ -3407,7 +3407,7 @@ public:
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
     {
-        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=keepAlive 15=getHeartbeat 16=configureMultisig 17=getMultisigState
+        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState
         REGISTER_USER_PROCEDURE(createGate, 1);
         REGISTER_USER_PROCEDURE(sendToGate, 2);
         REGISTER_USER_PROCEDURE(closeGate, 3);
@@ -3421,7 +3421,7 @@ public:
         REGISTER_USER_PROCEDURE(setChain, 11);
         REGISTER_USER_PROCEDURE(sendToGateVerified, 12);
         REGISTER_USER_PROCEDURE(configureHeartbeat, 13);
-        REGISTER_USER_PROCEDURE(keepAlive, 14);
+        REGISTER_USER_PROCEDURE(heartbeat, 14);
         REGISTER_USER_FUNCTION(getHeartbeat, 15);
         REGISTER_USER_PROCEDURE(configureMultisig, 16);
         REGISTER_USER_FUNCTION(getMultisigState, 17);
@@ -3566,13 +3566,13 @@ public:
         //   - Log fee change event
 
         // =============================================
-        // Inheritance gate processing — epoch-based dead man's switch
+        // Heartbeat gate processing — epoch-based trigger
         // =============================================
         for (locals.i = 0; locals.i < state.get()._gateCount; locals.i++)
         {
             locals.gate = state.get()._gates.get(locals.i);
 
-            // Skip non-INHERITANCE gates and inactive gates
+            // Skip non-HEARTBEAT gates and inactive gates
             if (locals.gate.active == 0 || locals.gate.mode != QUGATE_MODE_HEARTBEAT)
             {
                 continue;
@@ -3580,7 +3580,7 @@ public:
 
             locals.inhCfg = state.get()._heartbeatConfigs.get(locals.i);
 
-            // Skip if inheritance not yet configured
+            // Skip if heartbeat not yet configured
             if (locals.inhCfg.active == 0)
             {
                 continue;
@@ -3667,10 +3667,10 @@ public:
             else
             {
                 // Not yet triggered — check if threshold exceeded
-                locals.inhEpochsInactive = (uint32)qpi.epoch() - locals.inhCfg.lastKeepAliveEpoch;
+                locals.inhEpochsInactive = (uint32)qpi.epoch() - locals.inhCfg.lastHeartbeatEpoch;
                 if (locals.inhEpochsInactive > locals.inhCfg.thresholdEpochs)
                 {
-                    // Trigger inheritance!
+                    // Heartbeat triggered!
                     locals.inhCfg.triggered = 1;
                     locals.inhCfg.triggerEpoch = (uint32)qpi.epoch();
                     state.mut()._heartbeatConfigs.set(locals.i, locals.inhCfg);
