@@ -40,3 +40,70 @@
 ## Note on Newer Features
 
 Oracle mode (QUGATE_MODE_ORACLE=5), chain gates, versioned gate IDs, and sendToGateVerified were added after the testnet results documented here. These features require live oracle infrastructure and are pending testnet verification.
+
+---
+
+# QuGate — HEARTBEAT + MULTISIG Build & Test Notes
+
+**Date:** 2026-03-21  
+**Contract:** QuGate.h (all 8 modes, contract index 25)
+
+## Build Status
+
+**qubic-core-fork** (`/home/phil/projects/qubic-core-fork/`): QuGate.h registered at index 25 via `QUGATE_CONTRACT_INDEX = 25` in `src/contract_core/contract_def.h`. The unit test compilation (`test/contract_qugate.cpp`) is blocked by an unrelated platform issue: `public_settings.h` uses `static unsigned short[] = L"..."` string literals which require MSVC with `/Zc:wchar_t-` — not compatible with GCC/Clang on Linux. This is a pre-existing build environment constraint, not a QuGate issue.
+
+**core-lite** (`/home/phil/projects/core-lite/`): Uses the older `state._field` QPI API (direct access) while QuGate.h uses the newer `state.get()._field` / `state.mut()._field` pattern. Porting QuGate.h to core-lite's old API was not attempted; the existing core-lite node binary (built from old QGate.h) is intact for SPLIT/RR/THRESHOLD/RANDOM/CONDITIONAL testnet runs.
+
+**Syntax check:** `qubic-contract-verify` rejects QuGate.h due to the `#ifndef CONTRACT_INDEX` preprocessor guard — expected, as the verifier enforces no-preprocessor rules for submission-ready contracts. The guard itself is safe to remove before submission.
+
+## HEARTBEAT Gate — Test Coverage
+
+New test file: `tests/test_heartbeat.py`
+
+| # | Test | Coverage |
+|---|------|----------|
+| 1 | Create HEARTBEAT gate (mode=6) | createGate with mode=6 |
+| 2 | configureHeartbeat — threshold=2, payout=50%, beneficiaries 60/40 | configureHeartbeat validation + storage |
+| 3 | heartbeat() by owner — resets epoch counter | heartbeat() success path |
+| 4 | heartbeat() by non-owner — rejected | heartbeat() auth check |
+| 5 | Fund gate with 1,000,000 QU | sendToGate on HEARTBEAT gate |
+| 6 | Advance epochs — gate triggers (epoch-dependent) | END_EPOCH trigger logic |
+| 7 | After trigger — 50% payout distributed 60/40 | END_EPOCH recurring payout |
+| 8 | heartbeat() after trigger — rejected (QUGATE_HEARTBEAT_TRIGGERED) | post-trigger rejection |
+| 9 | Next epoch — another 50% payout | recurring payout (second cycle) |
+| 10 | Gate auto-closes when balance ≤ minimumBalance | auto-close in END_EPOCH |
+
+Tests 6-10 require epoch advancement (unavailable without a live testnet with short epoch duration). Tests 1-5 and 8 run immediately; 6-10 have graceful skip logic if epoch doesn't advance in time.
+
+## MULTISIG Gate — Test Coverage
+
+New test file: `tests/test_multisig.py`
+
+| # | Test | Coverage |
+|---|------|----------|
+| 1 | Create MULTISIG gate (mode=7) | createGate with mode=7 |
+| 2 | configureMultisig — 3 guardians, required=2, expiry=4 | configureMultisig validation + storage |
+| 3 | Non-guardian sends QU — funds accumulate, no vote | sendToGate by non-guardian |
+| 4 | Guardian 1 votes — approvalCount=1, no release | guardian vote, proposal creation |
+| 5 | Guardian 2 votes — threshold met → funds release to recipient[0] | M-of-N execution |
+| 6 | Votes reset after execution | post-execution state reset |
+| 7 | Guardian double-vote — rejected (QUGATE_MULTISIG_ALREADY_VOTED) | bitmap dedup |
+| 8 | Proposal expiry — votes reset after N epochs (epoch-dependent) | END_EPOCH expiry logic |
+| 9 | configureMultisig by non-owner — rejected (QUGATE_UNAUTHORIZED) | auth check |
+| 10 | getMultisigState — returns correct state, error on invalid ID | read-only query |
+
+Test 8 requires epoch advancement. All other tests run immediately against a live node.
+
+## Updated test_all_modes.py
+
+`tests/test_all_modes.py` extended with Tests 8 (HEARTBEAT) and 9 (MULTISIG) — inline versions of the key paths from the dedicated test files. Covers: create, configure, heartbeat(), fund for HEARTBEAT; create, configure, fund (non-guardian), two guardian votes → release, vote reset, non-owner configure rejection for MULTISIG.
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `tests/test_heartbeat.py` | New — 10-test HEARTBEAT suite |
+| `tests/test_multisig.py` | New — 10-test MULTISIG suite |
+| `tests/test_all_modes.py` | Extended with Tests 8 + 9 for HEARTBEAT and MULTISIG |
+| `README.md` | Added gate modes table, HEARTBEAT section, MULTISIG section, updated status codes, log types, and contract interface (indices 13-17) |
+| `TESTNET_RESULTS.md` | This section |

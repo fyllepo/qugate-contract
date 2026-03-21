@@ -745,9 +745,9 @@ Until the shareholder infrastructure is wired, fees are set during `INITIALIZE` 
 
 ## Design Decisions
 
-### Why 5 modes?
+### Why 8 modes?
 
-These five modes cover the most common payment routing patterns observed in blockchain applications: proportional splitting (revenue share), rotation (load balancing/fairness), accumulation (crowdfunding/escrow), randomization (lottery/raffle), and access control (whitelisting). Together they can be composed to handle most real-world payment flows without custom contracts.
+These eight modes cover the most common payment routing and custody patterns observed in blockchain applications: proportional splitting (revenue share), rotation (load balancing/fairness), accumulation (crowdfunding/escrow), randomization (lottery/raffle), access control (whitelisting), oracle-triggered distribution (conditional release), heartbeat-based inheritance (dead-man's switch), and M-of-N multisig approval (DAO treasury, joint accounts). Together they can be composed to handle most real-world payment flows without custom contracts.
 
 ### Why 8 max recipients?
 
@@ -942,7 +942,9 @@ make -j$(nproc)
 
 ```bash
 export QUBIC_CLI=/path/to/qubic-cli
-python3 tests/test_all_modes.py        # All 5 modes (21 checks)
+python3 tests/test_all_modes.py        # All 7 modes (21+ checks)
+python3 tests/test_heartbeat.py        # HEARTBEAT mode (10 tests, epoch-dependent)
+python3 tests/test_multisig.py         # MULTISIG mode (10 tests)
 python3 tests/test_stress_50gates.py   # 50-gate stress test
 python3 tests/test_attack_vectors.py   # Security edge cases
 ```
@@ -950,7 +952,7 @@ python3 tests/test_attack_vectors.py   # Security edge cases
 ### Testnet Results
 
 Tested on Qubic Core-Lite (local testnet):
-- All 5 modes verified with real contract execution (21/21 pass)
+- All 5 original modes verified with real contract execution (21/21 pass)
 - 50-gate stress test: 50/50 creates, sends across all modes, slot reuse verified
 - 7 attack vectors tested (unauthorized close, sends to non-existent/closed gates, double close, zero sends, slot reuse)
 - 4+ hours continuous operation, zero memory growth
@@ -989,7 +991,7 @@ See `TESTNET_RESULTS.md` for detailed results.
 | `contract_qugate.cpp` | Test suite (50+ unit tests, Google Test) |
 | `README.md` | Technical reference (this file) |
 | `TESTNET_RESULTS.md` | Testnet verification results |
-| `tests/` | Python testnet test scripts (15 scripts) |
+| `tests/` | Python testnet test scripts (17 scripts incl. test_heartbeat.py, test_multisig.py) |
 | `.github/workflows/` | CI: contract verification |
 
 ---
