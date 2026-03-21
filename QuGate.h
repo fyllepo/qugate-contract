@@ -76,6 +76,7 @@ constexpr uint8 QUGATE_MODE_THRESHOLD = 2;
 constexpr uint8 QUGATE_MODE_RANDOM = 3;
 constexpr uint8 QUGATE_MODE_CONDITIONAL = 4;
 constexpr uint8 QUGATE_MODE_ORACLE = 5;
+constexpr uint8 QUGATE_MODE_INHERITANCE = 6;  // Dead man's switch — keepAlive() or epoch-triggered payout
 
 // Oracle condition types
 constexpr uint8 QUGATE_ORACLE_COND_PRICE_ABOVE = 0;
@@ -114,6 +115,9 @@ constexpr sint64 QUGATE_CONDITIONAL_REJECTED   = -12; // Sender not in allowedSe
 constexpr sint64 QUGATE_INVALID_ORACLE_CONFIG  = -13; // Invalid oracle condition, threshold, or trigger mode
 constexpr sint64 QUGATE_INVALID_CHAIN          = -14; // Chain target invalid, depth exceeded, or cycle detected
 constexpr sint64 QUGATE_OWNER_MISMATCH         = -15; // gate.owner != expectedOwner in sendToGateVerified
+constexpr sint64 QUGATE_INHERITANCE_TRIGGERED  = -16; // keepAlive() called after inheritance already triggered
+constexpr sint64 QUGATE_INHERITANCE_NOT_ACTIVE = -17; // keepAlive() or configureInheritance() on non-INHERITANCE gate
+constexpr sint64 QUGATE_INVALID_INHERITANCE    = -18; // Invalid inheritance config (bad shares, percent, threshold)
 
 // Log type constants (positive = success events, high numbers = actions)
 constexpr uint32 QUGATE_LOG_GATE_CREATED = 1;
@@ -127,6 +131,10 @@ constexpr uint32 QUGATE_LOG_GATE_EXPIRED = 8;
 constexpr uint32 QUGATE_LOG_ORACLE_TRIGGERED  = 9;
 constexpr uint32 QUGATE_LOG_ORACLE_EXHAUSTED  = 10;
 constexpr uint32 QUGATE_LOG_ORACLE_SUBSCRIBED = 11;
+constexpr uint32 QUGATE_LOG_INHERITANCE_CONFIGURED = 15;  // configureInheritance() called
+constexpr uint32 QUGATE_LOG_INHERITANCE_KEEPALIVE  = 16;  // keepAlive() called, epoch reset
+constexpr uint32 QUGATE_LOG_INHERITANCE_TRIGGERED  = 17;  // threshold exceeded, inheritance triggered
+constexpr uint32 QUGATE_LOG_INHERITANCE_PAYOUT     = 18;  // recurring payout dispatched
 
 // Failure log types use high range
 constexpr uint32 QUGATE_LOG_FAIL_INVALID_GATE = 100;
@@ -143,6 +151,30 @@ constexpr uint64 QUGATE_CONTRACT_ASSET_NAME = 76228174763345ULL; // "QUGATE" as 
 // Future extension struct (Qubic convention)
 struct QUGATE2
 {
+};
+
+// =============================================
+// Inheritance gate supporting structs
+// (defined outside QUGATE so they can be used in StateData)
+// =============================================
+
+// Per-gate inheritance configuration
+struct InheritanceConfig
+{
+    uint32  thresholdEpochs;       // epochs without keepAlive() before trigger (>= 1)
+    uint32  lastKeepAliveEpoch;    // epoch of last keepAlive() call (or configureInheritance)
+    uint8   payoutPercentPerEpoch; // % of balance to pay each epoch after trigger (1-100)
+    sint64  minimumBalance;        // stop paying when balance drops below this
+    uint8   active;                // 1 = inheritance mode enabled on this gate
+    uint8   triggered;             // 1 once threshold exceeded
+    uint32  triggerEpoch;          // epoch when triggered
+};
+
+// Per-beneficiary entry for inheritance distribution
+struct InheritanceBeneficiary
+{
+    id      address;
+    uint8   sharePercent;  // must sum to 100 across all beneficiaries for a gate
 };
 
 struct QUGATE : public ContractBase
@@ -302,6 +334,53 @@ public:
         sint64 status;
     };
 
+    // Configure inheritance mode on an INHERITANCE gate.
+    // Owner-only. Must be called before the gate can trigger.
+    struct configureInheritance_input
+    {
+        uint64 gateId;
+        uint32 thresholdEpochs;          // >= 1
+        uint8  payoutPercentPerEpoch;     // 1–100
+        sint64 minimumBalance;            // stop payouts when balance falls below this
+        Array<id, 8>    beneficiaryAddresses;
+        Array<uint8, 8> beneficiaryShares; // must sum to 100
+        uint8  beneficiaryCount;           // 1–8
+    };
+    struct configureInheritance_output
+    {
+        sint64 status;
+    };
+
+    // Reset the keepAlive epoch counter. Owner-only. Rejected after trigger.
+    struct keepAlive_input
+    {
+        uint64 gateId;
+    };
+    struct keepAlive_output
+    {
+        sint64 status;
+        uint32 epochRecorded;
+    };
+
+    // Query inheritance config and beneficiaries for a gate.
+    struct getInheritance_input
+    {
+        uint64 gateId;
+    };
+    struct getInheritance_output
+    {
+        uint8   active;
+        uint8   triggered;
+        uint32  thresholdEpochs;
+        uint32  lastKeepAliveEpoch;
+        uint32  triggerEpoch;
+        uint8   payoutPercentPerEpoch;
+        sint64  minimumBalance;
+        uint8   beneficiaryCount;
+        Array<id, 8>    beneficiaryAddresses;
+        Array<uint8, 8> beneficiaryShares;
+    };
+
     // =============================================
     // Function inputs/outputs (read-only queries)
     // =============================================
@@ -406,6 +485,12 @@ public:
         // O(1) oracle callback lookup. Maintained by BEGIN_EPOCH and all close paths.
         // O(1) reverse lookup: oracleSubscriptionId → slot index
         HashMap<sint32, uint64, 512> _subscriptionToSlot;
+
+        // Inheritance mode state — indexed by gate slot (same index as _gates)
+        Array<InheritanceConfig, QUGATE_MAX_GATES> _inheritanceConfigs;
+        // Flat beneficiary storage: index = slotIdx * 8 + beneficiaryIndex
+        Array<InheritanceBeneficiary, QUGATE_MAX_GATES * 8> _inheritanceBeneficiaries;
+        Array<uint8, QUGATE_MAX_GATES> _inheritanceBeneficiaryCount;
     };
 
     // =============================================
@@ -619,6 +704,7 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
+        InheritanceConfig inhZeroCfg;
     };
 
     struct updateGate_locals
@@ -659,6 +745,18 @@ public:
         uint64 i;
         QuGateLogger logger;
         GateConfig gate;
+        // Inheritance processing
+        InheritanceConfig inhCfg;
+        sint64 inhBalance;
+        sint64 inhPayoutTotal;
+        sint64 inhShare;
+        sint64 inhPriorSum;
+        uint8  inhJ;
+        uint8  inhK;
+        InheritanceBeneficiary inhBene;
+        InheritanceBeneficiary inhPriorBene;
+        uint8  inhBeneCount;
+        uint32 inhEpochsInactive;
     };
 
     // Oracle notification callback types
@@ -690,6 +788,39 @@ public:
         QuGateLogger logger;
         sint32 subId;
     };
+
+    struct configureInheritance_locals
+    {
+        QuGateLogger logger;
+        GateConfig gate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        uint8  i;
+        uint16 shareSum;
+        InheritanceConfig cfg;
+        InheritanceBeneficiary bene;
+    };
+
+    struct keepAlive_locals
+    {
+        QuGateLogger logger;
+        GateConfig gate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        InheritanceConfig cfg;
+    };
+
+    struct getInheritance_locals
+    {
+        GateConfig gate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        InheritanceConfig cfg;
+        InheritanceBeneficiary bene;
+        uint8 i;
+    };
+
+
 
     // =============================================
     // Procedures
@@ -724,7 +855,7 @@ public:
         }
 
         // Validate mode
-        if (input.mode > QUGATE_MODE_ORACLE)
+        if (input.mode > QUGATE_MODE_INHERITANCE)
         {
             // Refund all
             qpi.transfer(qpi.invocator(), qpi.invocationReward());
@@ -1423,6 +1554,15 @@ public:
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }
+        else if (locals.gate.mode == QUGATE_MODE_INHERITANCE)
+        {
+            // INHERITANCE mode: accumulate into currentBalance, END_EPOCH distributes after trigger
+            locals.gate = state.get()._gates.get(locals.slotIdx);
+            locals.gate.currentBalance += locals.amount;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+            LOG_INFO(locals.logger);
+        }
 
         // Chain forwarding: if this gate has a chain link, forward to the next gate
         locals.gate = state.get()._gates.get(locals.slotIdx);
@@ -1615,6 +1755,15 @@ public:
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }
+        else if (locals.gate.mode == QUGATE_MODE_INHERITANCE)
+        {
+            // INHERITANCE mode: accumulate into currentBalance, END_EPOCH distributes after trigger
+            locals.gate = state.get()._gates.get(locals.slotIdx);
+            locals.gate.currentBalance += locals.amount;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+            LOG_INFO(locals.logger);
+        }
     }
 
     PUBLIC_PROCEDURE_WITH_LOCALS(closeGate)
@@ -1699,6 +1848,20 @@ public:
         {
             qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
             locals.gate.chainReserve = 0;
+        }
+
+        // Clear inheritance config on close
+        if (locals.gate.mode == QUGATE_MODE_INHERITANCE)
+        {
+            locals.inhZeroCfg.thresholdEpochs = 0;
+            locals.inhZeroCfg.lastKeepAliveEpoch = 0;
+            locals.inhZeroCfg.payoutPercentPerEpoch = 0;
+            locals.inhZeroCfg.minimumBalance = 0;
+            locals.inhZeroCfg.active = 0;
+            locals.inhZeroCfg.triggered = 0;
+            locals.inhZeroCfg.triggerEpoch = 0;
+            state.mut()._inheritanceConfigs.set(locals.slotIdx, locals.inhZeroCfg);
+            state.mut()._inheritanceBeneficiaryCount.set(locals.slotIdx, 0);
         }
 
         // Guard against double-close underflow
@@ -2482,12 +2645,307 @@ public:
     }
 
     // =============================================
+    // configureInheritance — set up dead man's switch on an INHERITANCE gate
+    // =============================================
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(configureInheritance)
+    {
+        output.status = QUGATE_SUCCESS;
+
+        locals.logger._contractIndex = CONTRACT_INDEX;
+        locals.logger.sender = qpi.invocator();
+        locals.logger.gateId = input.gateId;
+        locals.logger.amount = 0;
+
+        // Refund any attached QU
+        if (qpi.invocationReward() > 0)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+        }
+
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            output.status = QUGATE_INVALID_GATE_ID;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+
+        // Must be gate owner
+        if (locals.gate.owner != qpi.invocator())
+        {
+            output.status = QUGATE_UNAUTHORIZED;
+            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Gate must be active
+        if (locals.gate.active == 0)
+        {
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Gate must be INHERITANCE mode
+        if (locals.gate.mode != QUGATE_MODE_INHERITANCE)
+        {
+            output.status = QUGATE_INHERITANCE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Cannot reconfigure after trigger
+        if (state.get()._inheritanceConfigs.get(locals.slotIdx).triggered == 1)
+        {
+            output.status = QUGATE_INHERITANCE_TRIGGERED;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Validate thresholdEpochs >= 1
+        if (input.thresholdEpochs == 0)
+        {
+            output.status = QUGATE_INVALID_INHERITANCE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Validate payoutPercentPerEpoch 1-100
+        if (input.payoutPercentPerEpoch == 0 || input.payoutPercentPerEpoch > 100)
+        {
+            output.status = QUGATE_INVALID_INHERITANCE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Validate beneficiary count
+        if (input.beneficiaryCount == 0 || input.beneficiaryCount > 8)
+        {
+            output.status = QUGATE_INVALID_INHERITANCE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Validate shares sum to 100
+        locals.shareSum = 0;
+        for (locals.i = 0; locals.i < input.beneficiaryCount; locals.i++)
+        {
+            locals.shareSum += input.beneficiaryShares.get(locals.i);
+        }
+        if (locals.shareSum != 100)
+        {
+            output.status = QUGATE_INVALID_INHERITANCE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Store config
+        locals.cfg.thresholdEpochs = input.thresholdEpochs;
+        locals.cfg.lastKeepAliveEpoch = (uint32)qpi.epoch();
+        locals.cfg.payoutPercentPerEpoch = input.payoutPercentPerEpoch;
+        locals.cfg.minimumBalance = input.minimumBalance;
+        locals.cfg.active = 1;
+        locals.cfg.triggered = 0;
+        locals.cfg.triggerEpoch = 0;
+        state.mut()._inheritanceConfigs.set(locals.slotIdx, locals.cfg);
+
+        // Store beneficiaries
+        state.mut()._inheritanceBeneficiaryCount.set(locals.slotIdx, input.beneficiaryCount);
+        for (locals.i = 0; locals.i < 8; locals.i++)
+        {
+            if (locals.i < input.beneficiaryCount)
+            {
+                locals.bene.address = input.beneficiaryAddresses.get(locals.i);
+                locals.bene.sharePercent = input.beneficiaryShares.get(locals.i);
+            }
+            else
+            {
+                locals.bene.address = id::zero();
+                locals.bene.sharePercent = 0;
+            }
+            state.mut()._inheritanceBeneficiaries.set(locals.slotIdx * 8 + locals.i, locals.bene);
+        }
+
+        // Update gate activity
+        locals.gate.lastActivityEpoch = qpi.epoch();
+        state.mut()._gates.set(locals.slotIdx, locals.gate);
+
+        locals.logger._type = QUGATE_LOG_INHERITANCE_CONFIGURED;
+        LOG_INFO(locals.logger);
+    }
+
+    // =============================================
+    // keepAlive — reset the epoch counter (owner only, before trigger)
+    // =============================================
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(keepAlive)
+    {
+        output.status = QUGATE_SUCCESS;
+        output.epochRecorded = 0;
+
+        locals.logger._contractIndex = CONTRACT_INDEX;
+        locals.logger.sender = qpi.invocator();
+        locals.logger.gateId = input.gateId;
+        locals.logger.amount = 0;
+
+        // Refund any attached QU
+        if (qpi.invocationReward() > 0)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+        }
+
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            output.status = QUGATE_INVALID_GATE_ID;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+
+        // Must be gate owner
+        if (locals.gate.owner != qpi.invocator())
+        {
+            output.status = QUGATE_UNAUTHORIZED;
+            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Gate must be active
+        if (locals.gate.active == 0)
+        {
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Gate must be INHERITANCE mode
+        if (locals.gate.mode != QUGATE_MODE_INHERITANCE)
+        {
+            output.status = QUGATE_INHERITANCE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.cfg = state.get()._inheritanceConfigs.get(locals.slotIdx);
+
+        // Inheritance must be configured (active)
+        if (locals.cfg.active == 0)
+        {
+            output.status = QUGATE_INHERITANCE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Cannot keepAlive after trigger
+        if (locals.cfg.triggered == 1)
+        {
+            output.status = QUGATE_INHERITANCE_TRIGGERED;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Reset the epoch counter
+        locals.cfg.lastKeepAliveEpoch = (uint32)qpi.epoch();
+        state.mut()._inheritanceConfigs.set(locals.slotIdx, locals.cfg);
+
+        // Update gate activity
+        locals.gate.lastActivityEpoch = qpi.epoch();
+        state.mut()._gates.set(locals.slotIdx, locals.gate);
+
+        output.epochRecorded = locals.cfg.lastKeepAliveEpoch;
+
+        locals.logger._type = QUGATE_LOG_INHERITANCE_KEEPALIVE;
+        locals.logger.amount = locals.cfg.lastKeepAliveEpoch;
+        LOG_INFO(locals.logger);
+    }
+
+    // =============================================
+    // getInheritance — read-only query for inheritance config
+    // =============================================
+
+    PUBLIC_FUNCTION_WITH_LOCALS(getInheritance)
+    {
+        output.active = 0;
+        output.triggered = 0;
+        output.thresholdEpochs = 0;
+        output.lastKeepAliveEpoch = 0;
+        output.triggerEpoch = 0;
+        output.payoutPercentPerEpoch = 0;
+        output.minimumBalance = 0;
+        output.beneficiaryCount = 0;
+
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+        if (locals.gate.mode != QUGATE_MODE_INHERITANCE)
+        {
+            return;
+        }
+
+        locals.cfg = state.get()._inheritanceConfigs.get(locals.slotIdx);
+        output.active = locals.cfg.active;
+        output.triggered = locals.cfg.triggered;
+        output.thresholdEpochs = locals.cfg.thresholdEpochs;
+        output.lastKeepAliveEpoch = locals.cfg.lastKeepAliveEpoch;
+        output.triggerEpoch = locals.cfg.triggerEpoch;
+        output.payoutPercentPerEpoch = locals.cfg.payoutPercentPerEpoch;
+        output.minimumBalance = locals.cfg.minimumBalance;
+
+        output.beneficiaryCount = state.get()._inheritanceBeneficiaryCount.get(locals.slotIdx);
+        for (locals.i = 0; locals.i < 8; locals.i++)
+        {
+            locals.bene = state.get()._inheritanceBeneficiaries.get(locals.slotIdx * 8 + locals.i);
+            output.beneficiaryAddresses.set(locals.i, locals.bene.address);
+            output.beneficiaryShares.set(locals.i, locals.bene.sharePercent);
+        }
+    }
+
+    // =============================================
     // Registration
     // =============================================
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
     {
-        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified
+        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureInheritance 14=keepAlive 15=getInheritance
         REGISTER_USER_PROCEDURE(createGate, 1);
         REGISTER_USER_PROCEDURE(sendToGate, 2);
         REGISTER_USER_PROCEDURE(closeGate, 3);
@@ -2500,6 +2958,9 @@ public:
         REGISTER_USER_PROCEDURE(fundGate, 10);
         REGISTER_USER_PROCEDURE(setChain, 11);
         REGISTER_USER_PROCEDURE(sendToGateVerified, 12);
+        REGISTER_USER_PROCEDURE(configureInheritance, 13);
+        REGISTER_USER_PROCEDURE(keepAlive, 14);
+        REGISTER_USER_FUNCTION(getInheritance, 15);
         REGISTER_USER_PROCEDURE_NOTIFICATION(OraclePriceNotification);
     }
 
@@ -2639,6 +3100,126 @@ public:
         //   - Check if any proposal passed quorum
         //   - If so, update state.mut()._creationFee, state.mut()._minSendAmount, state.mut()._expiryEpochs
         //   - Log fee change event
+
+        // =============================================
+        // Inheritance gate processing — epoch-based dead man's switch
+        // =============================================
+        for (locals.i = 0; locals.i < state.get()._gateCount; locals.i++)
+        {
+            locals.gate = state.get()._gates.get(locals.i);
+
+            // Skip non-INHERITANCE gates and inactive gates
+            if (locals.gate.active == 0 || locals.gate.mode != QUGATE_MODE_INHERITANCE)
+            {
+                continue;
+            }
+
+            locals.inhCfg = state.get()._inheritanceConfigs.get(locals.i);
+
+            // Skip if inheritance not yet configured
+            if (locals.inhCfg.active == 0)
+            {
+                continue;
+            }
+
+            if (locals.inhCfg.triggered == 1)
+            {
+                // Already triggered — execute recurring payout
+                locals.inhBalance = (sint64)locals.gate.currentBalance;
+                if (locals.inhBalance > locals.inhCfg.minimumBalance)
+                {
+                    locals.inhPayoutTotal = locals.inhBalance * (sint64)locals.inhCfg.payoutPercentPerEpoch / 100;
+                    if (locals.inhPayoutTotal > 0)
+                    {
+                        locals.inhBeneCount = state.get()._inheritanceBeneficiaryCount.get(locals.i);
+
+                        for (locals.inhJ = 0; locals.inhJ < locals.inhBeneCount; locals.inhJ++)
+                        {
+                            locals.inhBene = state.get()._inheritanceBeneficiaries.get(locals.i * 8 + locals.inhJ);
+                            if (locals.inhJ == locals.inhBeneCount - 1)
+                            {
+                                // Last beneficiary gets remainder to avoid dust from rounding
+                                locals.inhPriorSum = 0;
+                                for (locals.inhK = 0; locals.inhK < locals.inhJ; locals.inhK++)
+                                {
+                                    locals.inhPriorBene = state.get()._inheritanceBeneficiaries.get(locals.i * 8 + locals.inhK);
+                                    locals.inhPriorSum += locals.inhPayoutTotal * (sint64)locals.inhPriorBene.sharePercent / 100;
+                                }
+                                locals.inhShare = locals.inhPayoutTotal - locals.inhPriorSum;
+                            }
+                            else
+                            {
+                                locals.inhShare = locals.inhPayoutTotal * (sint64)locals.inhBene.sharePercent / 100;
+                            }
+
+                            if (locals.inhShare > 0)
+                            {
+                                qpi.transfer(locals.inhBene.address, locals.inhShare);
+                                locals.gate.totalForwarded += (uint64)locals.inhShare;
+                                locals.gate.currentBalance -= (uint64)locals.inhShare;
+                            }
+                        }
+
+                        state.mut()._gates.set(locals.i, locals.gate);
+
+                        // Log payout
+                        locals.logger._contractIndex = CONTRACT_INDEX;
+                        locals.logger._type = QUGATE_LOG_INHERITANCE_PAYOUT;
+                        locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+                        locals.logger.sender = locals.gate.owner;
+                        locals.logger.amount = locals.inhPayoutTotal;
+                        LOG_INFO(locals.logger);
+                    }
+
+                    // Auto-close gate if balance dropped to or below minimum
+                    locals.gate = state.get()._gates.get(locals.i);
+                    if ((sint64)locals.gate.currentBalance <= locals.inhCfg.minimumBalance)
+                    {
+                        // Refund any remaining dust to owner rather than lose it
+                        if (locals.gate.currentBalance > 0)
+                        {
+                            qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
+                            locals.gate.currentBalance = 0;
+                        }
+
+                        locals.gate.active = 0;
+                        state.mut()._gates.set(locals.i, locals.gate);
+                        state.mut()._activeGates -= 1;
+
+                        state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
+                        state.mut()._freeCount += 1;
+
+                        state.mut()._gateGenerations.set(locals.i, state.get()._gateGenerations.get(locals.i) + 1);
+
+                        locals.logger._contractIndex = CONTRACT_INDEX;
+                        locals.logger._type = QUGATE_LOG_GATE_CLOSED;
+                        locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i)) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+                        locals.logger.sender = locals.gate.owner;
+                        locals.logger.amount = 0;
+                        LOG_INFO(locals.logger);
+                    }
+                }
+            }
+            else
+            {
+                // Not yet triggered — check if threshold exceeded
+                locals.inhEpochsInactive = (uint32)qpi.epoch() - locals.inhCfg.lastKeepAliveEpoch;
+                if (locals.inhEpochsInactive > locals.inhCfg.thresholdEpochs)
+                {
+                    // Trigger inheritance!
+                    locals.inhCfg.triggered = 1;
+                    locals.inhCfg.triggerEpoch = (uint32)qpi.epoch();
+                    state.mut()._inheritanceConfigs.set(locals.i, locals.inhCfg);
+
+                    locals.logger._contractIndex = CONTRACT_INDEX;
+                    locals.logger._type = QUGATE_LOG_INHERITANCE_TRIGGERED;
+                    locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+                    locals.logger.sender = locals.gate.owner;
+                    locals.logger.amount = (sint64)locals.gate.currentBalance;
+                    LOG_INFO(locals.logger);
+                }
+            }
+        }
     }
 
     BEGIN_TICK()
