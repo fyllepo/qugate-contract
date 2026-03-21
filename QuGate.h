@@ -76,7 +76,8 @@ constexpr uint8 QUGATE_MODE_THRESHOLD = 2;
 constexpr uint8 QUGATE_MODE_RANDOM = 3;
 constexpr uint8 QUGATE_MODE_CONDITIONAL = 4;
 constexpr uint8 QUGATE_MODE_ORACLE = 5;
-constexpr uint8 QUGATE_MODE_INHERITANCE = 6;  // Dead man's switch — keepAlive() or epoch-triggered payout
+constexpr uint8 QUGATE_MODE_HEARTBEAT = 6;  // Heartbeat gate — keepAlive() or epoch-triggered payout
+constexpr uint8 QUGATE_MODE_MULTISIG = 7;     // M-of-N guardian approval before funds release
 
 // Oracle condition types
 constexpr uint8 QUGATE_ORACLE_COND_PRICE_ABOVE = 0;
@@ -115,9 +116,13 @@ constexpr sint64 QUGATE_CONDITIONAL_REJECTED   = -12; // Sender not in allowedSe
 constexpr sint64 QUGATE_INVALID_ORACLE_CONFIG  = -13; // Invalid oracle condition, threshold, or trigger mode
 constexpr sint64 QUGATE_INVALID_CHAIN          = -14; // Chain target invalid, depth exceeded, or cycle detected
 constexpr sint64 QUGATE_OWNER_MISMATCH         = -15; // gate.owner != expectedOwner in sendToGateVerified
-constexpr sint64 QUGATE_INHERITANCE_TRIGGERED  = -16; // keepAlive() called after inheritance already triggered
-constexpr sint64 QUGATE_INHERITANCE_NOT_ACTIVE = -17; // keepAlive() or configureInheritance() on non-INHERITANCE gate
-constexpr sint64 QUGATE_INVALID_INHERITANCE    = -18; // Invalid inheritance config (bad shares, percent, threshold)
+constexpr sint64 QUGATE_HEARTBEAT_TRIGGERED  = -16; // keepAlive() called after inheritance already triggered
+constexpr sint64 QUGATE_HEARTBEAT_NOT_ACTIVE = -17; // keepAlive() or configureHeartbeat() on non-INHERITANCE gate
+constexpr sint64 QUGATE_HEARTBEAT_INVALID    = -18; // Invalid inheritance config (bad shares, percent, threshold)
+constexpr sint64 QUGATE_MULTISIG_NOT_GUARDIAN    = -19; // sender not in guardian list
+constexpr sint64 QUGATE_MULTISIG_ALREADY_VOTED   = -20; // guardian already voted this proposal
+constexpr sint64 QUGATE_MULTISIG_INVALID_CONFIG  = -21; // bad guardians/required config
+constexpr sint64 QUGATE_MULTISIG_NO_ACTIVE_PROP  = -22; // no active proposal to query
 
 // Log type constants (positive = success events, high numbers = actions)
 constexpr uint32 QUGATE_LOG_GATE_CREATED = 1;
@@ -131,10 +136,14 @@ constexpr uint32 QUGATE_LOG_GATE_EXPIRED = 8;
 constexpr uint32 QUGATE_LOG_ORACLE_TRIGGERED  = 9;
 constexpr uint32 QUGATE_LOG_ORACLE_EXHAUSTED  = 10;
 constexpr uint32 QUGATE_LOG_ORACLE_SUBSCRIBED = 11;
-constexpr uint32 QUGATE_LOG_INHERITANCE_CONFIGURED = 15;  // configureInheritance() called
-constexpr uint32 QUGATE_LOG_INHERITANCE_KEEPALIVE  = 16;  // keepAlive() called, epoch reset
-constexpr uint32 QUGATE_LOG_INHERITANCE_TRIGGERED  = 17;  // threshold exceeded, inheritance triggered
-constexpr uint32 QUGATE_LOG_INHERITANCE_PAYOUT     = 18;  // recurring payout dispatched
+constexpr uint32 QUGATE_LOG_HEARTBEAT_CONFIGURED = 15;  // configureHeartbeat() called
+constexpr uint32 QUGATE_LOG_HEARTBEAT_PULSE  = 16;  // keepAlive() called, epoch reset
+constexpr uint32 QUGATE_LOG_HEARTBEAT_TRIGGERED  = 17;  // threshold exceeded, inheritance triggered
+constexpr uint32 QUGATE_LOG_HEARTBEAT_PAYOUT     = 18;  // recurring payout dispatched
+constexpr uint32 QUGATE_LOG_MULTISIG_VOTE       = 19; // guardian voted
+constexpr uint32 QUGATE_LOG_MULTISIG_EXECUTED   = 20; // threshold reached, funds released
+constexpr uint32 QUGATE_LOG_MULTISIG_EXPIRED    = 21; // proposal expired, reset
+constexpr uint32 QUGATE_LOG_MULTISIG_CONFIGURED = 22; // guardians/threshold updated
 
 // Failure log types use high range
 constexpr uint32 QUGATE_LOG_FAIL_INVALID_GATE = 100;
@@ -159,10 +168,10 @@ struct QUGATE2
 // =============================================
 
 // Per-gate inheritance configuration
-struct InheritanceConfig
+struct HeartbeatConfig
 {
     uint32  thresholdEpochs;       // epochs without keepAlive() before trigger (>= 1)
-    uint32  lastKeepAliveEpoch;    // epoch of last keepAlive() call (or configureInheritance)
+    uint32  lastKeepAliveEpoch;    // epoch of last keepAlive() call (or configureHeartbeat)
     uint8   payoutPercentPerEpoch; // % of balance to pay each epoch after trigger (1-100)
     sint64  minimumBalance;        // stop paying when balance drops below this
     uint8   active;                // 1 = inheritance mode enabled on this gate
@@ -170,8 +179,25 @@ struct InheritanceConfig
     uint32  triggerEpoch;          // epoch when triggered
 };
 
+// =============================================
+// Multisig gate supporting struct
+// (defined outside QUGATE so it can be used in StateData)
+// =============================================
+
+struct MultisigConfig
+{
+    Array<id, 8> guardians;
+    uint8        guardianCount;
+    uint8        required;              // M of N required approvals
+    uint32       proposalExpiryEpochs;  // epochs before unfinished proposal resets
+    uint8        approvalBitmap;        // bit i set = guardian i has voted
+    uint8        approvalCount;         // current vote count
+    uint32       proposalEpoch;         // epoch when first vote was cast
+    uint8        proposalActive;        // 1 if proposal in progress
+};
+
 // Per-beneficiary entry for inheritance distribution
-struct InheritanceBeneficiary
+struct HeartbeatBeneficiary
 {
     id      address;
     uint8   sharePercent;  // must sum to 100 across all beneficiaries for a gate
@@ -336,7 +362,7 @@ public:
 
     // Configure inheritance mode on an INHERITANCE gate.
     // Owner-only. Must be called before the gate can trigger.
-    struct configureInheritance_input
+    struct configureHeartbeat_input
     {
         uint64 gateId;
         uint32 thresholdEpochs;          // >= 1
@@ -346,7 +372,7 @@ public:
         Array<uint8, 8> beneficiaryShares; // must sum to 100
         uint8  beneficiaryCount;           // 1–8
     };
-    struct configureInheritance_output
+    struct configureHeartbeat_output
     {
         sint64 status;
     };
@@ -363,11 +389,11 @@ public:
     };
 
     // Query inheritance config and beneficiaries for a gate.
-    struct getInheritance_input
+    struct getHeartbeat_input
     {
         uint64 gateId;
     };
-    struct getInheritance_output
+    struct getHeartbeat_output
     {
         uint8   active;
         uint8   triggered;
@@ -379,6 +405,36 @@ public:
         uint8   beneficiaryCount;
         Array<id, 8>    beneficiaryAddresses;
         Array<uint8, 8> beneficiaryShares;
+    };
+
+    // Configure M-of-N multisig guardians/threshold on a MULTISIG gate. Owner-only.
+    struct configureMultisig_input
+    {
+        uint32       gateId;
+        Array<id, 8> guardians;
+        uint8        guardianCount;           // 1-8
+        uint8        required;                // 1-guardianCount
+        uint32       proposalExpiryEpochs;    // >= 1
+    };
+    struct configureMultisig_output
+    {
+        sint64 status;
+    };
+
+    // Query current multisig proposal state for a MULTISIG gate.
+    struct getMultisigState_input
+    {
+        uint32 gateId;
+    };
+    struct getMultisigState_output
+    {
+        sint64 status;
+        uint8  approvalBitmap;
+        uint8  approvalCount;
+        uint8  required;
+        uint8  guardianCount;
+        uint32 proposalEpoch;
+        uint8  proposalActive;
     };
 
     // =============================================
@@ -487,10 +543,13 @@ public:
         HashMap<sint32, uint64, 512> _subscriptionToSlot;
 
         // Inheritance mode state — indexed by gate slot (same index as _gates)
-        Array<InheritanceConfig, QUGATE_MAX_GATES> _inheritanceConfigs;
+        Array<HeartbeatConfig, QUGATE_MAX_GATES> _heartbeatConfigs;
         // Flat beneficiary storage: index = slotIdx * 8 + beneficiaryIndex
-        Array<InheritanceBeneficiary, QUGATE_MAX_GATES * 8> _inheritanceBeneficiaries;
-        Array<uint8, QUGATE_MAX_GATES> _inheritanceBeneficiaryCount;
+        Array<HeartbeatBeneficiary, QUGATE_MAX_GATES * 8> _heartbeatBeneficiaries;
+        Array<uint8, QUGATE_MAX_GATES> _heartbeatBeneficiaryCount;
+
+        // Multisig mode state — indexed by gate slot (same index as _gates)
+        Array<MultisigConfig, QUGATE_MAX_GATES> _multisigConfigs;
     };
 
     // =============================================
@@ -667,6 +726,10 @@ public:
         routeToGate_input chainIn;
         routeToGate_output chainOut;
         routeToGate_locals chainLocals;
+        // Multisig processing
+        MultisigConfig msigCfg;
+        uint8 msigGuardianIdx;
+        uint8 msigFoundGuardian;
     };
 
     struct sendToGate_locals
@@ -696,6 +759,10 @@ public:
         routeToGate_output chainOut;
         routeToGate_locals chainLocals;
         GateConfig nextChainGate;
+        // Multisig processing
+        MultisigConfig msigCfg;
+        uint8 msigGuardianIdx;
+        uint8 msigFoundGuardian;
     };
 
     struct closeGate_locals
@@ -704,7 +771,8 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        InheritanceConfig inhZeroCfg;
+        HeartbeatConfig hbZeroCfg;
+        MultisigConfig msigZeroCfg;
     };
 
     struct updateGate_locals
@@ -746,17 +814,19 @@ public:
         QuGateLogger logger;
         GateConfig gate;
         // Inheritance processing
-        InheritanceConfig inhCfg;
+        HeartbeatConfig inhCfg;
         sint64 inhBalance;
         sint64 inhPayoutTotal;
         sint64 inhShare;
         sint64 inhPriorSum;
         uint8  inhJ;
         uint8  inhK;
-        InheritanceBeneficiary inhBene;
-        InheritanceBeneficiary inhPriorBene;
+        HeartbeatBeneficiary inhBene;
+        HeartbeatBeneficiary inhPriorBene;
         uint8  inhBeneCount;
         uint32 inhEpochsInactive;
+        // Multisig processing
+        MultisigConfig msigCfg;
     };
 
     // Oracle notification callback types
@@ -789,7 +859,7 @@ public:
         sint32 subId;
     };
 
-    struct configureInheritance_locals
+    struct configureHeartbeat_locals
     {
         QuGateLogger logger;
         GateConfig gate;
@@ -797,8 +867,8 @@ public:
         uint64 encodedGen;
         uint8  i;
         uint16 shareSum;
-        InheritanceConfig cfg;
-        InheritanceBeneficiary bene;
+        HeartbeatConfig cfg;
+        HeartbeatBeneficiary bene;
     };
 
     struct keepAlive_locals
@@ -807,17 +877,36 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        InheritanceConfig cfg;
+        HeartbeatConfig cfg;
     };
 
-    struct getInheritance_locals
+    struct getHeartbeat_locals
     {
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        InheritanceConfig cfg;
-        InheritanceBeneficiary bene;
+        HeartbeatConfig cfg;
+        HeartbeatBeneficiary bene;
         uint8 i;
+    };
+
+    struct configureMultisig_locals
+    {
+        QuGateLogger logger;
+        GateConfig gate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        MultisigConfig cfg;
+        uint8 i;
+        uint8 j;
+    };
+
+    struct getMultisigState_locals
+    {
+        GateConfig gate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        MultisigConfig cfg;
     };
 
 
@@ -855,7 +944,7 @@ public:
         }
 
         // Validate mode
-        if (input.mode > QUGATE_MODE_INHERITANCE)
+        if (input.mode > QUGATE_MODE_MULTISIG)
         {
             // Refund all
             qpi.transfer(qpi.invocator(), qpi.invocationReward());
@@ -1554,19 +1643,111 @@ public:
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }
-        else if (locals.gate.mode == QUGATE_MODE_INHERITANCE)
+        else if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
         {
-            // INHERITANCE mode: accumulate into currentBalance, END_EPOCH distributes after trigger
+            // HEARTBEAT mode: accumulate into currentBalance, END_EPOCH distributes after trigger
             locals.gate = state.get()._gates.get(locals.slotIdx);
             locals.gate.currentBalance += locals.amount;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }
+        else if (locals.gate.mode == QUGATE_MODE_MULTISIG)
+        {
+            // MULTISIG mode: always accumulate funds; guardian senders also cast a vote
+            locals.gate = state.get()._gates.get(locals.slotIdx);
+            locals.gate.currentBalance += locals.amount;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+            LOG_INFO(locals.logger);
+
+            // Check if sender is a guardian
+            locals.msigCfg = state.get()._multisigConfigs.get(locals.slotIdx);
+            locals.msigFoundGuardian = 0;
+            locals.msigGuardianIdx = 0;
+            for (uint8 _gi = 0; _gi < locals.msigCfg.guardianCount; _gi++)
+            {
+                if (locals.msigFoundGuardian == 0 && locals.msigCfg.guardians.get(_gi) == qpi.invocator())
+                {
+                    locals.msigFoundGuardian = 1;
+                    locals.msigGuardianIdx = _gi;
+                }
+            }
+
+            if (locals.msigFoundGuardian == 1)
+            {
+                // Check proposal expiry
+                if (locals.msigCfg.proposalActive == 1
+                    && (uint32)qpi.epoch() - locals.msigCfg.proposalEpoch > locals.msigCfg.proposalExpiryEpochs)
+                {
+                    // Proposal expired — reset
+                    locals.msigCfg.approvalBitmap = 0;
+                    locals.msigCfg.approvalCount = 0;
+                    locals.msigCfg.proposalActive = 0;
+                    state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigCfg);
+                    locals.logger._contractIndex = CONTRACT_INDEX;
+                    locals.logger._type = QUGATE_LOG_MULTISIG_EXPIRED;
+                    locals.logger.gateId = input.gateId;
+                    locals.logger.sender = qpi.invocator();
+                    locals.logger.amount = 0;
+                    LOG_INFO(locals.logger);
+                }
+
+                // Check if already voted
+                if ((locals.msigCfg.approvalBitmap & (1 << locals.msigGuardianIdx)) != 0)
+                {
+                    output.status = QUGATE_MULTISIG_ALREADY_VOTED;
+                    return;
+                }
+
+                // Record vote
+                locals.msigCfg.approvalBitmap = locals.msigCfg.approvalBitmap | (uint8)(1 << locals.msigGuardianIdx);
+                locals.msigCfg.approvalCount++;
+                if (locals.msigCfg.proposalActive == 0)
+                {
+                    locals.msigCfg.proposalActive = 1;
+                    locals.msigCfg.proposalEpoch = (uint32)qpi.epoch();
+                }
+                state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigCfg);
+
+                locals.logger._contractIndex = CONTRACT_INDEX;
+                locals.logger._type = QUGATE_LOG_MULTISIG_VOTE;
+                locals.logger.gateId = input.gateId;
+                locals.logger.sender = qpi.invocator();
+                locals.logger.amount = locals.amount;
+                LOG_INFO(locals.logger);
+
+                // Check threshold
+                locals.gate = state.get()._gates.get(locals.slotIdx);
+                if (locals.msigCfg.approvalCount >= locals.msigCfg.required && locals.gate.currentBalance > 0)
+                {
+                    // Transfer balance to target (recipients[0] is the target address)
+                    sint64 releaseAmount = (sint64)locals.gate.currentBalance;
+                    qpi.transfer(locals.gate.recipients.get(0), releaseAmount);
+                    locals.gate.totalForwarded += (uint64)releaseAmount;
+                    locals.gate.currentBalance = 0;
+                    state.mut()._gates.set(locals.slotIdx, locals.gate);
+
+                    // Reset proposal
+                    locals.msigCfg.approvalBitmap = 0;
+                    locals.msigCfg.approvalCount = 0;
+                    locals.msigCfg.proposalActive = 0;
+                    state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigCfg);
+
+                    locals.logger._contractIndex = CONTRACT_INDEX;
+                    locals.logger._type = QUGATE_LOG_MULTISIG_EXECUTED;
+                    locals.logger.gateId = input.gateId;
+                    locals.logger.sender = qpi.invocator();
+                    locals.logger.amount = releaseAmount;
+                    LOG_INFO(locals.logger);
+                }
+            }
+        }
 
         // Chain forwarding: if this gate has a chain link, forward to the next gate
         locals.gate = state.get()._gates.get(locals.slotIdx);
-        if (locals.gate.chainNextGateId != -1 && locals.gate.mode != QUGATE_MODE_ORACLE)
+        if (locals.gate.chainNextGateId != -1 && locals.gate.mode != QUGATE_MODE_ORACLE
+            && locals.gate.mode != QUGATE_MODE_MULTISIG)
         {
             // Determine forwarded amount from mode handler outputs
             sint64 chainAmount = 0;
@@ -1755,14 +1936,102 @@ public:
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
         }
-        else if (locals.gate.mode == QUGATE_MODE_INHERITANCE)
+        else if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
         {
-            // INHERITANCE mode: accumulate into currentBalance, END_EPOCH distributes after trigger
+            // HEARTBEAT mode: accumulate into currentBalance, END_EPOCH distributes after trigger
             locals.gate = state.get()._gates.get(locals.slotIdx);
             locals.gate.currentBalance += locals.amount;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
+        }
+        else if (locals.gate.mode == QUGATE_MODE_MULTISIG)
+        {
+            // MULTISIG mode: always accumulate funds; guardian senders also cast a vote
+            locals.gate = state.get()._gates.get(locals.slotIdx);
+            locals.gate.currentBalance += locals.amount;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+            LOG_INFO(locals.logger);
+
+            // Check if sender is a guardian
+            locals.msigCfg = state.get()._multisigConfigs.get(locals.slotIdx);
+            locals.msigFoundGuardian = 0;
+            locals.msigGuardianIdx = 0;
+            for (uint8 _gi = 0; _gi < locals.msigCfg.guardianCount; _gi++)
+            {
+                if (locals.msigFoundGuardian == 0 && locals.msigCfg.guardians.get(_gi) == qpi.invocator())
+                {
+                    locals.msigFoundGuardian = 1;
+                    locals.msigGuardianIdx = _gi;
+                }
+            }
+
+            if (locals.msigFoundGuardian == 1)
+            {
+                // Check proposal expiry
+                if (locals.msigCfg.proposalActive == 1
+                    && (uint32)qpi.epoch() - locals.msigCfg.proposalEpoch > locals.msigCfg.proposalExpiryEpochs)
+                {
+                    locals.msigCfg.approvalBitmap = 0;
+                    locals.msigCfg.approvalCount = 0;
+                    locals.msigCfg.proposalActive = 0;
+                    state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigCfg);
+                    locals.logger._contractIndex = CONTRACT_INDEX;
+                    locals.logger._type = QUGATE_LOG_MULTISIG_EXPIRED;
+                    locals.logger.gateId = input.gateId;
+                    locals.logger.sender = qpi.invocator();
+                    locals.logger.amount = 0;
+                    LOG_INFO(locals.logger);
+                }
+
+                // Check if already voted
+                if ((locals.msigCfg.approvalBitmap & (1 << locals.msigGuardianIdx)) != 0)
+                {
+                    output.status = QUGATE_MULTISIG_ALREADY_VOTED;
+                    return;
+                }
+
+                // Record vote
+                locals.msigCfg.approvalBitmap = locals.msigCfg.approvalBitmap | (uint8)(1 << locals.msigGuardianIdx);
+                locals.msigCfg.approvalCount++;
+                if (locals.msigCfg.proposalActive == 0)
+                {
+                    locals.msigCfg.proposalActive = 1;
+                    locals.msigCfg.proposalEpoch = (uint32)qpi.epoch();
+                }
+                state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigCfg);
+
+                locals.logger._contractIndex = CONTRACT_INDEX;
+                locals.logger._type = QUGATE_LOG_MULTISIG_VOTE;
+                locals.logger.gateId = input.gateId;
+                locals.logger.sender = qpi.invocator();
+                locals.logger.amount = locals.amount;
+                LOG_INFO(locals.logger);
+
+                // Check threshold
+                locals.gate = state.get()._gates.get(locals.slotIdx);
+                if (locals.msigCfg.approvalCount >= locals.msigCfg.required && locals.gate.currentBalance > 0)
+                {
+                    sint64 releaseAmount = (sint64)locals.gate.currentBalance;
+                    qpi.transfer(locals.gate.recipients.get(0), releaseAmount);
+                    locals.gate.totalForwarded += (uint64)releaseAmount;
+                    locals.gate.currentBalance = 0;
+                    state.mut()._gates.set(locals.slotIdx, locals.gate);
+
+                    locals.msigCfg.approvalBitmap = 0;
+                    locals.msigCfg.approvalCount = 0;
+                    locals.msigCfg.proposalActive = 0;
+                    state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigCfg);
+
+                    locals.logger._contractIndex = CONTRACT_INDEX;
+                    locals.logger._type = QUGATE_LOG_MULTISIG_EXECUTED;
+                    locals.logger.gateId = input.gateId;
+                    locals.logger.sender = qpi.invocator();
+                    locals.logger.amount = releaseAmount;
+                    LOG_INFO(locals.logger);
+                }
+            }
         }
     }
 
@@ -1851,17 +2120,34 @@ public:
         }
 
         // Clear inheritance config on close
-        if (locals.gate.mode == QUGATE_MODE_INHERITANCE)
+        if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
         {
-            locals.inhZeroCfg.thresholdEpochs = 0;
-            locals.inhZeroCfg.lastKeepAliveEpoch = 0;
-            locals.inhZeroCfg.payoutPercentPerEpoch = 0;
-            locals.inhZeroCfg.minimumBalance = 0;
-            locals.inhZeroCfg.active = 0;
-            locals.inhZeroCfg.triggered = 0;
-            locals.inhZeroCfg.triggerEpoch = 0;
-            state.mut()._inheritanceConfigs.set(locals.slotIdx, locals.inhZeroCfg);
-            state.mut()._inheritanceBeneficiaryCount.set(locals.slotIdx, 0);
+            locals.hbZeroCfg.thresholdEpochs = 0;
+            locals.hbZeroCfg.lastKeepAliveEpoch = 0;
+            locals.hbZeroCfg.payoutPercentPerEpoch = 0;
+            locals.hbZeroCfg.minimumBalance = 0;
+            locals.hbZeroCfg.active = 0;
+            locals.hbZeroCfg.triggered = 0;
+            locals.hbZeroCfg.triggerEpoch = 0;
+            state.mut()._heartbeatConfigs.set(locals.slotIdx, locals.hbZeroCfg);
+            state.mut()._heartbeatBeneficiaryCount.set(locals.slotIdx, 0);
+        }
+
+        // Clear multisig config on close
+        if (locals.gate.mode == QUGATE_MODE_MULTISIG)
+        {
+            for (uint8 _ci = 0; _ci < 8; _ci++)
+            {
+                locals.msigZeroCfg.guardians.set(_ci, id::zero());
+            }
+            locals.msigZeroCfg.guardianCount = 0;
+            locals.msigZeroCfg.required = 0;
+            locals.msigZeroCfg.proposalExpiryEpochs = 0;
+            locals.msigZeroCfg.approvalBitmap = 0;
+            locals.msigZeroCfg.approvalCount = 0;
+            locals.msigZeroCfg.proposalEpoch = 0;
+            locals.msigZeroCfg.proposalActive = 0;
+            state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigZeroCfg);
         }
 
         // Guard against double-close underflow
@@ -2645,10 +2931,10 @@ public:
     }
 
     // =============================================
-    // configureInheritance — set up dead man's switch on an INHERITANCE gate
+    // configureHeartbeat — set up dead man's switch on an INHERITANCE gate
     // =============================================
 
-    PUBLIC_PROCEDURE_WITH_LOCALS(configureInheritance)
+    PUBLIC_PROCEDURE_WITH_LOCALS(configureHeartbeat)
     {
         output.status = QUGATE_SUCCESS;
 
@@ -2697,19 +2983,19 @@ public:
             return;
         }
 
-        // Gate must be INHERITANCE mode
-        if (locals.gate.mode != QUGATE_MODE_INHERITANCE)
+        // Gate must be HEARTBEAT mode
+        if (locals.gate.mode != QUGATE_MODE_HEARTBEAT)
         {
-            output.status = QUGATE_INHERITANCE_NOT_ACTIVE;
+            output.status = QUGATE_HEARTBEAT_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
         }
 
         // Cannot reconfigure after trigger
-        if (state.get()._inheritanceConfigs.get(locals.slotIdx).triggered == 1)
+        if (state.get()._heartbeatConfigs.get(locals.slotIdx).triggered == 1)
         {
-            output.status = QUGATE_INHERITANCE_TRIGGERED;
+            output.status = QUGATE_HEARTBEAT_TRIGGERED;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
@@ -2718,7 +3004,7 @@ public:
         // Validate thresholdEpochs >= 1
         if (input.thresholdEpochs == 0)
         {
-            output.status = QUGATE_INVALID_INHERITANCE;
+            output.status = QUGATE_HEARTBEAT_INVALID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
@@ -2727,7 +3013,7 @@ public:
         // Validate payoutPercentPerEpoch 1-100
         if (input.payoutPercentPerEpoch == 0 || input.payoutPercentPerEpoch > 100)
         {
-            output.status = QUGATE_INVALID_INHERITANCE;
+            output.status = QUGATE_HEARTBEAT_INVALID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
@@ -2736,7 +3022,7 @@ public:
         // Validate beneficiary count
         if (input.beneficiaryCount == 0 || input.beneficiaryCount > 8)
         {
-            output.status = QUGATE_INVALID_INHERITANCE;
+            output.status = QUGATE_HEARTBEAT_INVALID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
@@ -2750,7 +3036,7 @@ public:
         }
         if (locals.shareSum != 100)
         {
-            output.status = QUGATE_INVALID_INHERITANCE;
+            output.status = QUGATE_HEARTBEAT_INVALID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
@@ -2764,10 +3050,10 @@ public:
         locals.cfg.active = 1;
         locals.cfg.triggered = 0;
         locals.cfg.triggerEpoch = 0;
-        state.mut()._inheritanceConfigs.set(locals.slotIdx, locals.cfg);
+        state.mut()._heartbeatConfigs.set(locals.slotIdx, locals.cfg);
 
         // Store beneficiaries
-        state.mut()._inheritanceBeneficiaryCount.set(locals.slotIdx, input.beneficiaryCount);
+        state.mut()._heartbeatBeneficiaryCount.set(locals.slotIdx, input.beneficiaryCount);
         for (locals.i = 0; locals.i < 8; locals.i++)
         {
             if (locals.i < input.beneficiaryCount)
@@ -2780,14 +3066,14 @@ public:
                 locals.bene.address = id::zero();
                 locals.bene.sharePercent = 0;
             }
-            state.mut()._inheritanceBeneficiaries.set(locals.slotIdx * 8 + locals.i, locals.bene);
+            state.mut()._heartbeatBeneficiaries.set(locals.slotIdx * 8 + locals.i, locals.bene);
         }
 
         // Update gate activity
         locals.gate.lastActivityEpoch = qpi.epoch();
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
-        locals.logger._type = QUGATE_LOG_INHERITANCE_CONFIGURED;
+        locals.logger._type = QUGATE_LOG_HEARTBEAT_CONFIGURED;
         LOG_INFO(locals.logger);
     }
 
@@ -2845,21 +3131,21 @@ public:
             return;
         }
 
-        // Gate must be INHERITANCE mode
-        if (locals.gate.mode != QUGATE_MODE_INHERITANCE)
+        // Gate must be HEARTBEAT mode
+        if (locals.gate.mode != QUGATE_MODE_HEARTBEAT)
         {
-            output.status = QUGATE_INHERITANCE_NOT_ACTIVE;
+            output.status = QUGATE_HEARTBEAT_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
         }
 
-        locals.cfg = state.get()._inheritanceConfigs.get(locals.slotIdx);
+        locals.cfg = state.get()._heartbeatConfigs.get(locals.slotIdx);
 
         // Inheritance must be configured (active)
         if (locals.cfg.active == 0)
         {
-            output.status = QUGATE_INHERITANCE_NOT_ACTIVE;
+            output.status = QUGATE_HEARTBEAT_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
@@ -2868,7 +3154,7 @@ public:
         // Cannot keepAlive after trigger
         if (locals.cfg.triggered == 1)
         {
-            output.status = QUGATE_INHERITANCE_TRIGGERED;
+            output.status = QUGATE_HEARTBEAT_TRIGGERED;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
@@ -2876,7 +3162,7 @@ public:
 
         // Reset the epoch counter
         locals.cfg.lastKeepAliveEpoch = (uint32)qpi.epoch();
-        state.mut()._inheritanceConfigs.set(locals.slotIdx, locals.cfg);
+        state.mut()._heartbeatConfigs.set(locals.slotIdx, locals.cfg);
 
         // Update gate activity
         locals.gate.lastActivityEpoch = qpi.epoch();
@@ -2884,16 +3170,16 @@ public:
 
         output.epochRecorded = locals.cfg.lastKeepAliveEpoch;
 
-        locals.logger._type = QUGATE_LOG_INHERITANCE_KEEPALIVE;
+        locals.logger._type = QUGATE_LOG_HEARTBEAT_PULSE;
         locals.logger.amount = locals.cfg.lastKeepAliveEpoch;
         LOG_INFO(locals.logger);
     }
 
     // =============================================
-    // getInheritance — read-only query for inheritance config
+    // getHeartbeat — read-only query for inheritance config
     // =============================================
 
-    PUBLIC_FUNCTION_WITH_LOCALS(getInheritance)
+    PUBLIC_FUNCTION_WITH_LOCALS(getHeartbeat)
     {
         output.active = 0;
         output.triggered = 0;
@@ -2916,12 +3202,12 @@ public:
         }
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
-        if (locals.gate.mode != QUGATE_MODE_INHERITANCE)
+        if (locals.gate.mode != QUGATE_MODE_HEARTBEAT)
         {
             return;
         }
 
-        locals.cfg = state.get()._inheritanceConfigs.get(locals.slotIdx);
+        locals.cfg = state.get()._heartbeatConfigs.get(locals.slotIdx);
         output.active = locals.cfg.active;
         output.triggered = locals.cfg.triggered;
         output.thresholdEpochs = locals.cfg.thresholdEpochs;
@@ -2930,13 +3216,189 @@ public:
         output.payoutPercentPerEpoch = locals.cfg.payoutPercentPerEpoch;
         output.minimumBalance = locals.cfg.minimumBalance;
 
-        output.beneficiaryCount = state.get()._inheritanceBeneficiaryCount.get(locals.slotIdx);
+        output.beneficiaryCount = state.get()._heartbeatBeneficiaryCount.get(locals.slotIdx);
         for (locals.i = 0; locals.i < 8; locals.i++)
         {
-            locals.bene = state.get()._inheritanceBeneficiaries.get(locals.slotIdx * 8 + locals.i);
+            locals.bene = state.get()._heartbeatBeneficiaries.get(locals.slotIdx * 8 + locals.i);
             output.beneficiaryAddresses.set(locals.i, locals.bene.address);
             output.beneficiaryShares.set(locals.i, locals.bene.sharePercent);
         }
+    }
+
+    // =============================================
+    // configureMultisig — set up M-of-N guardians on a MULTISIG gate
+    // =============================================
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(configureMultisig)
+    {
+        output.status = QUGATE_SUCCESS;
+
+        locals.logger._contractIndex = CONTRACT_INDEX;
+        locals.logger.sender = qpi.invocator();
+        locals.logger.gateId = input.gateId;
+        locals.logger.amount = 0;
+
+        // Refund any attached QU
+        if (qpi.invocationReward() > 0)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+        }
+
+        // Decode versioned gateId
+        locals.slotIdx = (uint64)input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (uint64)input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            output.status = QUGATE_INVALID_GATE_ID;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+
+        // Must be gate owner
+        if (locals.gate.owner != qpi.invocator())
+        {
+            output.status = QUGATE_UNAUTHORIZED;
+            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Gate must be active
+        if (locals.gate.active == 0)
+        {
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Gate must be MULTISIG mode
+        if (locals.gate.mode != QUGATE_MODE_MULTISIG)
+        {
+            output.status = QUGATE_MULTISIG_INVALID_CONFIG;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Validate guardianCount 1-8
+        if (input.guardianCount == 0 || input.guardianCount > 8)
+        {
+            output.status = QUGATE_MULTISIG_INVALID_CONFIG;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Validate required 1-guardianCount
+        if (input.required == 0 || input.required > input.guardianCount)
+        {
+            output.status = QUGATE_MULTISIG_INVALID_CONFIG;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Validate proposalExpiryEpochs >= 1
+        if (input.proposalExpiryEpochs == 0)
+        {
+            output.status = QUGATE_MULTISIG_INVALID_CONFIG;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Check for duplicate guardians
+        for (locals.i = 0; locals.i < input.guardianCount; locals.i++)
+        {
+            for (locals.j = locals.i + 1; locals.j < input.guardianCount; locals.j++)
+            {
+                if (input.guardians.get(locals.i) == input.guardians.get(locals.j))
+                {
+                    output.status = QUGATE_MULTISIG_INVALID_CONFIG;
+                    locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+                    LOG_WARNING(locals.logger);
+                    return;
+                }
+            }
+        }
+
+        // Store config, reset any active proposal
+        for (uint8 _gi = 0; _gi < 8; _gi++)
+        {
+            if (_gi < input.guardianCount)
+            {
+                locals.cfg.guardians.set(_gi, input.guardians.get(_gi));
+            }
+            else
+            {
+                locals.cfg.guardians.set(_gi, id::zero());
+            }
+        }
+        locals.cfg.guardianCount = input.guardianCount;
+        locals.cfg.required = input.required;
+        locals.cfg.proposalExpiryEpochs = input.proposalExpiryEpochs;
+        locals.cfg.approvalBitmap = 0;
+        locals.cfg.approvalCount = 0;
+        locals.cfg.proposalEpoch = 0;
+        locals.cfg.proposalActive = 0;
+        state.mut()._multisigConfigs.set(locals.slotIdx, locals.cfg);
+
+        // Update gate activity
+        locals.gate.lastActivityEpoch = qpi.epoch();
+        state.mut()._gates.set(locals.slotIdx, locals.gate);
+
+        locals.logger._type = QUGATE_LOG_MULTISIG_CONFIGURED;
+        LOG_INFO(locals.logger);
+    }
+
+    // =============================================
+    // getMultisigState — read-only query for multisig proposal state
+    // =============================================
+
+    PUBLIC_FUNCTION_WITH_LOCALS(getMultisigState)
+    {
+        output.status = QUGATE_MULTISIG_NO_ACTIVE_PROP;
+        output.approvalBitmap = 0;
+        output.approvalCount = 0;
+        output.required = 0;
+        output.guardianCount = 0;
+        output.proposalEpoch = 0;
+        output.proposalActive = 0;
+
+        // Decode versioned gateId
+        locals.slotIdx = (uint64)input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (uint64)input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            output.status = QUGATE_INVALID_GATE_ID;
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+        if (locals.gate.mode != QUGATE_MODE_MULTISIG)
+        {
+            output.status = QUGATE_MULTISIG_INVALID_CONFIG;
+            return;
+        }
+
+        locals.cfg = state.get()._multisigConfigs.get(locals.slotIdx);
+        output.status = QUGATE_SUCCESS;
+        output.approvalBitmap = locals.cfg.approvalBitmap;
+        output.approvalCount = locals.cfg.approvalCount;
+        output.required = locals.cfg.required;
+        output.guardianCount = locals.cfg.guardianCount;
+        output.proposalEpoch = locals.cfg.proposalEpoch;
+        output.proposalActive = locals.cfg.proposalActive;
     }
 
     // =============================================
@@ -2945,7 +3407,7 @@ public:
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
     {
-        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureInheritance 14=keepAlive 15=getInheritance
+        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=keepAlive 15=getHeartbeat 16=configureMultisig 17=getMultisigState
         REGISTER_USER_PROCEDURE(createGate, 1);
         REGISTER_USER_PROCEDURE(sendToGate, 2);
         REGISTER_USER_PROCEDURE(closeGate, 3);
@@ -2958,9 +3420,11 @@ public:
         REGISTER_USER_PROCEDURE(fundGate, 10);
         REGISTER_USER_PROCEDURE(setChain, 11);
         REGISTER_USER_PROCEDURE(sendToGateVerified, 12);
-        REGISTER_USER_PROCEDURE(configureInheritance, 13);
+        REGISTER_USER_PROCEDURE(configureHeartbeat, 13);
         REGISTER_USER_PROCEDURE(keepAlive, 14);
-        REGISTER_USER_FUNCTION(getInheritance, 15);
+        REGISTER_USER_FUNCTION(getHeartbeat, 15);
+        REGISTER_USER_PROCEDURE(configureMultisig, 16);
+        REGISTER_USER_FUNCTION(getMultisigState, 17);
         REGISTER_USER_PROCEDURE_NOTIFICATION(OraclePriceNotification);
     }
 
@@ -3109,12 +3573,12 @@ public:
             locals.gate = state.get()._gates.get(locals.i);
 
             // Skip non-INHERITANCE gates and inactive gates
-            if (locals.gate.active == 0 || locals.gate.mode != QUGATE_MODE_INHERITANCE)
+            if (locals.gate.active == 0 || locals.gate.mode != QUGATE_MODE_HEARTBEAT)
             {
                 continue;
             }
 
-            locals.inhCfg = state.get()._inheritanceConfigs.get(locals.i);
+            locals.inhCfg = state.get()._heartbeatConfigs.get(locals.i);
 
             // Skip if inheritance not yet configured
             if (locals.inhCfg.active == 0)
@@ -3131,18 +3595,18 @@ public:
                     locals.inhPayoutTotal = locals.inhBalance * (sint64)locals.inhCfg.payoutPercentPerEpoch / 100;
                     if (locals.inhPayoutTotal > 0)
                     {
-                        locals.inhBeneCount = state.get()._inheritanceBeneficiaryCount.get(locals.i);
+                        locals.inhBeneCount = state.get()._heartbeatBeneficiaryCount.get(locals.i);
 
                         for (locals.inhJ = 0; locals.inhJ < locals.inhBeneCount; locals.inhJ++)
                         {
-                            locals.inhBene = state.get()._inheritanceBeneficiaries.get(locals.i * 8 + locals.inhJ);
+                            locals.inhBene = state.get()._heartbeatBeneficiaries.get(locals.i * 8 + locals.inhJ);
                             if (locals.inhJ == locals.inhBeneCount - 1)
                             {
                                 // Last beneficiary gets remainder to avoid dust from rounding
                                 locals.inhPriorSum = 0;
                                 for (locals.inhK = 0; locals.inhK < locals.inhJ; locals.inhK++)
                                 {
-                                    locals.inhPriorBene = state.get()._inheritanceBeneficiaries.get(locals.i * 8 + locals.inhK);
+                                    locals.inhPriorBene = state.get()._heartbeatBeneficiaries.get(locals.i * 8 + locals.inhK);
                                     locals.inhPriorSum += locals.inhPayoutTotal * (sint64)locals.inhPriorBene.sharePercent / 100;
                                 }
                                 locals.inhShare = locals.inhPayoutTotal - locals.inhPriorSum;
@@ -3164,7 +3628,7 @@ public:
 
                         // Log payout
                         locals.logger._contractIndex = CONTRACT_INDEX;
-                        locals.logger._type = QUGATE_LOG_INHERITANCE_PAYOUT;
+                        locals.logger._type = QUGATE_LOG_HEARTBEAT_PAYOUT;
                         locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
                         locals.logger.sender = locals.gate.owner;
                         locals.logger.amount = locals.inhPayoutTotal;
@@ -3209,15 +3673,46 @@ public:
                     // Trigger inheritance!
                     locals.inhCfg.triggered = 1;
                     locals.inhCfg.triggerEpoch = (uint32)qpi.epoch();
-                    state.mut()._inheritanceConfigs.set(locals.i, locals.inhCfg);
+                    state.mut()._heartbeatConfigs.set(locals.i, locals.inhCfg);
 
                     locals.logger._contractIndex = CONTRACT_INDEX;
-                    locals.logger._type = QUGATE_LOG_INHERITANCE_TRIGGERED;
+                    locals.logger._type = QUGATE_LOG_HEARTBEAT_TRIGGERED;
                     locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
                     locals.logger.sender = locals.gate.owner;
                     locals.logger.amount = (sint64)locals.gate.currentBalance;
                     LOG_INFO(locals.logger);
                 }
+            }
+        }
+
+        // =============================================
+        // Multisig gate processing — expire stale proposals
+        // =============================================
+        for (locals.i = 0; locals.i < state.get()._gateCount; locals.i++)
+        {
+            locals.gate = state.get()._gates.get(locals.i);
+
+            if (locals.gate.active == 0 || locals.gate.mode != QUGATE_MODE_MULTISIG)
+            {
+                continue;
+            }
+
+            locals.msigCfg = state.get()._multisigConfigs.get(locals.i);
+
+            if (locals.msigCfg.proposalActive == 1
+                && (uint32)qpi.epoch() - locals.msigCfg.proposalEpoch > locals.msigCfg.proposalExpiryEpochs)
+            {
+                locals.msigCfg.approvalBitmap = 0;
+                locals.msigCfg.approvalCount = 0;
+                locals.msigCfg.proposalActive = 0;
+                state.mut()._multisigConfigs.set(locals.i, locals.msigCfg);
+
+                locals.logger._contractIndex = CONTRACT_INDEX;
+                locals.logger._type = QUGATE_LOG_MULTISIG_EXPIRED;
+                locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+                locals.logger.sender = locals.gate.owner;
+                locals.logger.amount = 0;
+                LOG_INFO(locals.logger);
             }
         }
     }
