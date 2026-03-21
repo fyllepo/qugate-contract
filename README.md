@@ -158,6 +158,59 @@ A heartbeat gate holds funds and distributes them to beneficiaries if the owner 
 - **Recurring payments**: automated salary/allowance that continues until cancelled
 - **Deadlines**: release funds to counterparty if action not taken within N epochs
 
+### Worked Example: Crypto inheritance
+
+**Scenario:** You want your QU to go to family if you stop checking in for 8 weeks.
+
+**Step 1: Create the gate**
+```
+createGate(mode=6, recipients=[], ratios=[])
+→ Returns gateId (e.g. 4294967296)
+```
+
+**Step 2: Fund it**
+```
+Send QU to the gate address: YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME
+```
+
+**Step 3: Configure**
+```
+configureHeartbeat(
+  gateId: 4294967296,
+  thresholdEpochs: 8,          // trigger after 8 missed epochs (~8 weeks)
+  payoutPercentPerEpoch: 25,   // pay 25% of remaining balance each epoch
+  minimumBalance: 1000000,     // stop when < 1M QU remains
+  beneficiaries: [
+    { address: WALLET_A, sharePercent: 60 },
+    { address: WALLET_B, sharePercent: 40 }
+  ]
+)
+```
+
+**Step 4: Keep alive (automate this)**
+```
+heartbeat(gateId: 4294967296)
+→ Call monthly. Miss 8 epochs → gate triggers automatically.
+```
+
+**What happens when triggered:**
+- Epoch 1 post-trigger: 25% of balance → 60/40 split to WALLET_A / WALLET_B
+- Epoch 2: another 25% of remaining
+- Continues until balance < 1,000,000 QU
+- Gate auto-closes
+
+**Chained with MULTISIG (guardians can update beneficiaries):**
+```
+createGate(mode=7)  → MULTISIG gate (gateId: 4294967297)
+configureMultisig(
+  gateId: 4294967297,
+  guardians: [GUARDIAN_1, GUARDIAN_2, GUARDIAN_3],
+  required: 2,
+  proposalExpiryEpochs: 4
+)
+// 2-of-3 guardians vote → can update the HEARTBEAT gate's beneficiaries
+```
+
 ### Error codes
 | Code | Meaning |
 |------|---------|
@@ -201,6 +254,42 @@ A multisig gate holds funds until M-of-N designated guardians send approval tran
 - **DAO treasury**: 3-of-5 committee members approve disbursements
 - **Escrow**: buyer + arbitrator both must sign off
 - **Inheritance config**: 2-of-3 guardians can update beneficiaries
+
+### Worked Example: DAO treasury payment
+
+**Scenario:** 3 committee members must approve any payment from the treasury.
+
+**Step 1: Create and configure**
+```
+createGate(mode=7, recipients=[TREASURY_TARGET], ratios=[100])
+configureMultisig(
+  gateId: ...,
+  guardians: [MEMBER_1, MEMBER_2, MEMBER_3],
+  required: 2,                    // 2-of-3 required
+  proposalExpiryEpochs: 8         // proposal lapses after 8 epochs if not completed
+)
+```
+
+**Step 2: Fund it**
+```
+Send 500,000 QU to the gate address
+```
+
+**Step 3: Vote**
+```
+// Member 1 sends 1 QU to the gate → registers vote
+// Member 2 sends 1 QU to the gate → 2nd vote, threshold met
+// → Gate releases 500,000 QU to TREASURY_TARGET
+// → Vote bitmap resets, ready for next proposal
+```
+
+**What happens with an expired proposal:**
+```
+// Member 1 votes at epoch 100
+// No second vote by epoch 108 (proposalExpiryEpochs=8)
+// → Proposal resets automatically at epoch boundary
+// → Funds remain in gate, ready for a new proposal
+```
 
 ### Error codes
 | Code | Meaning |
@@ -258,6 +347,28 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 ---
 
 ## Contract Interface
+
+### Procedure Index
+
+| # | Name | Type | Description |
+|---|------|------|-------------|
+| 1 | createGate | PUBLIC_PROCEDURE | Create a new gate (fee required) |
+| 2 | sendToGate | PUBLIC_PROCEDURE | Send QU through a gate |
+| 3 | closeGate | PUBLIC_PROCEDURE | Close a gate (owner only) |
+| 4 | updateGate | PUBLIC_PROCEDURE | Update gate recipients/ratios/config (owner only) |
+| 5 | getGate | PUBLIC_FUNCTION | Query full gate state and statistics |
+| 6 | getGateCount | PUBLIC_FUNCTION | Query total/active gate counts and total burned |
+| 7 | getGatesByOwner | PUBLIC_FUNCTION | List gate IDs owned by an address |
+| 8 | getGateBatch | PUBLIC_FUNCTION | Batch query up to 32 gates by ID |
+| 9 | getFees | PUBLIC_FUNCTION | Query current fee parameters |
+| 10 | fundGate | PUBLIC_PROCEDURE | Add QU to oracle or chain reserve |
+| 11 | setChain | PUBLIC_PROCEDURE | Set or clear a chain link (owner only) |
+| 12 | sendToGateVerified | PUBLIC_PROCEDURE | Like sendToGate, but verifies gate owner before routing |
+| 13 | configureHeartbeat | PUBLIC_PROCEDURE | Configure HEARTBEAT gate params and beneficiaries |
+| 14 | heartbeat | PUBLIC_PROCEDURE | Reset epoch counter (keep-alive signal) |
+| 15 | getHeartbeat | PUBLIC_FUNCTION | Query HEARTBEAT gate state |
+| 16 | configureMultisig | PUBLIC_PROCEDURE | Configure MULTISIG gate guardians and threshold |
+| 17 | getMultisigState | PUBLIC_FUNCTION | Query current approval state |
 
 ### Procedures (State-Changing)
 
