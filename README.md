@@ -32,7 +32,7 @@ QuGate is a **network primitive** — shared, permissionless payment routing inf
 
 ## Overview
 
-QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of six modes (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, ORACLE). Gates are composable: the output of one gate can be forwarded into another, enabling multi-stage payment pipelines without writing custom contracts.
+QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of eight modes (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, ORACLE, HEARTBEAT, MULTISIG). Gates are composable: the output of one gate can be forwarded into another, enabling multi-stage payment pipelines without writing custom contracts.
 
 Gate-to-gate forwarding can happen in two ways:
 1. **Manual forwarding**: An external actor (client app, bot) calls sendToGate on the next gate.
@@ -53,6 +53,17 @@ Gate-to-gate forwarding can happen in two ways:
 ---
 
 ## Gate Modes
+
+| Mode | Constant | Value | Description |
+|------|----------|-------|-------------|
+| SPLIT | `QUGATE_MODE_SPLIT` | 0 | Proportional distribution to N recipients |
+| ROUND_ROBIN | `QUGATE_MODE_ROUND_ROBIN` | 1 | Rotating distribution, one recipient per payment |
+| THRESHOLD | `QUGATE_MODE_THRESHOLD` | 2 | Accumulate until threshold reached, then forward |
+| RANDOM | `QUGATE_MODE_RANDOM` | 3 | Probabilistic selection per payment |
+| CONDITIONAL | `QUGATE_MODE_CONDITIONAL` | 4 | Sender-restricted forwarding (whitelist) |
+| ORACLE | `QUGATE_MODE_ORACLE` | 5 | Oracle-triggered distribution on price/time condition |
+| HEARTBEAT | `QUGATE_MODE_HEARTBEAT` | 6 | Dead-man's switch: distribute if owner goes silent |
+| MULTISIG | `QUGATE_MODE_MULTISIG` | 7 | M-of-N guardian approval before funds release |
 
 ### QUGATE_MODE_SPLIT (0) — Proportional Distribution
 
@@ -116,6 +127,88 @@ Accumulates incoming QU in `currentBalance`. An oracle subscription fires each e
 **Oracle reserve**: The gate maintains an `oracleReserve` (QU) to pay the per-epoch subscription fee (10,000 QU). When the reserve is exhausted, the subscription lapses until re-funded via `fundGate`. Excess QU sent at creation (above the creation fee) is deposited into the oracle reserve.
 
 **Validation**: `oracleCondition` must be 0-2. `oracleThreshold` must be > 0. `oracleTriggerMode` must be 0 or 1.
+
+---
+
+## HEARTBEAT Gate (Mode 6)
+
+A heartbeat gate holds funds and distributes them to beneficiaries if the owner stops sending periodic `heartbeat()` signals. Ideal for dead man's switch, inheritance, or automated recurring distributions.
+
+### Setup
+1. Create a gate with `mode=6`
+2. Call `configureHeartbeat()` with threshold, payout percent, and beneficiaries
+3. Call `heartbeat()` periodically to keep the gate dormant
+4. If `thresholdEpochs` pass without a heartbeat, the gate triggers
+
+### Parameters
+| Field | Description |
+|-------|-------------|
+| thresholdEpochs | Epochs of inactivity before trigger (min 1, ~1 epoch/week) |
+| payoutPercentPerEpoch | % of balance distributed each epoch after trigger (1-100) |
+| minimumBalance | Gate auto-closes when balance drops below this amount |
+| beneficiaries | Up to 8 addresses with sharePercent summing to 100 |
+
+### Procedures
+- `configureHeartbeat(gateId, thresholdEpochs, payoutPercent, minimumBalance, beneficiaries[])` — owner only
+- `heartbeat(gateId)` — owner only, resets epoch counter. Rejected after trigger.
+- `getHeartbeat(gateId)` — read-only query
+
+### Example use cases
+- **Inheritance**: distribute crypto estate to family after inactivity
+- **Recurring payments**: automated salary/allowance that continues until cancelled
+- **Deadlines**: release funds to counterparty if action not taken within N epochs
+
+### Error codes
+| Code | Meaning |
+|------|---------|
+| QUGATE_HEARTBEAT_TRIGGERED (-16) | heartbeat() called after gate already triggered |
+| QUGATE_HEARTBEAT_NOT_ACTIVE (-17) | Gate not configured for heartbeat mode |
+| QUGATE_HEARTBEAT_INVALID (-18) | Invalid config (shares don't sum to 100, bad percent, etc) |
+
+---
+
+## MULTISIG Gate (Mode 7)
+
+A multisig gate holds funds until M-of-N designated guardians send approval transactions. When the threshold is reached, funds release to the target address. Proposals expire after a configurable number of epochs.
+
+### Setup
+1. Create a gate with `mode=7`
+2. Call `configureMultisig()` with guardian addresses, required count, and expiry
+3. Anyone can fund the gate by sending QU
+4. Guardians vote by sending any amount to the gate address
+5. When M guardians have voted, funds release to `recipients[0]`
+
+### Parameters
+| Field | Description |
+|-------|-------------|
+| guardians | Up to 8 wallet addresses authorised to vote |
+| required | Minimum approvals needed (M of N) |
+| proposalExpiryEpochs | Epochs before an incomplete proposal resets |
+
+### Procedures
+- `configureMultisig(gateId, guardians[], required, expiryEpochs)` — owner only
+- `getMultisigState(gateId)` — read-only: returns approvalBitmap, count, proposalEpoch
+
+### Voting mechanics
+- Any address can send QU to fund the gate
+- Only guardians' transactions count as votes
+- Bitmap tracks which guardians have voted (prevents double-voting)
+- Incomplete proposals reset after `proposalExpiryEpochs`
+- Once threshold met: full balance transfers to target, votes reset
+
+### Example use cases
+- **Joint accounts**: 1-of-2 partners can authorise a payment
+- **DAO treasury**: 3-of-5 committee members approve disbursements
+- **Escrow**: buyer + arbitrator both must sign off
+- **Inheritance config**: 2-of-3 guardians can update beneficiaries
+
+### Error codes
+| Code | Meaning |
+|------|---------|
+| QUGATE_MULTISIG_NOT_GUARDIAN (-19) | Sender is not in guardian list |
+| QUGATE_MULTISIG_ALREADY_VOTED (-20) | Guardian already voted this proposal |
+| QUGATE_MULTISIG_INVALID_CONFIG (-21) | Invalid config (0 guardians, required > count, etc) |
+| QUGATE_MULTISIG_NO_ACTIVE_PROP (-22) | No active proposal to query |
 
 ---
 
@@ -395,6 +488,89 @@ Like `sendToGate`, but additionally asserts that `gate.owner == expectedOwner` b
 
 **Behaviour**: Identical to `sendToGate` except for the owner check. Returns `QUGATE_OWNER_MISMATCH` (-15) with full refund if `gate.owner != expectedOwner`. All other validation, dust burn, and routing logic is the same as `sendToGate`.
 
+#### configureHeartbeat (Input Type 13)
+
+Configures heartbeat mode on a HEARTBEAT gate. Owner only. Sets the inactivity threshold, payout rate, minimum balance, and beneficiary list. Cannot be called after the gate has triggered.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | uint64 | 8 | Target HEARTBEAT gate ID |
+| thresholdEpochs | uint32 | 4 | Epochs of inactivity before trigger (>= 1) |
+| payoutPercentPerEpoch | uint8 | 1 | % of balance to pay per epoch after trigger (1-100) |
+| minimumBalance | sint64 | 8 | Gate auto-closes when balance falls to or below this |
+| beneficiaryAddresses | Array\<id, 8\> | 256 | Beneficiary public keys |
+| beneficiaryShares | Array\<uint8, 8\> | 8 | Share per beneficiary (must sum to 100) |
+| beneficiaryCount | uint8 | 1 | Number of beneficiaries (1-8) |
+
+**Output**: `status` (sint64)
+
+#### heartbeat (Input Type 14)
+
+Resets the heartbeat epoch counter. Owner only. Rejected after the gate has triggered. Attach any QU — it is refunded.
+
+**Input**: `gateId` (uint64)
+
+**Output**: `status` (sint64), `epochRecorded` (uint32)
+
+#### getHeartbeat (Input Type 15)
+
+Read-only query for heartbeat configuration and state.
+
+**Input**: `gateId` (uint64)
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| active | uint8 | 1 if heartbeat is configured |
+| triggered | uint8 | 1 if the gate has triggered |
+| thresholdEpochs | uint32 | Inactivity threshold |
+| lastHeartbeatEpoch | uint32 | Epoch of last heartbeat() call |
+| triggerEpoch | uint32 | Epoch when gate triggered (0 if not yet triggered) |
+| payoutPercentPerEpoch | uint8 | Payout rate per epoch |
+| minimumBalance | sint64 | Auto-close threshold |
+| beneficiaryCount | uint8 | Number of beneficiaries |
+| beneficiaryAddresses | Array\<id, 8\> | Beneficiary addresses |
+| beneficiaryShares | Array\<uint8, 8\> | Beneficiary share percentages |
+
+#### configureMultisig (Input Type 16)
+
+Configures M-of-N guardian approval on a MULTISIG gate. Owner only. Resets any active proposal.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | uint32 | 4 | Target MULTISIG gate ID |
+| guardians | Array\<id, 8\> | 256 | Guardian public keys |
+| guardianCount | uint8 | 1 | Number of guardians (1-8) |
+| required | uint8 | 1 | Minimum approvals needed (1-guardianCount) |
+| proposalExpiryEpochs | uint32 | 4 | Epochs before incomplete proposal resets (>= 1) |
+
+**Output**: `status` (sint64)
+
+**Validation**: No duplicate guardians. `required <= guardianCount`. `proposalExpiryEpochs >= 1`.
+
+#### getMultisigState (Input Type 17)
+
+Read-only query for current multisig proposal state.
+
+**Input**: `gateId` (uint32)
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| status | sint64 | 0 on success, negative on error |
+| approvalBitmap | uint8 | Bitmask of guardians who have voted (bit i = guardian i) |
+| approvalCount | uint8 | Current vote count |
+| required | uint8 | Threshold needed for execution |
+| guardianCount | uint8 | Total number of guardians |
+| proposalEpoch | uint32 | Epoch when current proposal started |
+| proposalActive | uint8 | 1 if a proposal is in progress |
+
 ---
 
 ## Wire Format
@@ -651,6 +827,13 @@ The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_
 | -13 | `QUGATE_INVALID_ORACLE_CONFIG` | Invalid oracle condition, threshold, or trigger mode |
 | -14 | `QUGATE_INVALID_CHAIN` | Chain target invalid, depth exceeded, or cycle detected |
 | -15 | `QUGATE_OWNER_MISMATCH` | gate.owner != expectedOwner in sendToGateVerified |
+| -16 | `QUGATE_HEARTBEAT_TRIGGERED` | heartbeat() called after gate already triggered |
+| -17 | `QUGATE_HEARTBEAT_NOT_ACTIVE` | heartbeat() or configureHeartbeat() on non-HEARTBEAT gate |
+| -18 | `QUGATE_HEARTBEAT_INVALID` | Invalid heartbeat config (bad shares, percent, threshold) |
+| -19 | `QUGATE_MULTISIG_NOT_GUARDIAN` | Sender is not in the guardian list |
+| -20 | `QUGATE_MULTISIG_ALREADY_VOTED` | Guardian already voted on the current proposal |
+| -21 | `QUGATE_MULTISIG_INVALID_CONFIG` | Invalid config (0 guardians, required > count, etc) |
+| -22 | `QUGATE_MULTISIG_NO_ACTIVE_PROP` | No active multisig proposal to query |
 
 ---
 
@@ -674,6 +857,14 @@ The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_
 | 12 | `QUGATE_LOG_CHAIN_HOP` | Chain hop executed — funds routed to next gate |
 | 13 | `QUGATE_LOG_CHAIN_CYCLE` | Chain cycle detected or max depth exceeded |
 | 14 | `QUGATE_LOG_CHAIN_HOP_INSUFFICIENT` | Hop fee not payable; funds stranded in currentBalance |
+| 15 | `QUGATE_LOG_HEARTBEAT_CONFIGURED` | configureHeartbeat() called successfully |
+| 16 | `QUGATE_LOG_HEARTBEAT_PULSE` | heartbeat() called, epoch counter reset |
+| 17 | `QUGATE_LOG_HEARTBEAT_TRIGGERED` | Threshold exceeded, heartbeat gate triggered |
+| 18 | `QUGATE_LOG_HEARTBEAT_PAYOUT` | Recurring payout dispatched to beneficiaries |
+| 19 | `QUGATE_LOG_MULTISIG_VOTE` | Guardian voted on active proposal |
+| 20 | `QUGATE_LOG_MULTISIG_EXECUTED` | M-of-N threshold reached, funds released |
+| 21 | `QUGATE_LOG_MULTISIG_EXPIRED` | Proposal expired without reaching threshold |
+| 22 | `QUGATE_LOG_MULTISIG_CONFIGURED` | configureMultisig() called successfully |
 
 ### Failure Events (high range)
 

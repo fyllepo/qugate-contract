@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-QuGate — All 5 Gate Modes Test
+QuGate — All 7 Gate Modes Test
 
-Tests: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL
+Tests: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG
 Plus: updateGate, closeGate, non-owner rejection
 """
 import os
@@ -32,6 +32,9 @@ MODE_ROUND_ROBIN = 1
 MODE_THRESHOLD = 2
 MODE_RANDOM = 3
 MODE_CONDITIONAL = 4
+MODE_ORACLE = 5
+MODE_HEARTBEAT = 6
+MODE_MULTISIG = 7
 
 PROC_CREATE = 1
 PROC_SEND = 2
@@ -40,6 +43,11 @@ PROC_UPDATE = 4
 FUNC_GET_GATE = 5
 FUNC_GET_COUNT = 6
 FUNC_GET_FEES = 9
+PROC_CONFIGURE_HEARTBEAT = 13
+PROC_HEARTBEAT = 14
+FUNC_GET_HEARTBEAT = 15
+PROC_CONFIGURE_MULTISIG = 16
+FUNC_GET_MULTISIG_STATE = 17
 
 # Versioned gate ID encoding
 GATE_ID_SLOT_BITS = 20
@@ -455,6 +463,199 @@ wait()
 s1 = get_balance(ADDR_B) - bal1_before
 s2 = get_balance(ADDR_C) - bal2_before
 check("Send to closed gate rejected", s1 == 0 and s2 == 0, f"got {s1}/{s2}")
+
+# ============================================================
+# ============================================================
+# TEST 8: HEARTBEAT gate — create, configure, pulse, fund
+# (Epoch-triggered payouts require epoch advancement; we test
+#  the creation, configuration, and heartbeat() procedure only.)
+# ============================================================
+print()
+print("─" * 60)
+print("TEST 8: HEARTBEAT gate (mode=6) — create, configure, heartbeat()")
+print("─" * 60)
+
+before_total8, _ = query_count()
+hb_data = build_create(MODE_HEARTBEAT, [PK_B], [1])
+send_tx(ADDR_A_KEY, PROC_CREATE, CREATION_FEE, hb_data)
+wait()
+
+total8, _ = query_count()
+hb_id = encode_gate_id(total8 - 1)
+hb_gate = query_gate(hb_id)
+check("HEARTBEAT gate created", hb_gate['active'] == 1 and hb_gate['mode'] == MODE_HEARTBEAT,
+      f"id={hb_id}, mode={hb_gate['mode']}")
+
+# configureHeartbeat: threshold=3 epochs, payout=25%, min_balance=5000, beneficiaries B(60)/C(40)
+cfg_hb = bytearray()
+cfg_hb += struct.pack('<Q', hb_id)       # gateId
+cfg_hb += struct.pack('<I', 3)            # thresholdEpochs
+cfg_hb += struct.pack('<B', 25)           # payoutPercentPerEpoch
+cfg_hb += struct.pack('<q', 5000)         # minimumBalance
+for i in range(8):                        # beneficiaryAddresses[8]
+    cfg_hb += [PK_B, PK_C][i] if i < 2 else bytes(32)
+for i in range(8):                        # beneficiaryShares[8]
+    cfg_hb += struct.pack('<B', [60, 40, 0, 0, 0, 0, 0, 0][i])
+cfg_hb += struct.pack('<B', 2)            # beneficiaryCount
+send_tx(ADDR_A_KEY, PROC_CONFIGURE_HEARTBEAT, 0, bytes(cfg_hb))
+wait()
+
+# Query heartbeat state via getHeartbeat
+hb_resp = requests.post(f"{RPC}/live/v1/querySmartContract", json={
+    'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_HEARTBEAT, 'inputSize': 8,
+    'requestData': base64.b64encode(struct.pack('<Q', hb_id)).decode()
+}, timeout=5).json()
+hb_b = base64.b64decode(hb_resp['responseData'])
+hb_active = hb_b[0]
+hb_triggered = hb_b[1]
+hb_threshold = struct.unpack_from('<I', hb_b, 2)[0]
+hb_pct = hb_b[14]
+hb_bene_count = hb_b[23]
+check("configureHeartbeat stored",
+      hb_active == 1 and hb_threshold == 3 and hb_pct == 25,
+      f"active={hb_active}, threshold={hb_threshold}, pct={hb_pct}")
+check("Beneficiary count=2", hb_bene_count == 2, f"count={hb_bene_count}")
+check("Not triggered initially", hb_triggered == 0)
+
+# heartbeat() by owner — resets epoch counter
+send_tx(ADDR_A_KEY, PROC_HEARTBEAT, 0, struct.pack('<Q', hb_id))
+wait()
+
+hb_resp2 = requests.post(f"{RPC}/live/v1/querySmartContract", json={
+    'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_HEARTBEAT, 'inputSize': 8,
+    'requestData': base64.b64encode(struct.pack('<Q', hb_id)).decode()
+}, timeout=5).json()
+hb_b2 = base64.b64decode(hb_resp2['responseData'])
+check("heartbeat() accepted", hb_b2[1] == 0, f"still not triggered")
+
+# heartbeat() by non-owner — rejected (epoch should not change)
+hb_last_before = struct.unpack_from('<I', hb_b2, 6)[0]
+send_tx(ADDR_B_KEY, PROC_HEARTBEAT, 0, struct.pack('<Q', hb_id))
+wait()
+
+hb_resp3 = requests.post(f"{RPC}/live/v1/querySmartContract", json={
+    'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_HEARTBEAT, 'inputSize': 8,
+    'requestData': base64.b64encode(struct.pack('<Q', hb_id)).decode()
+}, timeout=5).json()
+hb_b3 = base64.b64decode(hb_resp3['responseData'])
+hb_last_after = struct.unpack_from('<I', hb_b3, 6)[0]
+check("Non-owner heartbeat() rejected", hb_last_after == hb_last_before,
+      f"epoch unchanged={hb_last_before}")
+
+# Fund HEARTBEAT gate
+send_tx(ADDR_A_KEY, PROC_SEND, 500_000, struct.pack('<Q', hb_id))
+wait()
+hb_gate_funded = query_gate(hb_id)
+check("HEARTBEAT gate funded", hb_gate_funded['currentBalance'] == 500_000,
+      f"balance={hb_gate_funded['currentBalance']}")
+
+# ============================================================
+# TEST 9: MULTISIG gate — create, configure, vote, execute
+# ============================================================
+print()
+print("─" * 60)
+print("TEST 9: MULTISIG gate (mode=7) — create, configure, vote, release")
+print("─" * 60)
+
+before_total9, _ = query_count()
+ms_data = build_create(MODE_MULTISIG, [PK_B], [1])
+send_tx(ADDR_A_KEY, PROC_CREATE, CREATION_FEE, ms_data)
+wait()
+
+total9, _ = query_count()
+ms_id = encode_gate_id(total9 - 1)
+ms_gate = query_gate(ms_id)
+check("MULTISIG gate created", ms_gate['active'] == 1 and ms_gate['mode'] == MODE_MULTISIG,
+      f"id={ms_id}, mode={ms_gate['mode']}")
+
+# configureMultisig: 2 guardians (B, C), required=2, expiry=4 epochs
+cfg_ms = bytearray()
+cfg_ms += struct.pack('<I', ms_id & 0xFFFFFFFF)  # gateId (uint32)
+for i in range(8):                                 # guardians[8]
+    cfg_ms += [PK_B, PK_C][i] if i < 2 else bytes(32)
+cfg_ms += struct.pack('<B', 2)                     # guardianCount
+cfg_ms += struct.pack('<B', 2)                     # required
+cfg_ms += struct.pack('<I', 4)                     # proposalExpiryEpochs
+send_tx(ADDR_A_KEY, PROC_CONFIGURE_MULTISIG, 0, bytes(cfg_ms))
+wait()
+
+ms_state_resp = requests.post(f"{RPC}/live/v1/querySmartContract", json={
+    'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_MULTISIG_STATE, 'inputSize': 4,
+    'requestData': base64.b64encode(struct.pack('<I', ms_id & 0xFFFFFFFF)).decode()
+}, timeout=5).json()
+ms_b = base64.b64decode(ms_state_resp['responseData'])
+ms_status = struct.unpack_from('<q', ms_b, 0)[0]
+ms_guardian_count = ms_b[11]
+ms_required = ms_b[10]
+check("configureMultisig stored",
+      ms_status == 0 and ms_guardian_count == 2 and ms_required == 2,
+      f"status={ms_status}, guardians={ms_guardian_count}, required={ms_required}")
+check("No active proposal initially", ms_b[16] == 0)
+
+# Fund gate (non-guardian) — accumulates, no vote
+send_tx(ADDR_A_KEY, PROC_SEND, 300_000, struct.pack('<Q', ms_id))
+wait()
+
+ms_funded = query_gate(ms_id)
+check("MULTISIG gate funded", ms_funded['currentBalance'] >= 300_000,
+      f"balance={ms_funded['currentBalance']}")
+
+# Guardian B votes
+send_tx(ADDR_B_KEY, PROC_SEND, MIN_SEND, struct.pack('<Q', ms_id))
+wait()
+
+ms_v1_resp = requests.post(f"{RPC}/live/v1/querySmartContract", json={
+    'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_MULTISIG_STATE, 'inputSize': 4,
+    'requestData': base64.b64encode(struct.pack('<I', ms_id & 0xFFFFFFFF)).decode()
+}, timeout=5).json()
+ms_b1 = base64.b64decode(ms_v1_resp['responseData'])
+check("Guardian B vote registered (count=1)", ms_b1[9] == 1, f"count={ms_b1[9]}")
+check("Proposal active after vote 1", ms_b1[16] == 1, f"active={ms_b1[16]}")
+check("Funds NOT released yet (1/2)", query_gate(ms_id)['currentBalance'] > 0)
+
+# Guardian C votes — threshold met
+bal_b_ms_before = get_balance(ADDR_B)
+ms_bal_before_exec = query_gate(ms_id)['currentBalance']
+send_tx(ADDR_C_KEY, PROC_SEND, MIN_SEND, struct.pack('<Q', ms_id))
+wait()
+
+ms_v2_gate = query_gate(ms_id)
+bal_b_ms_after = get_balance(ADDR_B)
+ms_released = bal_b_ms_after - bal_b_ms_before
+check("Funds released to recipient[0] (B) after 2/2 votes",
+      ms_released >= ms_bal_before_exec - 10,
+      f"released={ms_released}, was={ms_bal_before_exec}")
+check("Gate balance cleared", ms_v2_gate['currentBalance'] < ms_bal_before_exec,
+      f"balance={ms_v2_gate['currentBalance']}")
+
+# Votes reset after execution
+ms_v2_resp = requests.post(f"{RPC}/live/v1/querySmartContract", json={
+    'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_MULTISIG_STATE, 'inputSize': 4,
+    'requestData': base64.b64encode(struct.pack('<I', ms_id & 0xFFFFFFFF)).decode()
+}, timeout=5).json()
+ms_b2 = base64.b64decode(ms_v2_resp['responseData'])
+check("Votes reset after execution", ms_b2[9] == 0 and ms_b2[16] == 0,
+      f"count={ms_b2[9]}, active={ms_b2[16]}")
+
+# Non-owner configureMultisig rejected
+bad_ms_cfg = bytearray()
+bad_ms_cfg += struct.pack('<I', ms_id & 0xFFFFFFFF)
+for i in range(8):
+    bad_ms_cfg += PK_A if i < 1 else bytes(32)
+bad_ms_cfg += struct.pack('<B', 1)
+bad_ms_cfg += struct.pack('<B', 1)
+bad_ms_cfg += struct.pack('<I', 1)
+send_tx(ADDR_B_KEY, PROC_CONFIGURE_MULTISIG, 0, bytes(bad_ms_cfg))
+wait()
+
+ms_after_bad = requests.post(f"{RPC}/live/v1/querySmartContract", json={
+    'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_MULTISIG_STATE, 'inputSize': 4,
+    'requestData': base64.b64encode(struct.pack('<I', ms_id & 0xFFFFFFFF)).decode()
+}, timeout=5).json()
+ms_bad_b = base64.b64decode(ms_after_bad['responseData'])
+check("Non-owner configureMultisig rejected",
+      ms_bad_b[11] == 2 and ms_bad_b[10] == 2,  # guardianCount and required unchanged
+      f"guardians={ms_bad_b[11]}, required={ms_bad_b[10]}")
 
 # ============================================================
 # SUMMARY
