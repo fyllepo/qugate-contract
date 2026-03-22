@@ -21,7 +21,7 @@ End-to-end tests that run against a live Qubic Core-Lite testnet node. Each scri
 
 | Script | What it tests |
 |--------|---------------|
-| `test_all_modes.py` | All 6 modes + updateGate + closeGate + access control |
+| `test_all_modes.py` | All 9 modes + updateGate + closeGate + access control + query output verification |
 | `test_stress_50gates.py` | 50-gate stress test across all modes + slot reuse |
 | `test_split.py` | SPLIT mode proportional distribution |
 | `test_round_robin.py` | ROUND_ROBIN cycling through recipients |
@@ -36,6 +36,8 @@ End-to-end tests that run against a live Qubic Core-Lite testnet node. Each scri
 | `test_chain.py` | Chain gates: automatic forwarding, hop fees, depth limits |
 | `test_testnet.py` | End-to-end testnet smoke test |
 | `test_verified.py` | sendToGateVerified: owner check, mismatch refund |
+| `test_heartbeat.py` | HEARTBEAT mode: create, configure, heartbeat(), trigger, payout |
+| `test_multisig.py` | MULTISIG mode: create, configure, vote, release, guardian identity verification |
 
 ## Running
 

@@ -116,7 +116,7 @@ def query_multisig_state(gate_id):
     """
     getMultisigState_output layout:
       status(8) approvalBitmap(1) approvalCount(1) required(1) guardianCount(1)
-      proposalEpoch(4) proposalActive(1)
+      proposalEpoch(4) proposalActive(1) guardians[8](256)
     """
     data = struct.pack('<I', gate_id & 0xFFFFFFFF)  # uint32 gateId
     resp = requests.post(f"{RPC}/live/v1/querySmartContract", json={
@@ -128,10 +128,17 @@ def query_multisig_state(gate_id):
     bitmap, count, required, guardian_count = b[8], b[9], b[10], b[11]
     proposal_epoch = struct.unpack_from('<I', b, 12)[0]
     proposal_active = b[16]
+    # Parse guardian public keys (Array<id, 8> starting after proposalActive)
+    guardians = []
+    guardian_offset = 17  # after proposalActive (byte 16)
+    for i in range(8):
+        pk = b[guardian_offset + i * 32 : guardian_offset + (i + 1) * 32]
+        guardians.append(pk)
     return {
         'status': status, 'approvalBitmap': bitmap, 'approvalCount': count,
         'required': required, 'guardianCount': guardian_count,
         'proposalEpoch': proposal_epoch, 'proposalActive': proposal_active,
+        'guardians': guardians,
     }
 
 
@@ -479,6 +486,17 @@ check("guardianCount=3", ms_state_final['guardianCount'] == 3,
       f"got={ms_state_final['guardianCount']}")
 check("required=2", ms_state_final['required'] == 2,
       f"got={ms_state_final['required']}")
+
+# Verify guardian identities are returned in getMultisigState response
+guardian_pks = ms_state_final['guardians']
+check("Guardian 0 matches PK_B", guardian_pks[0] == PK_B,
+      f"expected={PK_B[:8].hex()}..., got={guardian_pks[0][:8].hex()}...")
+check("Guardian 1 matches PK_C", guardian_pks[1] == PK_C,
+      f"expected={PK_C[:8].hex()}..., got={guardian_pks[1][:8].hex()}...")
+check("Guardian 2 matches PK_D", guardian_pks[2] == PK_D,
+      f"expected={PK_D[:8].hex()}..., got={guardian_pks[2][:8].hex()}...")
+# Remaining slots should be zeroed
+check("Guardian 3 is zero (unused slot)", guardian_pks[3] == bytes(32))
 
 # getMultisigState on invalid gate ID should return error
 invalid_id = 0xDEADBEEF

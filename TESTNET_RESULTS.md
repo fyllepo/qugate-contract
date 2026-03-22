@@ -60,7 +60,7 @@ Oracle mode (QUGATE_MODE_ORACLE=5), chain gates, versioned gate IDs, and sendToG
 # QuGate — HEARTBEAT + MULTISIG Build & Test Notes
 
 **Date:** 2026-03-21  
-**Contract:** QuGate.h (all 8 modes, contract index 25)
+**Contract:** QuGate.h (all 9 modes, contract index 25)
 
 ## Build Status
 
@@ -110,7 +110,7 @@ Test 8 requires epoch advancement. All other tests run immediately against a liv
 
 ## Updated test_all_modes.py
 
-`tests/test_all_modes.py` extended with Tests 8 (HEARTBEAT) and 9 (MULTISIG) — inline versions of the key paths from the dedicated test files. Covers: create, configure, heartbeat(), fund for HEARTBEAT; create, configure, fund (non-guardian), two guardian votes → release, vote reset, non-owner configure rejection for MULTISIG.
+`tests/test_all_modes.py` extended with Tests 8 (HEARTBEAT), 9 (MULTISIG), and 10 (TIME_LOCK) — inline versions of the key paths from the dedicated test files. Covers: create, configure, heartbeat(), fund for HEARTBEAT; create, configure, fund (non-guardian), two guardian votes → release, vote reset, non-owner configure rejection for MULTISIG; create, configure, fund, query state for TIME_LOCK. Query output fields (guardians, adminGateId, hasAdminGate) verified.
 
 ---
 
@@ -166,3 +166,36 @@ Full patch guide: see `QUGATE-TESTNET-NODE.md` in the openclaw workspace.
 | `tests/test_all_modes.py` | Extended with Tests 8 + 9 for HEARTBEAT and MULTISIG |
 | `README.md` | Added gate modes table, HEARTBEAT section, MULTISIG section, updated status codes, log types, and contract interface (indices 13-17) |
 | `TESTNET_RESULTS.md` | This section |
+
+---
+
+# QuGate — Query Output Fixes (PR #33 / #34)
+
+**Date:** 2026-03-22
+**Deployed to testnet:** Yes, state preserved (no clear needed)
+
+## Changes
+
+Query functions updated to return previously omitted fields:
+
+| Function | Field(s) Added | Type |
+|----------|---------------|------|
+| `getMultisigState` (17) | `guardians` | Array\<id, 8\> — guardian public keys from MultisigConfig |
+| `getGate` (5) | `adminGateId` | sint64 — versioned gate ID of admin gate (-1 if none) |
+| `getGate` (5) | `hasAdminGate` | uint8 — 1 if governed by admin gate |
+| `getAdminGate` (22) | `guardianCount` | uint8 — number of guardians on the admin gate |
+| `getAdminGate` (22) | `required` | uint8 — M-of-N threshold |
+| `getAdminGate` (22) | `guardians` | Array\<id, 8\> — guardian public keys from admin gate |
+
+## Impact
+
+- **getMultisigState**: Clients can now display which guardians are configured and map votes to identities without a separate query.
+- **getGate**: Clients can detect whether a gate is under MULTISIG governance and retrieve the admin gate ID in a single call.
+- **getAdminGate**: Returns full guardian info so clients can show who governs a gate without querying the admin gate's multisig state separately.
+- **Wire compatibility**: Output structs grew (new fields appended at end). Clients reading only the original prefix bytes are unaffected.
+
+## Test Coverage
+
+- `tests/test_multisig.py` — TEST 10 now verifies guardian public keys match configured values
+- `tests/test_all_modes.py` — TEST 10 (TIME_LOCK) verifies getGate returns adminGateId/hasAdminGate fields
+- `tests/README.md` — updated test table and mode count
