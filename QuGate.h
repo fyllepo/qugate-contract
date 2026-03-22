@@ -78,6 +78,7 @@ constexpr uint8 QUGATE_MODE_CONDITIONAL = 4;
 constexpr uint8 QUGATE_MODE_ORACLE = 5;
 constexpr uint8 QUGATE_MODE_HEARTBEAT = 6;  // Heartbeat gate — heartbeat() or epoch-triggered payout
 constexpr uint8 QUGATE_MODE_MULTISIG = 7;     // M-of-N guardian approval before funds release
+constexpr uint8 QUGATE_MODE_TIME_LOCK = 8;    // Hold funds until a target epoch, then release to recipient
 
 // Oracle condition types
 constexpr uint8 QUGATE_ORACLE_COND_PRICE_ABOVE = 0;
@@ -104,7 +105,7 @@ constexpr sint64 QUGATE_SUCCESS                = 0;   // Operation completed suc
 constexpr sint64 QUGATE_INVALID_GATE_ID        = -1;  // gateId is 0, exceeds gateCount, or wrong generation
 constexpr sint64 QUGATE_GATE_NOT_ACTIVE        = -2;  // Gate exists but has been closed or expired
 constexpr sint64 QUGATE_UNAUTHORIZED           = -3;  // Caller is not the gate owner
-constexpr sint64 QUGATE_INVALID_MODE           = -4;  // Mode value exceeds QUGATE_MODE_MULTISIG (7)
+constexpr sint64 QUGATE_INVALID_MODE           = -4;  // Mode value exceeds QUGATE_MODE_TIME_LOCK (8)
 constexpr sint64 QUGATE_INVALID_RECIPIENT_COUNT = -5; // recipientCount is 0 or exceeds QUGATE_MAX_RECIPIENTS
 constexpr sint64 QUGATE_INVALID_RATIO          = -6;  // Individual ratio exceeds QUGATE_MAX_RATIO, or total ratio is 0
 constexpr sint64 QUGATE_INSUFFICIENT_FEE       = -7;  // invocationReward < escalated creation fee
@@ -123,6 +124,9 @@ constexpr sint64 QUGATE_MULTISIG_NOT_GUARDIAN    = -19; // sender not in guardia
 constexpr sint64 QUGATE_MULTISIG_ALREADY_VOTED   = -20; // guardian already voted this proposal
 constexpr sint64 QUGATE_MULTISIG_INVALID_CONFIG  = -21; // bad guardians/required config
 constexpr sint64 QUGATE_MULTISIG_NO_ACTIVE_PROP  = -22; // no active proposal to query
+constexpr sint64 QUGATE_TIME_LOCK_ALREADY_FIRED   = -23; // gate already unlocked and closed
+constexpr sint64 QUGATE_TIME_LOCK_NOT_CANCELLABLE = -24; // cancelTimeLock() called but cancellable=0
+constexpr sint64 QUGATE_TIME_LOCK_EPOCH_PAST      = -25; // unlockEpoch is in the past at creation
 
 // Log type constants (positive = success events, high numbers = actions)
 constexpr uint32 QUGATE_LOG_GATE_CREATED = 1;
@@ -144,6 +148,9 @@ constexpr uint32 QUGATE_LOG_MULTISIG_VOTE       = 19; // guardian voted
 constexpr uint32 QUGATE_LOG_MULTISIG_EXECUTED   = 20; // threshold reached, funds released
 constexpr uint32 QUGATE_LOG_MULTISIG_EXPIRED    = 21; // proposal expired, reset
 constexpr uint32 QUGATE_LOG_MULTISIG_CONFIGURED = 22; // guardians/threshold updated
+constexpr uint32 QUGATE_LOG_TIME_LOCK_FIRED      = 23; // unlock epoch reached, funds released
+constexpr uint32 QUGATE_LOG_TIME_LOCK_CANCELLED  = 24; // owner cancelled, funds refunded
+constexpr uint32 QUGATE_LOG_TIME_LOCK_CONFIGURED = 25; // time lock created
 
 // Failure log types use high range
 constexpr uint32 QUGATE_LOG_FAIL_INVALID_GATE = 100;
@@ -197,6 +204,20 @@ struct MultisigConfig
     uint8        approvalCount;         // current vote count
     uint32       proposalEpoch;         // epoch when first vote was cast
     uint8        proposalActive;        // 1 if proposal in progress
+};
+
+// =============================================
+// TIME_LOCK gate supporting struct
+// (defined outside QUGATE so it can be used in StateData)
+// =============================================
+
+struct TimeLockConfig
+{
+    uint32 unlockEpoch;    // epoch when funds release
+    uint8  cancellable;    // 1 = owner can cancel and refund before unlock
+    uint8  fired;          // 1 once funds have been released
+    uint8  cancelled;      // 1 if cancelled by owner
+    uint8  active;         // 1 = time lock is configured on this gate
 };
 
 // HeartbeatBeneficiary removed — beneficiaries are now stored inline in HeartbeatConfig
@@ -435,6 +456,46 @@ public:
         uint8  proposalActive;
     };
 
+    // Configure TIME_LOCK mode on a TIME_LOCK gate. Owner-only.
+    struct configureTimeLock_input
+    {
+        uint32 gateId;
+        uint32 unlockEpoch;   // must be > current epoch
+        uint8  cancellable;   // 1 = allow owner to cancel before unlock
+    };
+    struct configureTimeLock_output
+    {
+        sint64 status;
+    };
+
+    // Cancel a TIME_LOCK gate (owner-only, only if cancellable=1).
+    struct cancelTimeLock_input
+    {
+        uint32 gateId;
+    };
+    struct cancelTimeLock_output
+    {
+        sint64 status;
+    };
+
+    // Query TIME_LOCK state for a gate.
+    struct getTimeLockState_input
+    {
+        uint32 gateId;
+    };
+    struct getTimeLockState_output
+    {
+        sint64 status;
+        uint32 unlockEpoch;
+        uint8  cancellable;
+        uint8  fired;
+        uint8  cancelled;
+        uint8  active;
+        sint64 currentBalance;
+        uint32 currentEpoch;
+        uint32 epochsRemaining;  // 0 if fired or past unlock epoch
+    };
+
     // =============================================
     // Function inputs/outputs (read-only queries)
     // =============================================
@@ -546,6 +607,9 @@ public:
 
         // Multisig mode state — indexed by gate slot (same index as _gates)
         Array<MultisigConfig, QUGATE_MAX_GATES> _multisigConfigs;
+
+        // TIME_LOCK mode state — indexed by gate slot (same index as _gates)
+        Array<TimeLockConfig, QUGATE_MAX_GATES> _timeLockConfigs;
     };
 
     // =============================================
@@ -726,6 +790,8 @@ public:
         MultisigConfig msigCfg;
         uint8 msigGuardianIdx;
         uint8 msigFoundGuardian;
+        // TIME_LOCK processing
+        TimeLockConfig tlCfg;
     };
 
     struct sendToGate_locals
@@ -759,6 +825,8 @@ public:
         MultisigConfig msigCfg;
         uint8 msigGuardianIdx;
         uint8 msigFoundGuardian;
+        // TIME_LOCK processing
+        TimeLockConfig tlCfg;
     };
 
     struct closeGate_locals
@@ -769,6 +837,7 @@ public:
         uint64 encodedGen;
         HeartbeatConfig hbZeroCfg;
         MultisigConfig msigZeroCfg;
+        TimeLockConfig tlZeroCfg;
     };
 
     struct updateGate_locals
@@ -821,6 +890,36 @@ public:
         uint32 inhEpochsInactive;
         // Multisig processing
         MultisigConfig msigCfg;
+        // TIME_LOCK processing
+        TimeLockConfig tlCfg;
+        sint64 tlReleaseAmount;
+    };
+
+    struct configureTimeLock_locals
+    {
+        QuGateLogger logger;
+        GateConfig gate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        TimeLockConfig cfg;
+    };
+
+    struct cancelTimeLock_locals
+    {
+        QuGateLogger logger;
+        GateConfig gate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        TimeLockConfig cfg;
+        TimeLockConfig zeroCfg;
+    };
+
+    struct getTimeLockState_locals
+    {
+        GateConfig gate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        TimeLockConfig cfg;
     };
 
     // Oracle notification callback types
@@ -936,7 +1035,7 @@ public:
         }
 
         // Validate mode
-        if (input.mode > QUGATE_MODE_MULTISIG)
+        if (input.mode > QUGATE_MODE_TIME_LOCK)
         {
             // Refund all
             qpi.transfer(qpi.invocator(), qpi.invocationReward());
@@ -1736,10 +1835,30 @@ public:
             }
         }
 
+        else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
+        {
+            // TIME_LOCK mode: accumulate unless already fired
+            locals.gate = state.get()._gates.get(locals.slotIdx);
+            locals.tlCfg = state.get()._timeLockConfigs.get(locals.slotIdx);
+            if (locals.tlCfg.fired == 1)
+            {
+                // Gate has already fired — refund sender
+                qpi.transfer(qpi.invocator(), locals.amount);
+            }
+            else
+            {
+                locals.gate.currentBalance += locals.amount;
+                state.mut()._gates.set(locals.slotIdx, locals.gate);
+                locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+                LOG_INFO(locals.logger);
+            }
+        }
+
         // Chain forwarding: if this gate has a chain link, forward to the next gate
         locals.gate = state.get()._gates.get(locals.slotIdx);
         if (locals.gate.chainNextGateId != -1 && locals.gate.mode != QUGATE_MODE_ORACLE
-            && locals.gate.mode != QUGATE_MODE_MULTISIG)
+            && locals.gate.mode != QUGATE_MODE_MULTISIG
+            && locals.gate.mode != QUGATE_MODE_TIME_LOCK)
         {
             // Determine forwarded amount from mode handler outputs
             sint64 chainAmount = 0;
@@ -2025,6 +2144,24 @@ public:
                 }
             }
         }
+        else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
+        {
+            // TIME_LOCK mode: accumulate unless already fired
+            locals.gate = state.get()._gates.get(locals.slotIdx);
+            locals.tlCfg = state.get()._timeLockConfigs.get(locals.slotIdx);
+            if (locals.tlCfg.fired == 1)
+            {
+                // Gate has already fired — refund sender
+                qpi.transfer(qpi.invocator(), locals.amount);
+            }
+            else
+            {
+                locals.gate.currentBalance += locals.amount;
+                state.mut()._gates.set(locals.slotIdx, locals.gate);
+                locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+                LOG_INFO(locals.logger);
+            }
+        }
     }
 
     PUBLIC_PROCEDURE_WITH_LOCALS(closeGate)
@@ -2145,6 +2282,17 @@ public:
             locals.msigZeroCfg.proposalEpoch = 0;
             locals.msigZeroCfg.proposalActive = 0;
             state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigZeroCfg);
+        }
+
+        // Clear time lock config on close
+        if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
+        {
+            locals.tlZeroCfg.unlockEpoch = 0;
+            locals.tlZeroCfg.cancellable = 0;
+            locals.tlZeroCfg.fired = 0;
+            locals.tlZeroCfg.cancelled = 0;
+            locals.tlZeroCfg.active = 0;
+            state.mut()._timeLockConfigs.set(locals.slotIdx, locals.tlZeroCfg);
         }
 
         // Guard against double-close underflow
@@ -3397,12 +3545,276 @@ public:
     }
 
     // =============================================
+    // configureTimeLock — set unlock epoch on a TIME_LOCK gate
+    // =============================================
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(configureTimeLock)
+    {
+        output.status = QUGATE_SUCCESS;
+
+        locals.logger._contractIndex = CONTRACT_INDEX;
+        locals.logger.sender = qpi.invocator();
+        locals.logger.gateId = input.gateId;
+        locals.logger.amount = 0;
+
+        // Refund any attached QU
+        if (qpi.invocationReward() > 0)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+        }
+
+        // Decode versioned gateId
+        locals.slotIdx = (uint64)input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (uint64)input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            output.status = QUGATE_INVALID_GATE_ID;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+
+        // Must be gate owner
+        if (locals.gate.owner != qpi.invocator())
+        {
+            output.status = QUGATE_UNAUTHORIZED;
+            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Gate must be active
+        if (locals.gate.active == 0)
+        {
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Gate must be TIME_LOCK mode
+        if (locals.gate.mode != QUGATE_MODE_TIME_LOCK)
+        {
+            output.status = QUGATE_INVALID_MODE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // unlockEpoch must be in the future
+        if (input.unlockEpoch <= (uint32)qpi.epoch())
+        {
+            output.status = QUGATE_TIME_LOCK_EPOCH_PAST;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Store config
+        locals.cfg.unlockEpoch = input.unlockEpoch;
+        locals.cfg.cancellable = input.cancellable;
+        locals.cfg.fired = 0;
+        locals.cfg.cancelled = 0;
+        locals.cfg.active = 1;
+        state.mut()._timeLockConfigs.set(locals.slotIdx, locals.cfg);
+
+        // Update gate activity
+        locals.gate.lastActivityEpoch = qpi.epoch();
+        state.mut()._gates.set(locals.slotIdx, locals.gate);
+
+        locals.logger._type = QUGATE_LOG_TIME_LOCK_CONFIGURED;
+        LOG_INFO(locals.logger);
+    }
+
+    // =============================================
+    // cancelTimeLock — cancel a TIME_LOCK gate (owner-only, cancellable=1 only)
+    // =============================================
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(cancelTimeLock)
+    {
+        output.status = QUGATE_SUCCESS;
+
+        locals.logger._contractIndex = CONTRACT_INDEX;
+        locals.logger.sender = qpi.invocator();
+        locals.logger.gateId = input.gateId;
+        locals.logger.amount = 0;
+
+        // Refund any attached QU
+        if (qpi.invocationReward() > 0)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+        }
+
+        // Decode versioned gateId
+        locals.slotIdx = (uint64)input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (uint64)input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            output.status = QUGATE_INVALID_GATE_ID;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+
+        // Must be gate owner
+        if (locals.gate.owner != qpi.invocator())
+        {
+            output.status = QUGATE_UNAUTHORIZED;
+            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Gate must be active
+        if (locals.gate.active == 0)
+        {
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Gate must be TIME_LOCK mode
+        if (locals.gate.mode != QUGATE_MODE_TIME_LOCK)
+        {
+            output.status = QUGATE_INVALID_MODE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.cfg = state.get()._timeLockConfigs.get(locals.slotIdx);
+
+        // Config must be active
+        if (locals.cfg.active == 0)
+        {
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Cannot cancel if already fired
+        if (locals.cfg.fired == 1)
+        {
+            output.status = QUGATE_TIME_LOCK_ALREADY_FIRED;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Cannot cancel if already cancelled
+        if (locals.cfg.cancelled == 1)
+        {
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Must be cancellable
+        if (locals.cfg.cancellable == 0)
+        {
+            output.status = QUGATE_TIME_LOCK_NOT_CANCELLABLE;
+            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Refund held balance to owner
+        if (locals.gate.currentBalance > 0)
+        {
+            qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
+            locals.gate.currentBalance = 0;
+        }
+
+        // Mark cancelled
+        locals.cfg.cancelled = 1;
+        state.mut()._timeLockConfigs.set(locals.slotIdx, locals.cfg);
+
+        // Close the gate
+        locals.gate.active = 0;
+        state.mut()._gates.set(locals.slotIdx, locals.gate);
+        state.mut()._activeGates -= 1;
+
+        state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+        state.mut()._freeCount += 1;
+        state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
+
+        locals.logger._type = QUGATE_LOG_TIME_LOCK_CANCELLED;
+        LOG_INFO(locals.logger);
+    }
+
+    // =============================================
+    // getTimeLockState — read-only query for time lock state
+    // =============================================
+
+    PUBLIC_FUNCTION_WITH_LOCALS(getTimeLockState)
+    {
+        output.status = QUGATE_INVALID_GATE_ID;
+        output.unlockEpoch = 0;
+        output.cancellable = 0;
+        output.fired = 0;
+        output.cancelled = 0;
+        output.active = 0;
+        output.currentBalance = 0;
+        output.currentEpoch = 0;
+        output.epochsRemaining = 0;
+
+        // Decode versioned gateId
+        locals.slotIdx = (uint64)input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (uint64)input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+        if (locals.gate.mode != QUGATE_MODE_TIME_LOCK)
+        {
+            output.status = QUGATE_INVALID_MODE;
+            return;
+        }
+
+        locals.cfg = state.get()._timeLockConfigs.get(locals.slotIdx);
+        output.status = QUGATE_SUCCESS;
+        output.unlockEpoch = locals.cfg.unlockEpoch;
+        output.cancellable = locals.cfg.cancellable;
+        output.fired = locals.cfg.fired;
+        output.cancelled = locals.cfg.cancelled;
+        output.active = locals.cfg.active;
+        output.currentBalance = (sint64)locals.gate.currentBalance;
+        output.currentEpoch = (uint32)qpi.epoch();
+        if (locals.cfg.fired == 1 || (uint32)qpi.epoch() >= locals.cfg.unlockEpoch)
+        {
+            output.epochsRemaining = 0;
+        }
+        else
+        {
+            output.epochsRemaining = locals.cfg.unlockEpoch - (uint32)qpi.epoch();
+        }
+    }
+
+    // =============================================
     // Registration
     // =============================================
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
     {
-        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState
+        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState 18=configureTimeLock 19=cancelTimeLock 20=getTimeLockState
         REGISTER_USER_PROCEDURE(createGate, 1);
         REGISTER_USER_PROCEDURE(sendToGate, 2);
         REGISTER_USER_PROCEDURE(closeGate, 3);
@@ -3420,6 +3832,9 @@ public:
         REGISTER_USER_FUNCTION(getHeartbeat, 15);
         REGISTER_USER_PROCEDURE(configureMultisig, 16);
         REGISTER_USER_FUNCTION(getMultisigState, 17);
+        REGISTER_USER_PROCEDURE(configureTimeLock, 18);
+        REGISTER_USER_PROCEDURE(cancelTimeLock, 19);
+        REGISTER_USER_FUNCTION(getTimeLockState, 20);
         REGISTER_USER_PROCEDURE_NOTIFICATION(OraclePriceNotification);
     }
 
@@ -3706,6 +4121,61 @@ public:
                 locals.logger.sender = locals.gate.owner;
                 locals.logger.amount = 0;
                 LOG_INFO(locals.logger);
+            }
+        }
+
+        // =============================================
+        // TIME_LOCK gate processing — epoch-based fund release
+        // =============================================
+        for (locals.i = 0; locals.i < state.get()._gateCount; locals.i++)
+        {
+            locals.gate = state.get()._gates.get(locals.i);
+
+            if (locals.gate.active == 0 || locals.gate.mode != QUGATE_MODE_TIME_LOCK)
+            {
+                continue;
+            }
+
+            locals.tlCfg = state.get()._timeLockConfigs.get(locals.i);
+
+            // Only process if active and not yet fired or cancelled
+            if (locals.tlCfg.active == 0 || locals.tlCfg.fired == 1 || locals.tlCfg.cancelled == 1)
+            {
+                continue;
+            }
+
+            if ((uint32)qpi.epoch() >= locals.tlCfg.unlockEpoch)
+            {
+                // Release funds to target (recipients[0])
+                if (locals.gate.currentBalance > 0)
+                {
+                    locals.tlReleaseAmount = (sint64)locals.gate.currentBalance;
+                    qpi.transfer(locals.gate.recipients.get(0), locals.tlReleaseAmount);
+                    locals.gate.totalForwarded += (uint64)locals.tlReleaseAmount;
+                    locals.gate.currentBalance = 0;
+                    state.mut()._gates.set(locals.i, locals.gate);
+                }
+
+                locals.tlCfg.fired = 1;
+                state.mut()._timeLockConfigs.set(locals.i, locals.tlCfg);
+
+                // Log fired
+                locals.logger._contractIndex = CONTRACT_INDEX;
+                locals.logger._type = QUGATE_LOG_TIME_LOCK_FIRED;
+                locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+                locals.logger.sender = locals.gate.owner;
+                locals.logger.amount = (sint64)locals.gate.totalForwarded;
+                LOG_INFO(locals.logger);
+
+                // Close the gate
+                locals.gate = state.get()._gates.get(locals.i);
+                locals.gate.active = 0;
+                state.mut()._gates.set(locals.i, locals.gate);
+                state.mut()._activeGates -= 1;
+
+                state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
+                state.mut()._freeCount += 1;
+                state.mut()._gateGenerations.set(locals.i, state.get()._gateGenerations.get(locals.i) + 1);
             }
         }
     }

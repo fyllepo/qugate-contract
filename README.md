@@ -64,6 +64,7 @@ Gate-to-gate forwarding can happen in two ways:
 | ORACLE | `QUGATE_MODE_ORACLE` | 5 | Oracle-triggered distribution on price/time condition |
 | HEARTBEAT | `QUGATE_MODE_HEARTBEAT` | 6 | Dead-man's switch: distribute if owner goes silent |
 | MULTISIG | `QUGATE_MODE_MULTISIG` | 7 | M-of-N guardian approval before funds release |
+| TIME_LOCK | `QUGATE_MODE_TIME_LOCK` | 8 | Holds funds until a target epoch, then releases to recipient |
 
 ### QUGATE_MODE_SPLIT (0) — Proportional Distribution
 
@@ -301,6 +302,81 @@ Send 500,000 QU to the gate address
 
 ---
 
+## TIME_LOCK Gate (Mode 8)
+
+A TIME_LOCK gate holds incoming QU and releases the full balance to a designated target address when a specified future epoch is reached. Nothing releases before that epoch.
+
+### Setup
+1. Create a gate with `mode=8` and `recipients[0]` = target address
+2. Call `configureTimeLock()` with `unlockEpoch` (must be > current epoch) and `cancellable`
+3. Send QU to the gate — funds accumulate in `currentBalance`
+4. At the start of the unlock epoch, `END_EPOCH` automatically releases the full balance to the target
+
+### Parameters
+| Field | Description |
+|-------|-------------|
+| recipients[0] | Target address that receives funds on unlock |
+| unlockEpoch | The epoch number when funds are released |
+| cancellable | 1 = owner can cancel and recover funds before unlock |
+
+### Procedures
+| Procedure | Description |
+|-----------|-------------|
+| `configureTimeLock(gateId, unlockEpoch, cancellable)` | Owner only — sets unlock parameters |
+| `cancelTimeLock(gateId)` | Owner only — cancels and refunds balance (requires cancellable=1) |
+| `getTimeLockState(gateId)` | Read-only — returns config, balance, current epoch, epochs remaining |
+
+### Error codes
+| Code | Meaning |
+|------|---------|
+| QUGATE_TIME_LOCK_ALREADY_FIRED (-23) | Gate has already unlocked and closed |
+| QUGATE_TIME_LOCK_NOT_CANCELLABLE (-24) | cancelTimeLock() called but cancellable=0 |
+| QUGATE_TIME_LOCK_EPOCH_PAST (-25) | unlockEpoch is in the past at configuration time |
+
+### Worked Example: Lock 500K QU for 8 epochs (vesting)
+
+**Scenario:** Alice wants to lock 500,000 QU for Bob, releasing 8 epochs from now.
+
+**Step 1: Create the gate**
+```
+createGate(
+  mode = 8,                        // TIME_LOCK
+  recipientCount = 1,
+  recipients[0] = BOB_ADDRESS,     // target
+  ratios[0] = 10000
+)
+→ gateId: 1234
+```
+
+**Step 2: Configure the time lock**
+```
+configureTimeLock(
+  gateId: 1234,
+  unlockEpoch: currentEpoch + 8,   // e.g. epoch 218 if current is 210
+  cancellable: 1                    // Alice can cancel if plans change
+)
+```
+
+**Step 3: Fund the gate**
+```
+sendToGate(gateId: 1234, amount: 500000 QU)
+// Funds held in gate.currentBalance
+// getTimeLockState shows: epochsRemaining = 8
+```
+
+**Step 4: Wait (or cancel)**
+```
+// Option A: Wait — at epoch 218, END_EPOCH automatically runs:
+//   qpi.transfer(BOB_ADDRESS, 500000)
+//   gate closes, QUGATE_LOG_TIME_LOCK_FIRED emitted
+
+// Option B: Cancel before epoch 218:
+//   cancelTimeLock(gateId: 1234)
+//   → 500000 QU refunded to Alice, gate closes
+```
+
+---
+
 ## Chain Gates
 
 Gates can be linked into chains (max 3 hops) for multi-stage payment pipelines. When a gate completes its payout, funds are automatically forwarded to the next gate in the chain — no external transaction required.
@@ -369,6 +445,9 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 | 15 | getHeartbeat | PUBLIC_FUNCTION | Query HEARTBEAT gate state |
 | 16 | configureMultisig | PUBLIC_PROCEDURE | Configure MULTISIG gate guardians and threshold |
 | 17 | getMultisigState | PUBLIC_FUNCTION | Query current approval state |
+| 18 | configureTimeLock | PUBLIC_PROCEDURE | Configure TIME_LOCK gate unlock epoch and cancellability |
+| 19 | cancelTimeLock | PUBLIC_PROCEDURE | Cancel a TIME_LOCK gate and refund held balance (owner only) |
+| 20 | getTimeLockState | PUBLIC_FUNCTION | Query TIME_LOCK gate state and epochs remaining |
 
 ### Procedures (State-Changing)
 
@@ -945,6 +1024,9 @@ The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_
 | -20 | `QUGATE_MULTISIG_ALREADY_VOTED` | Guardian already voted on the current proposal |
 | -21 | `QUGATE_MULTISIG_INVALID_CONFIG` | Invalid config (0 guardians, required > count, etc) |
 | -22 | `QUGATE_MULTISIG_NO_ACTIVE_PROP` | No active multisig proposal to query |
+| -23 | `QUGATE_TIME_LOCK_ALREADY_FIRED` | Gate already unlocked and closed |
+| -24 | `QUGATE_TIME_LOCK_NOT_CANCELLABLE` | cancelTimeLock() called but cancellable=0 |
+| -25 | `QUGATE_TIME_LOCK_EPOCH_PAST` | unlockEpoch is in the past at configuration time |
 
 ---
 
@@ -976,6 +1058,9 @@ The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_
 | 20 | `QUGATE_LOG_MULTISIG_EXECUTED` | M-of-N threshold reached, funds released |
 | 21 | `QUGATE_LOG_MULTISIG_EXPIRED` | Proposal expired without reaching threshold |
 | 22 | `QUGATE_LOG_MULTISIG_CONFIGURED` | configureMultisig() called successfully |
+| 23 | `QUGATE_LOG_TIME_LOCK_FIRED` | Unlock epoch reached, funds released to target |
+| 24 | `QUGATE_LOG_TIME_LOCK_CANCELLED` | Owner cancelled, funds refunded |
+| 25 | `QUGATE_LOG_TIME_LOCK_CONFIGURED` | configureTimeLock() called successfully |
 
 ### Failure Events (high range)
 
