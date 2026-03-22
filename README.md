@@ -461,7 +461,7 @@ Creates a new gate. Requires payment of the current escalated creation fee.
 
 | Field | Type | Size | Description |
 |-------|------|------|-------------|
-| mode | uint8 | 1 | Gate mode (0-5) |
+| mode | uint8 | 1 | Gate mode (0-8) |
 | recipientCount | uint8 | 1 | Number of recipients (1-8) |
 | recipients | Array\<id, 8\> | 256 | Recipient public keys (32 bytes each) |
 | ratios | Array\<uint64, 8\> | 64 | Ratio per recipient (SPLIT mode) |
@@ -1005,7 +1005,7 @@ The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_
 | -1 | `QUGATE_INVALID_GATE_ID` | Gate ID is 0, exceeds gateCount, or wrong generation |
 | -2 | `QUGATE_GATE_NOT_ACTIVE` | Gate exists but has been closed or expired |
 | -3 | `QUGATE_UNAUTHORIZED` | Caller is not the gate owner |
-| -4 | `QUGATE_INVALID_MODE` | Mode value exceeds QUGATE_MODE_ORACLE (5) |
+| -4 | `QUGATE_INVALID_MODE` | Mode value exceeds QUGATE_MODE_TIME_LOCK (8) |
 | -5 | `QUGATE_INVALID_RECIPIENT_COUNT` | Recipient count is 0 or > 8 |
 | -6 | `QUGATE_INVALID_RATIO` | Individual ratio > 10,000 or total ratio is 0 |
 | -7 | `QUGATE_INSUFFICIENT_FEE` | Invocation reward < escalated creation fee |
@@ -1097,7 +1097,7 @@ g++ -std=c++17 -I. contract_qugate.cpp -lgtest -lgtest_main -o qugate_tests
 ```
 
 The test suite (`contract_qugate.cpp`) contains 50+ unit tests covering:
-- All 6 gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, oracle trigger/distribution)
+- All 9 gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, oracle trigger/distribution, heartbeat dead-man's switch, M-of-N multisig approval, epoch-based time lock)
 - Chain gates (hop fees, chain reserve, depth limits, cycle detection)
 - Versioned gate IDs and sendToGateVerified
 - Anti-spam features (escalating fees at 0/1024/2048 gates, dust burn, fee overpayment refund, gate expiry with balance refund, activity epoch tracking)
@@ -1115,23 +1115,40 @@ To run end-to-end tests against a live node:
 git clone https://github.com/qubic/core-lite
 cd core-lite
 
-# Copy QuGate.h into the contracts directory
+# Copy QuGate.h and set index
 cp /path/to/QuGate.h src/contracts/QuGate.h
+sed -i 's/#define CONTRACT_INDEX 25/#define CONTRACT_INDEX 26/' src/contracts/QuGate.h
+```
 
-# Register QuGate in src/contract_def.h:
-#   - Add QUGATE_CONTRACT_INDEX = 24 (or next available)
-#   - Add setContractFeeReserve(QUGATE_CONTRACT_INDEX, 100000000000LL)
-#   - Set constructionEpoch to match your starting epoch
+**Required patches** (6 files — see `QUGATE-TESTNET-NODE.md` for full details):
 
+1. `lib/platform_efi/uefi.h` — add `#define __cdecl` for Linux
+2. `src/extensions/overload.h` — add `OutputString` stub
+3. `src/contract_core/contract_exec.h` — graceful null function check (replaces crashing ASSERT)
+4. `src/extensions/http/controller/rpc_live_controller.h` — 503 race condition fix for RPC thread safety
+5. `src/public_settings.h` — set `EPOCH 1`, `TICK 0`
+6. `src/contract_core/contract_def.h` — register QuGate at index 26
+7. `src/contract_core/qpi_oracle_impl.h` — add `typename` for dependent type (upstream Clang bug)
+
+**Build** (must use Clang — GCC missing BMI flags in upstream CMakeLists):
+
+```bash
 mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
+CC=clang CXX=clang++ cmake .. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DTESTNET=ON \
+    -DTESTNET_PREFILL_QUS=ON
+make -j$(nproc) Qubic
 ```
 
 2. **Start the testnet node**:
 
 ```bash
-./build/src/Qubic  # Listens on TCP 31841, HTTP RPC 41841
+# Stop any miner first — node needs ~27GB RAM
+systemctl stop qlab 2>/dev/null
+
+./build/src/Qubic  # HTTP RPC on port 41841
+# Verify: curl http://localhost:41841/v1/latest-stats
 ```
 
 3. **Run the tests** (see `tests/README.md` for full details):
@@ -1147,10 +1164,12 @@ python3 tests/test_attack_vectors.py   # Security edge cases
 
 ### Testnet Results
 
-Tested on Qubic Core-Lite (local testnet):
-- All 5 original modes verified with real contract execution (21/21 pass)
+Tested on Qubic Core-Lite v1.283.0 (local testnet, 2026-03-22):
+- All 9 modes verified with real contract execution (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, ORACLE, HEARTBEAT, MULTISIG, TIME_LOCK)
 - 50-gate stress test: 50/50 creates, sends across all modes, slot reuse verified
 - 7 attack vectors tested (unauthorized close, sends to non-existent/closed gates, double close, zero sends, slot reuse)
+- Node stable on Hetzner AX42 (64GB RAM, Ryzen 7 PRO 8700GE), QuGate at index 26
+- HTTP RPC responsive under external traffic with 503 race condition fix applied
 - 4+ hours continuous operation, zero memory growth
 
 See `TESTNET_RESULTS.md` for detailed results.

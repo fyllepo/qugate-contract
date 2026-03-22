@@ -37,9 +37,23 @@
 - **Creation fee:** 100,000 QU per gate
 - **Min send:** 1,000 QU
 
-## Note on Newer Features
+## Stress & Security Tests
 
-Oracle mode (QUGATE_MODE_ORACLE=5), chain gates, versioned gate IDs, and sendToGateVerified were added after the testnet results documented here. These features require live oracle infrastructure and are pending testnet verification.
+| # | Test | Result |
+|---|------|--------|
+| 17 | 50-gate stress: create 50 gates across all modes | ✅ |
+| 18 | 50-gate stress: send to all 50, verify routing | ✅ |
+| 19 | 50-gate stress: close and reuse slots | ✅ |
+| 20 | Attack: unauthorized close rejected | ✅ |
+| 21 | Attack: send to non-existent gate rejected | ✅ |
+| 22 | Attack: send to closed gate rejected | ✅ |
+| 23 | Attack: double close rejected | ✅ |
+| 24 | Attack: zero-amount send (no burn) | ✅ |
+| 25 | Attack: slot reuse — stale ID invalid after recycle | ✅ |
+
+## Note on Oracle, Chain, and Verified Sends
+
+Oracle mode (QUGATE_MODE_ORACLE=5), chain gates, versioned gate IDs, and sendToGateVerified were added after the initial testnet run. Oracle features require live oracle infrastructure. Chain gates and sendToGateVerified are covered in unit tests.
 
 ---
 
@@ -97,6 +111,51 @@ Test 8 requires epoch advancement. All other tests run immediately against a liv
 ## Updated test_all_modes.py
 
 `tests/test_all_modes.py` extended with Tests 8 (HEARTBEAT) and 9 (MULTISIG) — inline versions of the key paths from the dedicated test files. Covers: create, configure, heartbeat(), fund for HEARTBEAT; create, configure, fund (non-guardian), two guardian votes → release, vote reset, non-owner configure rejection for MULTISIG.
+
+---
+
+# QuGate — Core-Lite v1.283.0 Testnet Deployment
+
+**Date:** 2026-03-22
+**Node:** core-lite v1.283.0 (commit ba88437c), Qubic testnet
+**Contract index:** 26 (Vottun took 25)
+**Machine:** Hetzner AX42 — 64GB ECC DDR5, Ryzen 7 PRO 8700GE, Ubuntu 24.04
+**Build:** Clang, Release, `-DTESTNET=ON -DTESTNET_PREFILL_QUS=ON`
+
+## Node Status
+
+| Check | Result |
+|-------|--------|
+| Build (Clang, Release) | ✅ Clean compile |
+| Node launch | ✅ "Qubic 1.283.0 is launched" |
+| Network check-in | ✅ "Successfully checked in to Qubic network" |
+| HTTP RPC (:41841) | ✅ Responding |
+| TESTNET mode | ✅ "This node is running as TESTNET" |
+| Prefilled entities | ✅ 677 entities, 6.77T QU |
+| Epoch/tick | ✅ Epoch 1, tick 0 |
+| Stability (60s+ run) | ✅ No crashes with fixes applied |
+
+## Patches Required (7)
+
+| # | File | Fix |
+|---|------|-----|
+| 1 | `lib/platform_efi/uefi.h` | `#define __cdecl` for Linux |
+| 2 | `src/extensions/overload.h` | `OutputString` UEFI stub |
+| 3 | `src/contract_core/contract_exec.h` | Graceful null function check (replaces crashing ASSERT) |
+| 4 | `src/extensions/http/controller/rpc_live_controller.h` | 503 race condition fix — tryAcquireRead lock + null function guard |
+| 5 | `src/public_settings.h` | EPOCH 1, TICK 0 |
+| 6 | `src/contract_core/contract_def.h` | Register QuGate at index 26 |
+| 7 | `src/contract_core/qpi_oracle_impl.h` | `typename` fix for dependent type (upstream Clang bug) |
+
+## Known Issues
+
+- **Tick advancement**: Standalone lite node does not produce ticks (follows computors). Tick stays at 0 on solo testnet.
+- **RAM**: Node uses ~27GB during init. Cannot coexist with miner on 64GB box.
+- **RAID resync**: Repeated hard reboots trigger RAID1 resync (~30 min).
+
+Full patch guide: see `QUGATE-TESTNET-NODE.md` in the openclaw workspace.
+
+---
 
 ## Files Changed
 
