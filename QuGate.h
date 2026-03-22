@@ -46,7 +46,7 @@ using namespace QPI;
 #endif
 
 // Capacity scales with network via X_MULTIPLIER
-constexpr uint64 QUGATE_INITIAL_MAX_GATES = 4096;
+constexpr uint64 QUGATE_INITIAL_MAX_GATES = 256;  // testnet size; scale up for mainnet
 constexpr uint64 QUGATE_MAX_GATES = QUGATE_INITIAL_MAX_GATES * X_MULTIPLIER;
 constexpr uint64 QUGATE_MAX_RECIPIENTS = 8;
 constexpr uint64 QUGATE_MAX_RATIO = 10000;       // Max ratio per recipient (prevents overflow)
@@ -177,6 +177,9 @@ struct HeartbeatConfig
     uint8   active;                // 1 = heartbeat mode enabled on this gate
     uint8   triggered;             // 1 once threshold exceeded
     uint32  triggerEpoch;          // epoch when triggered
+    id      beneficiaryAddresses[8];  // inline beneficiary addresses
+    uint8   beneficiaryShares[8];     // inline beneficiary share percents
+    uint8   beneficiaryCount;
 };
 
 // =============================================
@@ -186,7 +189,7 @@ struct HeartbeatConfig
 
 struct MultisigConfig
 {
-    Array<id, 8> guardians;
+    id           guardians[8];
     uint8        guardianCount;
     uint8        required;              // M of N required approvals
     uint32       proposalExpiryEpochs;  // epochs before unfinished proposal resets
@@ -196,12 +199,7 @@ struct MultisigConfig
     uint8        proposalActive;        // 1 if proposal in progress
 };
 
-// Per-beneficiary entry for heartbeat distribution
-struct HeartbeatBeneficiary
-{
-    id      address;
-    uint8   sharePercent;  // must sum to 100 across all beneficiaries for a gate
-};
+// HeartbeatBeneficiary removed — beneficiaries are now stored inline in HeartbeatConfig
 
 struct QUGATE : public ContractBase
 {
@@ -543,10 +541,8 @@ public:
         HashMap<sint32, uint64, 512> _subscriptionToSlot;
 
         // Heartbeat mode state — indexed by gate slot (same index as _gates)
+        // Beneficiaries are stored inline in HeartbeatConfig
         Array<HeartbeatConfig, QUGATE_MAX_GATES> _heartbeatConfigs;
-        // Flat beneficiary storage: index = slotIdx * 8 + beneficiaryIndex
-        Array<HeartbeatBeneficiary, QUGATE_MAX_GATES * 8> _heartbeatBeneficiaries;
-        Array<uint8, QUGATE_MAX_GATES> _heartbeatBeneficiaryCount;
 
         // Multisig mode state — indexed by gate slot (same index as _gates)
         Array<MultisigConfig, QUGATE_MAX_GATES> _multisigConfigs;
@@ -821,8 +817,6 @@ public:
         sint64 inhPriorSum;
         uint8  inhJ;
         uint8  inhK;
-        HeartbeatBeneficiary inhBene;
-        HeartbeatBeneficiary inhPriorBene;
         uint8  inhBeneCount;
         uint32 inhEpochsInactive;
         // Multisig processing
@@ -868,7 +862,6 @@ public:
         uint8  i;
         uint16 shareSum;
         HeartbeatConfig cfg;
-        HeartbeatBeneficiary bene;
     };
 
     struct heartbeat_locals
@@ -886,7 +879,6 @@ public:
         uint64 slotIdx;
         uint64 encodedGen;
         HeartbeatConfig cfg;
-        HeartbeatBeneficiary bene;
         uint8 i;
     };
 
@@ -1667,7 +1659,7 @@ public:
             locals.msigGuardianIdx = 0;
             for (uint8 _gi = 0; _gi < locals.msigCfg.guardianCount; _gi++)
             {
-                if (locals.msigFoundGuardian == 0 && locals.msigCfg.guardians.get(_gi) == qpi.invocator())
+                if (locals.msigFoundGuardian == 0 && locals.msigCfg.guardians[_gi] == qpi.invocator())
                 {
                     locals.msigFoundGuardian = 1;
                     locals.msigGuardianIdx = _gi;
@@ -1960,7 +1952,7 @@ public:
             locals.msigGuardianIdx = 0;
             for (uint8 _gi = 0; _gi < locals.msigCfg.guardianCount; _gi++)
             {
-                if (locals.msigFoundGuardian == 0 && locals.msigCfg.guardians.get(_gi) == qpi.invocator())
+                if (locals.msigFoundGuardian == 0 && locals.msigCfg.guardians[_gi] == qpi.invocator())
                 {
                     locals.msigFoundGuardian = 1;
                     locals.msigGuardianIdx = _gi;
@@ -2129,8 +2121,13 @@ public:
             locals.hbZeroCfg.active = 0;
             locals.hbZeroCfg.triggered = 0;
             locals.hbZeroCfg.triggerEpoch = 0;
+            locals.hbZeroCfg.beneficiaryCount = 0;
+            for (uint8 _bi = 0; _bi < 8; _bi++)
+            {
+                locals.hbZeroCfg.beneficiaryAddresses[_bi] = id::zero();
+                locals.hbZeroCfg.beneficiaryShares[_bi] = 0;
+            }
             state.mut()._heartbeatConfigs.set(locals.slotIdx, locals.hbZeroCfg);
-            state.mut()._heartbeatBeneficiaryCount.set(locals.slotIdx, 0);
         }
 
         // Clear multisig config on close
@@ -2138,7 +2135,7 @@ public:
         {
             for (uint8 _ci = 0; _ci < 8; _ci++)
             {
-                locals.msigZeroCfg.guardians.set(_ci, id::zero());
+                locals.msigZeroCfg.guardians[_ci] = id::zero();
             }
             locals.msigZeroCfg.guardianCount = 0;
             locals.msigZeroCfg.required = 0;
@@ -3042,7 +3039,7 @@ public:
             return;
         }
 
-        // Store config
+        // Store config and beneficiaries inline in cfg
         locals.cfg.thresholdEpochs = input.thresholdEpochs;
         locals.cfg.lastHeartbeatEpoch = (uint32)qpi.epoch();
         locals.cfg.payoutPercentPerEpoch = input.payoutPercentPerEpoch;
@@ -3050,24 +3047,23 @@ public:
         locals.cfg.active = 1;
         locals.cfg.triggered = 0;
         locals.cfg.triggerEpoch = 0;
-        state.mut()._heartbeatConfigs.set(locals.slotIdx, locals.cfg);
 
-        // Store beneficiaries
-        state.mut()._heartbeatBeneficiaryCount.set(locals.slotIdx, input.beneficiaryCount);
+        // Store beneficiaries inline in cfg
+        locals.cfg.beneficiaryCount = input.beneficiaryCount;
         for (locals.i = 0; locals.i < 8; locals.i++)
         {
             if (locals.i < input.beneficiaryCount)
             {
-                locals.bene.address = input.beneficiaryAddresses.get(locals.i);
-                locals.bene.sharePercent = input.beneficiaryShares.get(locals.i);
+                locals.cfg.beneficiaryAddresses[locals.i] = input.beneficiaryAddresses.get(locals.i);
+                locals.cfg.beneficiaryShares[locals.i] = input.beneficiaryShares.get(locals.i);
             }
             else
             {
-                locals.bene.address = id::zero();
-                locals.bene.sharePercent = 0;
+                locals.cfg.beneficiaryAddresses[locals.i] = id::zero();
+                locals.cfg.beneficiaryShares[locals.i] = 0;
             }
-            state.mut()._heartbeatBeneficiaries.set(locals.slotIdx * 8 + locals.i, locals.bene);
         }
+        state.mut()._heartbeatConfigs.set(locals.slotIdx, locals.cfg);
 
         // Update gate activity
         locals.gate.lastActivityEpoch = qpi.epoch();
@@ -3216,12 +3212,11 @@ public:
         output.payoutPercentPerEpoch = locals.cfg.payoutPercentPerEpoch;
         output.minimumBalance = locals.cfg.minimumBalance;
 
-        output.beneficiaryCount = state.get()._heartbeatBeneficiaryCount.get(locals.slotIdx);
+        output.beneficiaryCount = locals.cfg.beneficiaryCount;
         for (locals.i = 0; locals.i < 8; locals.i++)
         {
-            locals.bene = state.get()._heartbeatBeneficiaries.get(locals.slotIdx * 8 + locals.i);
-            output.beneficiaryAddresses.set(locals.i, locals.bene.address);
-            output.beneficiaryShares.set(locals.i, locals.bene.sharePercent);
+            output.beneficiaryAddresses.set(locals.i, locals.cfg.beneficiaryAddresses[locals.i]);
+            output.beneficiaryShares.set(locals.i, locals.cfg.beneficiaryShares[locals.i]);
         }
     }
 
@@ -3334,11 +3329,11 @@ public:
         {
             if (_gi < input.guardianCount)
             {
-                locals.cfg.guardians.set(_gi, input.guardians.get(_gi));
+                locals.cfg.guardians[_gi] = input.guardians.get(_gi);
             }
             else
             {
-                locals.cfg.guardians.set(_gi, id::zero());
+                locals.cfg.guardians[_gi] = id::zero();
             }
         }
         locals.cfg.guardianCount = input.guardianCount;
@@ -3595,30 +3590,28 @@ public:
                     locals.inhPayoutTotal = locals.inhBalance * (sint64)locals.inhCfg.payoutPercentPerEpoch / 100;
                     if (locals.inhPayoutTotal > 0)
                     {
-                        locals.inhBeneCount = state.get()._heartbeatBeneficiaryCount.get(locals.i);
+                        locals.inhBeneCount = locals.inhCfg.beneficiaryCount;
 
                         for (locals.inhJ = 0; locals.inhJ < locals.inhBeneCount; locals.inhJ++)
                         {
-                            locals.inhBene = state.get()._heartbeatBeneficiaries.get(locals.i * 8 + locals.inhJ);
                             if (locals.inhJ == locals.inhBeneCount - 1)
                             {
                                 // Last beneficiary gets remainder to avoid dust from rounding
                                 locals.inhPriorSum = 0;
                                 for (locals.inhK = 0; locals.inhK < locals.inhJ; locals.inhK++)
                                 {
-                                    locals.inhPriorBene = state.get()._heartbeatBeneficiaries.get(locals.i * 8 + locals.inhK);
-                                    locals.inhPriorSum += locals.inhPayoutTotal * (sint64)locals.inhPriorBene.sharePercent / 100;
+                                    locals.inhPriorSum += locals.inhPayoutTotal * (sint64)locals.inhCfg.beneficiaryShares[locals.inhK] / 100;
                                 }
                                 locals.inhShare = locals.inhPayoutTotal - locals.inhPriorSum;
                             }
                             else
                             {
-                                locals.inhShare = locals.inhPayoutTotal * (sint64)locals.inhBene.sharePercent / 100;
+                                locals.inhShare = locals.inhPayoutTotal * (sint64)locals.inhCfg.beneficiaryShares[locals.inhJ] / 100;
                             }
 
                             if (locals.inhShare > 0)
                             {
-                                qpi.transfer(locals.inhBene.address, locals.inhShare);
+                                qpi.transfer(locals.inhCfg.beneficiaryAddresses[locals.inhJ], locals.inhShare);
                                 locals.gate.totalForwarded += (uint64)locals.inhShare;
                                 locals.gate.currentBalance -= (uint64)locals.inhShare;
                             }
