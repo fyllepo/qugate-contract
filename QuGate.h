@@ -829,6 +829,8 @@ public:
         routeToGate_input chainIn;
         routeToGate_output chainOut;
         routeToGate_locals chainLocals;
+        // Chain forwarding
+        GateConfig nextChainGate;
         // Multisig processing
         MultisigConfig msigCfg;
         uint8 msigGuardianIdx;
