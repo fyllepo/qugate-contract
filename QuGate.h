@@ -462,6 +462,7 @@ public:
         uint8  guardianCount;
         uint32 proposalEpoch;
         uint8  proposalActive;
+        Array<id, 8> guardians;  // Guardian public keys from MultisigConfig
     };
 
     // Configure TIME_LOCK mode on a TIME_LOCK gate. Owner-only.
@@ -507,6 +508,9 @@ public:
         uint8  hasAdminGate;
         sint64 adminGateId;
         uint8  adminGateMode;  // mode of the admin gate (should be QUGATE_MODE_MULTISIG)
+        uint8  guardianCount;      // Number of guardians on the admin gate
+        uint8  required;           // M-of-N threshold
+        Array<id, 8> guardians;    // Guardian public keys from the admin gate's MultisigConfig
     };
 
     // Query TIME_LOCK state for a gate.
@@ -559,6 +563,8 @@ public:
         sint64 chainNextGateId;
         sint64 chainReserve;
         uint8  chainDepth;
+        sint64 adminGateId;    // -1 if no admin gate
+        uint8  hasAdminGate;   // 1 if governed by admin gate
     };
 
     struct getGateCount_input
@@ -987,6 +993,8 @@ public:
         uint64 slotIdx;
         uint64 encodedGen;
         uint64 adminSlot;
+        MultisigConfig adminCfg;
+        uint8 i;
     };
 
     // Oracle notification callback types
@@ -1071,6 +1079,7 @@ public:
         uint64 slotIdx;
         uint64 encodedGen;
         MultisigConfig cfg;
+        uint8 i;
     };
 
 
@@ -2910,6 +2919,8 @@ public:
         output.chainNextGateId = locals.gate.chainNextGateId;
         output.chainReserve = locals.gate.chainReserve;
         output.chainDepth = locals.gate.chainDepth;
+        output.adminGateId = locals.gate.adminGateId;
+        output.hasAdminGate = locals.gate.hasAdminGate;
     }
 
     PUBLIC_FUNCTION(getGateCount)
@@ -3727,6 +3738,10 @@ public:
         output.guardianCount = locals.cfg.guardianCount;
         output.proposalEpoch = locals.cfg.proposalEpoch;
         output.proposalActive = locals.cfg.proposalActive;
+        for (locals.i = 0; locals.i < locals.cfg.guardianCount; locals.i++)
+        {
+            output.guardians.set(locals.i, locals.cfg.guardians[locals.i]);
+        }
     }
 
     // =============================================
@@ -4172,6 +4187,8 @@ public:
         output.hasAdminGate = 0;
         output.adminGateId = -1;
         output.adminGateMode = 0;
+        output.guardianCount = 0;
+        output.required = 0;
 
         // Decode versioned gateId
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
@@ -4196,6 +4213,13 @@ public:
             {
                 locals.adminGate = state.get()._gates.get(locals.adminSlot);
                 output.adminGateMode = locals.adminGate.mode;
+                locals.adminCfg = state.get()._multisigConfigs.get(locals.adminSlot);
+                output.guardianCount = locals.adminCfg.guardianCount;
+                output.required = locals.adminCfg.required;
+                for (locals.i = 0; locals.i < locals.adminCfg.guardianCount; locals.i++)
+                {
+                    output.guardians.set(locals.i, locals.adminCfg.guardians[locals.i]);
+                }
             }
         }
     }

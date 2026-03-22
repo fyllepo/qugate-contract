@@ -319,7 +319,7 @@ The `heartbeat()` procedure is intentionally excluded — it is a keep-alive sig
 
 ### Procedures
 - `setAdminGate(gateId, adminGateId)` — owner-only if no admin gate set; requires admin gate approval if already set
-- `getAdminGate(gateId)` — read-only: returns hasAdminGate, adminGateId, adminGateMode
+- `getAdminGate(gateId)` — read-only: returns hasAdminGate, adminGateId, adminGateMode, guardianCount, required, guardians
 
 ### Worked Example: HEARTBEAT + MULTISIG admin governance
 
@@ -655,6 +655,8 @@ Returns full gate configuration and statistics.
 | chainNextGateId | sint64 | Versioned gate ID of next gate in chain (-1 if no chain) |
 | chainReserve | sint64 | QU remaining in chain hop fee reserve |
 | chainDepth | uint8 | This gate's position in its chain (0 = root) |
+| adminGateId | sint64 | Versioned gate ID of admin gate (-1 if no admin gate) |
+| hasAdminGate | uint8 | 1 if governed by an admin gate |
 
 Returns `active=0` for invalid gate IDs.
 
@@ -841,6 +843,7 @@ Read-only query for current multisig proposal state.
 | guardianCount | uint8 | Total number of guardians |
 | proposalEpoch | uint32 | Epoch when current proposal started |
 | proposalActive | uint8 | 1 if a proposal is in progress |
+| guardians | Array\<id, 8\> | Guardian public keys from MultisigConfig |
 
 ---
 
