@@ -302,6 +302,85 @@ Send 500,000 QU to the gate address
 
 ---
 
+## Admin Gate (adminGateId) — MULTISIG Governance for Any Gate
+
+Any gate can be placed under MULTISIG governance by assigning an **admin gate**. When an admin gate is set, configuration changes (closeGate, updateGate, configureHeartbeat, configureMultisig, configureTimeLock, cancelTimeLock, setChain) require either the owner's signature **or** approval from the admin gate's MULTISIG quorum.
+
+The `heartbeat()` procedure is intentionally excluded — it is a keep-alive signal that should always remain owner-only.
+
+### How it works
+
+1. Create a MULTISIG gate (mode 7) with guardians and a required threshold
+2. Call `setAdminGate(gateId, adminGateId)` on the gate you want to govern
+3. From that point, config changes on the governed gate require either:
+   - The owner calling the procedure directly, **or**
+   - The admin gate's MULTISIG quorum reaching approval in the current epoch
+4. To remove governance, call `setAdminGate(gateId, -1)` — requires admin gate approval if one is set
+
+### Procedures
+- `setAdminGate(gateId, adminGateId)` — owner-only if no admin gate set; requires admin gate approval if already set
+- `getAdminGate(gateId)` — read-only: returns hasAdminGate, adminGateId, adminGateMode
+
+### Worked Example: HEARTBEAT + MULTISIG admin governance
+
+**Scenario:** You set up a HEARTBEAT inheritance gate and want 2-of-3 guardians to approve any configuration changes.
+
+**Step 1: Create a MULTISIG admin gate**
+```
+createGate(mode=7, recipients=[ANY_ADDRESS], ratios=[100])
+→ Returns adminGateId (e.g. 5368709121)
+configureMultisig(
+  gateId: 5368709121,
+  guardians: [GUARDIAN_1, GUARDIAN_2, GUARDIAN_3],
+  required: 2,
+  proposalExpiryEpochs: 4
+)
+```
+
+**Step 2: Create and configure the HEARTBEAT gate**
+```
+createGate(mode=6, recipients=[], ratios=[])
+→ Returns gateId (e.g. 4294967296)
+configureHeartbeat(
+  gateId: 4294967296,
+  thresholdEpochs: 8,
+  payoutPercentPerEpoch: 25,
+  minimumBalance: 1000000,
+  beneficiaries: [
+    { address: WALLET_A, sharePercent: 60 },
+    { address: WALLET_B, sharePercent: 40 }
+  ]
+)
+```
+
+**Step 3: Assign the admin gate**
+```
+setAdminGate(gateId: 4294967296, adminGateId: 5368709121)
+```
+
+**Step 4: Owner can still heartbeat() normally**
+```
+heartbeat(gateId: 4294967296)
+→ Works — heartbeat stays owner-only
+```
+
+**Step 5: Config changes now require guardian approval**
+```
+// Owner tries to updateGate() alone → QUGATE_UNAUTHORIZED (unless they are the owner)
+// Guardians vote on the MULTISIG gate:
+//   GUARDIAN_1 sends 1 QU to gate 5368709121 → vote registered
+//   GUARDIAN_2 sends 1 QU to gate 5368709121 → 2-of-3 met
+// Now updateGate(4294967296, ...) succeeds in this epoch
+```
+
+### Error codes
+| Code | Meaning |
+|------|---------|
+| QUGATE_ADMIN_GATE_REQUIRED (-26) | Config change needs admin gate approval |
+| QUGATE_INVALID_ADMIN_GATE (-27) | adminGateId doesn't exist or isn't MULTISIG mode |
+
+---
+
 ## TIME_LOCK Gate (Mode 8)
 
 A TIME_LOCK gate holds incoming QU and releases the full balance to a designated target address when a specified future epoch is reached. Nothing releases before that epoch.
@@ -448,6 +527,8 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 | 18 | configureTimeLock | PUBLIC_PROCEDURE | Configure TIME_LOCK gate unlock epoch and cancellability |
 | 19 | cancelTimeLock | PUBLIC_PROCEDURE | Cancel a TIME_LOCK gate and refund held balance (owner only) |
 | 20 | getTimeLockState | PUBLIC_FUNCTION | Query TIME_LOCK gate state and epochs remaining |
+| 21 | setAdminGate | PUBLIC_PROCEDURE | Set or clear admin gate (MULTISIG governance) on any gate |
+| 22 | getAdminGate | PUBLIC_FUNCTION | Query admin gate configuration for a gate |
 
 ### Procedures (State-Changing)
 
@@ -1027,6 +1108,8 @@ The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_
 | -23 | `QUGATE_TIME_LOCK_ALREADY_FIRED` | Gate already unlocked and closed |
 | -24 | `QUGATE_TIME_LOCK_NOT_CANCELLABLE` | cancelTimeLock() called but cancellable=0 |
 | -25 | `QUGATE_TIME_LOCK_EPOCH_PAST` | unlockEpoch is in the past at configuration time |
+| -26 | `QUGATE_ADMIN_GATE_REQUIRED` | Config change needs admin gate approval |
+| -27 | `QUGATE_INVALID_ADMIN_GATE` | adminGateId doesn't exist or isn't MULTISIG mode |
 
 ---
 
@@ -1061,6 +1144,8 @@ The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_
 | 23 | `QUGATE_LOG_TIME_LOCK_FIRED` | Unlock epoch reached, funds released to target |
 | 24 | `QUGATE_LOG_TIME_LOCK_CANCELLED` | Owner cancelled, funds refunded |
 | 25 | `QUGATE_LOG_TIME_LOCK_CONFIGURED` | configureTimeLock() called successfully |
+| 26 | `QUGATE_LOG_ADMIN_GATE_SET` | Admin gate assigned to a gate |
+| 27 | `QUGATE_LOG_ADMIN_GATE_CLEARED` | Admin gate removed from a gate |
 
 ### Failure Events (high range)
 
