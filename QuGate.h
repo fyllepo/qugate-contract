@@ -127,6 +127,8 @@ constexpr sint64 QUGATE_MULTISIG_NO_ACTIVE_PROP  = -22; // no active proposal to
 constexpr sint64 QUGATE_TIME_LOCK_ALREADY_FIRED   = -23; // gate already unlocked and closed
 constexpr sint64 QUGATE_TIME_LOCK_NOT_CANCELLABLE = -24; // cancelTimeLock() called but cancellable=0
 constexpr sint64 QUGATE_TIME_LOCK_EPOCH_PAST      = -25; // unlockEpoch is in the past at creation
+constexpr sint64 QUGATE_ADMIN_GATE_REQUIRED       = -26; // config change needs admin gate approval
+constexpr sint64 QUGATE_INVALID_ADMIN_GATE        = -27; // adminGateId doesn't exist or isn't MULTISIG mode
 
 // Log type constants (positive = success events, high numbers = actions)
 constexpr uint32 QUGATE_LOG_GATE_CREATED = 1;
@@ -151,6 +153,8 @@ constexpr uint32 QUGATE_LOG_MULTISIG_CONFIGURED = 22; // guardians/threshold upd
 constexpr uint32 QUGATE_LOG_TIME_LOCK_FIRED      = 23; // unlock epoch reached, funds released
 constexpr uint32 QUGATE_LOG_TIME_LOCK_CANCELLED  = 24; // owner cancelled, funds refunded
 constexpr uint32 QUGATE_LOG_TIME_LOCK_CONFIGURED = 25; // time lock created
+constexpr uint32 QUGATE_LOG_ADMIN_GATE_SET       = 26; // admin gate assigned to a gate
+constexpr uint32 QUGATE_LOG_ADMIN_GATE_CLEARED   = 27; // admin gate removed from a gate
 
 // Failure log types use high range
 constexpr uint32 QUGATE_LOG_FAIL_INVALID_GATE = 100;
@@ -275,6 +279,10 @@ public:
         sint64 chainNextGateId;   // Versioned gate ID of next gate in chain; -1 if this is a terminal gate
         sint64 chainReserve;      // QU reserve to pay hop fees when forwarded amount is insufficient
         uint8  chainDepth;        // This gate's position in its chain (0 = root/trigger, increments toward leaf)
+
+        // Admin gate fields — governance via MULTISIG quorum
+        sint64 adminGateId;       // -1 = no admin gate (owner-only). Set to a MULTISIG gate ID for quorum-controlled config.
+        uint8  hasAdminGate;      // 1 if adminGateId is set
     };
 
     // =============================================
@@ -478,8 +486,30 @@ public:
         sint64 status;
     };
 
+    // Set or clear the admin gate on a gate. Owner-only if no admin gate set; admin gate approval required if already set.
+    struct setAdminGate_input
+    {
+        uint64 gateId;
+        sint64 adminGateId;   // -1 to clear admin gate
+    };
+    struct setAdminGate_output
+    {
+        sint64 status;
+    };
+
+    // Query admin gate configuration for a gate.
+    struct getAdminGate_input
+    {
+        uint64 gateId;
+    };
+    struct getAdminGate_output
+    {
+        uint8  hasAdminGate;
+        sint64 adminGateId;
+        uint8  adminGateMode;  // mode of the admin gate (should be QUGATE_MODE_MULTISIG)
+    };
+
     // Query TIME_LOCK state for a gate.
-    struct getTimeLockState_input
     {
         uint32 gateId;
     };
@@ -759,6 +789,9 @@ public:
         uint64 walkSlot;
         uint8 walkStep;
         GateConfig walkGate;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        MultisigConfig adminCheckMs;
     };
 
     struct sendToGateVerified_locals
@@ -838,6 +871,9 @@ public:
         HeartbeatConfig hbZeroCfg;
         MultisigConfig msigZeroCfg;
         TimeLockConfig tlZeroCfg;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        MultisigConfig adminCheckMs;
     };
 
     struct updateGate_locals
@@ -848,6 +884,9 @@ public:
         uint64 i;
         uint64 slotIdx;
         uint64 encodedGen;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        MultisigConfig adminCheckMs;
     };
 
     struct getGate_locals
@@ -902,6 +941,9 @@ public:
         uint64 slotIdx;
         uint64 encodedGen;
         TimeLockConfig cfg;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        MultisigConfig adminCheckMs;
     };
 
     struct cancelTimeLock_locals
@@ -912,6 +954,9 @@ public:
         uint64 encodedGen;
         TimeLockConfig cfg;
         TimeLockConfig zeroCfg;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        MultisigConfig adminCheckMs;
     };
 
     struct getTimeLockState_locals
@@ -920,6 +965,28 @@ public:
         uint64 slotIdx;
         uint64 encodedGen;
         TimeLockConfig cfg;
+    };
+
+    struct setAdminGate_locals
+    {
+        QuGateLogger logger;
+        GateConfig gate;
+        GateConfig adminGate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        uint64 adminSlot;
+        uint64 adminEncodedGen;
+        MultisigConfig msCfg;
+        uint8 adminApproved;
+    };
+
+    struct getAdminGate_locals
+    {
+        GateConfig gate;
+        GateConfig adminGate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        uint64 adminSlot;
     };
 
     // Oracle notification callback types
@@ -961,6 +1028,9 @@ public:
         uint8  i;
         uint16 shareSum;
         HeartbeatConfig cfg;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        MultisigConfig adminCheckMs;
     };
 
     struct heartbeat_locals
@@ -990,6 +1060,9 @@ public:
         MultisigConfig cfg;
         uint8 i;
         uint8 j;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        MultisigConfig adminCheckMs;
     };
 
     struct getMultisigState_locals
@@ -1169,6 +1242,10 @@ public:
         locals.newGate.chainNextGateId = -1;
         locals.newGate.chainReserve = 0;
         locals.newGate.chainDepth = 0;
+
+        // Admin gate fields
+        locals.newGate.adminGateId = -1;
+        locals.newGate.hasAdminGate = 0;
 
         for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i++)
         {
@@ -2194,16 +2271,38 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
+        // Authorization: owner OR admin gate approval
         if (locals.gate.owner != qpi.invocator())
         {
-            if (qpi.invocationReward() > 0)
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
             }
-            output.status = QUGATE_UNAUTHORIZED;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
+            if (adminAuth == 0)
+            {
+                if (qpi.invocationReward() > 0)
+                {
+                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                }
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
         }
 
         if (locals.gate.active == 0)
@@ -2351,16 +2450,38 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
+        // Authorization: owner OR admin gate approval
         if (locals.gate.owner != qpi.invocator())
         {
-            if (qpi.invocationReward() > 0)
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
             }
-            output.status = QUGATE_UNAUTHORIZED;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
+            if (adminAuth == 0)
+            {
+                if (qpi.invocationReward() > 0)
+                {
+                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                }
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
         }
 
         if (locals.gate.active == 0)
@@ -2922,16 +3043,38 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
+        // Authorization: owner OR admin gate approval
         if (locals.gate.owner != qpi.invocator())
         {
-            if (qpi.invocationReward() > 0)
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
             }
-            output.result = QUGATE_UNAUTHORIZED;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
+            if (adminAuth == 0)
+            {
+                if (qpi.invocationReward() > 0)
+                {
+                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                }
+                output.result = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
         }
 
         if (locals.gate.active == 0)
@@ -3110,13 +3253,34 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        // Must be gate owner
+        // Authorization: owner OR admin gate approval
         if (locals.gate.owner != qpi.invocator())
         {
-            output.status = QUGATE_UNAUTHORIZED;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
+            {
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
+            }
+            if (adminAuth == 0)
+            {
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
         }
 
         // Gate must be active
@@ -3403,13 +3567,34 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        // Must be gate owner
+        // Authorization: owner OR admin gate approval
         if (locals.gate.owner != qpi.invocator())
         {
-            output.status = QUGATE_UNAUTHORIZED;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
+            {
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
+            }
+            if (adminAuth == 0)
+            {
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
         }
 
         // Gate must be active
@@ -3579,13 +3764,34 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        // Must be gate owner
+        // Authorization: owner OR admin gate approval
         if (locals.gate.owner != qpi.invocator())
         {
-            output.status = QUGATE_UNAUTHORIZED;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
+            {
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
+            }
+            if (adminAuth == 0)
+            {
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
         }
 
         // Gate must be active
@@ -3666,13 +3872,34 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        // Must be gate owner
+        // Authorization: owner OR admin gate approval
         if (locals.gate.owner != qpi.invocator())
         {
-            output.status = QUGATE_UNAUTHORIZED;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
+            {
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
+            }
+            if (adminAuth == 0)
+            {
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
         }
 
         // Gate must be active
@@ -3809,12 +4036,177 @@ public:
     }
 
     // =============================================
+    // setAdminGate procedure
+    // =============================================
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(setAdminGate)
+    {
+        output.status = QUGATE_SUCCESS;
+
+        locals.logger._contractIndex = CONTRACT_INDEX;
+        locals.logger.sender = qpi.invocator();
+        locals.logger.gateId = input.gateId;
+        locals.logger.amount = 0;
+
+        // Refund any attached QU
+        if (qpi.invocationReward() > 0)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+        }
+
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            output.status = QUGATE_INVALID_GATE_ID;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+
+        // Gate must be active
+        if (locals.gate.active == 0)
+        {
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Authorization: if no admin gate set, require owner; if admin gate set, require admin gate approval
+        if (locals.gate.hasAdminGate == 0)
+        {
+            // No admin gate — owner only
+            if (qpi.invocator() != locals.gate.owner)
+            {
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+        }
+        else
+        {
+            // Admin gate is set — require admin gate approval (multisig resolved this epoch)
+            locals.adminSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+            locals.adminApproved = 0;
+            if (locals.adminSlot < state.get()._gateCount)
+            {
+                locals.adminGate = state.get()._gates.get(locals.adminSlot);
+                if (locals.adminGate.active && locals.adminGate.mode == QUGATE_MODE_MULTISIG)
+                {
+                    locals.msCfg = state.get()._multisigConfigs.get(locals.adminSlot);
+                    if (locals.msCfg.approvalCount >= locals.msCfg.required
+                        && locals.msCfg.proposalEpoch == (uint32)qpi.epoch())
+                    {
+                        locals.adminApproved = 1;
+                    }
+                }
+            }
+            if (locals.adminApproved == 0 && qpi.invocator() != locals.gate.owner)
+            {
+                output.status = QUGATE_ADMIN_GATE_REQUIRED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+        }
+
+        // Clear admin gate
+        if (input.adminGateId == -1)
+        {
+            locals.gate.adminGateId = -1;
+            locals.gate.hasAdminGate = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            output.status = QUGATE_SUCCESS;
+            locals.logger._type = QUGATE_LOG_ADMIN_GATE_CLEARED;
+            LOG_INFO(locals.logger);
+            return;
+        }
+
+        // Validate adminGateId points to an active MULTISIG gate
+        locals.adminSlot = (uint64)input.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.adminEncodedGen = (uint64)input.adminGateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.adminGateId <= 0
+            || locals.adminSlot >= state.get()._gateCount
+            || locals.adminEncodedGen == 0
+            || state.get()._gateGenerations.get(locals.adminSlot) != (uint16)(locals.adminEncodedGen - 1))
+        {
+            output.status = QUGATE_INVALID_ADMIN_GATE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.adminGate = state.get()._gates.get(locals.adminSlot);
+        if (locals.adminGate.active == 0 || locals.adminGate.mode != QUGATE_MODE_MULTISIG)
+        {
+            output.status = QUGATE_INVALID_ADMIN_GATE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Set admin gate
+        locals.gate.adminGateId = input.adminGateId;
+        locals.gate.hasAdminGate = 1;
+        state.mut()._gates.set(locals.slotIdx, locals.gate);
+
+        output.status = QUGATE_SUCCESS;
+        locals.logger._type = QUGATE_LOG_ADMIN_GATE_SET;
+        LOG_INFO(locals.logger);
+    }
+
+    // =============================================
+    // getAdminGate function
+    // =============================================
+
+    PUBLIC_FUNCTION_WITH_LOCALS(getAdminGate)
+    {
+        output.hasAdminGate = 0;
+        output.adminGateId = -1;
+        output.adminGateMode = 0;
+
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+        output.hasAdminGate = locals.gate.hasAdminGate;
+        output.adminGateId = locals.gate.adminGateId;
+
+        // If admin gate is set, look up its mode
+        if (locals.gate.hasAdminGate)
+        {
+            locals.adminSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+            if (locals.adminSlot < state.get()._gateCount)
+            {
+                locals.adminGate = state.get()._gates.get(locals.adminSlot);
+                output.adminGateMode = locals.adminGate.mode;
+            }
+        }
+    }
+
+    // =============================================
     // Registration
     // =============================================
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
     {
-        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState 18=configureTimeLock 19=cancelTimeLock 20=getTimeLockState
+        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState 18=configureTimeLock 19=cancelTimeLock 20=getTimeLockState 21=setAdminGate 22=getAdminGate
         REGISTER_USER_PROCEDURE(createGate, 1);
         REGISTER_USER_PROCEDURE(sendToGate, 2);
         REGISTER_USER_PROCEDURE(closeGate, 3);
@@ -3835,6 +4227,8 @@ public:
         REGISTER_USER_PROCEDURE(configureTimeLock, 18);
         REGISTER_USER_PROCEDURE(cancelTimeLock, 19);
         REGISTER_USER_FUNCTION(getTimeLockState, 20);
+        REGISTER_USER_PROCEDURE(setAdminGate, 21);
+        REGISTER_USER_FUNCTION(getAdminGate, 22);
         REGISTER_USER_PROCEDURE_NOTIFICATION(OraclePriceNotification);
     }
 
