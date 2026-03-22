@@ -360,7 +360,7 @@ public:
     // Adds invocationReward to a gate reserve. reserveTarget: 0=oracleReserve, 1=chainReserve.
     struct fundGate_input
     {
-        sint64 gateId;
+        uint64 gateId;
         uint8  reserveTarget;  // 0 = oracleReserve, 1 = chainReserve
     };
     struct fundGate_output
@@ -371,7 +371,7 @@ public:
     // Sets or clears the chain link on a gate. nextGateId=-1 clears the chain. Owner only. Burns QUGATE_CHAIN_HOP_FEE.
     struct setChain_input
     {
-        sint64 gateId;
+        uint64 gateId;
         sint64 nextGateId;    // -1 to clear chain
     };
     struct setChain_output
@@ -778,6 +778,10 @@ public:
         processConditional_locals condLocals;
     };
 
+    struct processMultisigVote_input { uint64 slotIdx; uint64 gateId; sint64 amount; };
+    struct processMultisigVote_output { sint64 status; };
+    struct processMultisigVote_locals { GateConfig gate; MultisigConfig msigCfg; uint8 foundGuardian; uint8 guardianIdx; QuGateLogger logger; };
+
     struct fundGate_locals
     {
         QuGateLogger logger;
@@ -832,9 +836,9 @@ public:
         // Chain forwarding
         GateConfig nextChainGate;
         // Multisig processing
-        MultisigConfig msigCfg;
-        uint8 msigGuardianIdx;
-        uint8 msigFoundGuardian;
+        processMultisigVote_input msigIn;
+        processMultisigVote_output msigOut;
+        processMultisigVote_locals msigLocals;
         // TIME_LOCK processing
         TimeLockConfig tlCfg;
     };
@@ -867,9 +871,9 @@ public:
         routeToGate_locals chainLocals;
         GateConfig nextChainGate;
         // Multisig processing
-        MultisigConfig msigCfg;
-        uint8 msigGuardianIdx;
-        uint8 msigFoundGuardian;
+        processMultisigVote_input msigIn;
+        processMultisigVote_output msigOut;
+        processMultisigVote_locals msigLocals;
         // TIME_LOCK processing
         TimeLockConfig tlCfg;
     };
@@ -1586,6 +1590,95 @@ public:
     // routeToGate — executes a single routing hop for chain forwarding.
     // Routes `input.amount` (minus hop fee) through the gate at `input.slotIdx` according to
     // that gate's mode. Does NOT recurse or continue the chain — the caller (OraclePriceNotification)
+    // processMultisigVote — shared guardian voting logic for MULTISIG gates.
+    // Called from sendToGate and sendToGateVerified after funds are accumulated.
+    PRIVATE_PROCEDURE_WITH_LOCALS(processMultisigVote)
+    {
+        output.status = QUGATE_SUCCESS;
+
+        // Check if sender is a guardian
+        locals.msigCfg = state.get()._multisigConfigs.get(input.slotIdx);
+        locals.foundGuardian = 0;
+        locals.guardianIdx = 0;
+        for (uint8 _gi = 0; _gi < locals.msigCfg.guardianCount; _gi++)
+        {
+            if (locals.foundGuardian == 0 && locals.msigCfg.guardians[_gi] == qpi.invocator())
+            {
+                locals.foundGuardian = 1;
+                locals.guardianIdx = _gi;
+            }
+        }
+
+        if (locals.foundGuardian == 1)
+        {
+            // Check proposal expiry
+            if (locals.msigCfg.proposalActive == 1
+                && (uint32)qpi.epoch() - locals.msigCfg.proposalEpoch > locals.msigCfg.proposalExpiryEpochs)
+            {
+                // Proposal expired — reset
+                locals.msigCfg.approvalBitmap = 0;
+                locals.msigCfg.approvalCount = 0;
+                locals.msigCfg.proposalActive = 0;
+                state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
+                locals.logger._contractIndex = CONTRACT_INDEX;
+                locals.logger._type = QUGATE_LOG_MULTISIG_EXPIRED;
+                locals.logger.gateId = input.gateId;
+                locals.logger.sender = qpi.invocator();
+                locals.logger.amount = 0;
+                LOG_INFO(locals.logger);
+            }
+
+            // Check if already voted
+            if ((locals.msigCfg.approvalBitmap & (1 << locals.guardianIdx)) != 0)
+            {
+                output.status = QUGATE_MULTISIG_ALREADY_VOTED;
+                return;
+            }
+
+            // Record vote
+            locals.msigCfg.approvalBitmap = locals.msigCfg.approvalBitmap | (uint8)(1 << locals.guardianIdx);
+            locals.msigCfg.approvalCount++;
+            if (locals.msigCfg.proposalActive == 0)
+            {
+                locals.msigCfg.proposalActive = 1;
+                locals.msigCfg.proposalEpoch = (uint32)qpi.epoch();
+            }
+            state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
+
+            locals.logger._contractIndex = CONTRACT_INDEX;
+            locals.logger._type = QUGATE_LOG_MULTISIG_VOTE;
+            locals.logger.gateId = input.gateId;
+            locals.logger.sender = qpi.invocator();
+            locals.logger.amount = input.amount;
+            LOG_INFO(locals.logger);
+
+            // Check threshold
+            locals.gate = state.get()._gates.get(input.slotIdx);
+            if (locals.msigCfg.approvalCount >= locals.msigCfg.required && locals.gate.currentBalance > 0)
+            {
+                // Transfer balance to target (recipients[0] is the target address)
+                sint64 releaseAmount = (sint64)locals.gate.currentBalance;
+                qpi.transfer(locals.gate.recipients.get(0), releaseAmount);
+                locals.gate.totalForwarded += (uint64)releaseAmount;
+                locals.gate.currentBalance = 0;
+                state.mut()._gates.set(input.slotIdx, locals.gate);
+
+                // Reset proposal
+                locals.msigCfg.approvalBitmap = 0;
+                locals.msigCfg.approvalCount = 0;
+                locals.msigCfg.proposalActive = 0;
+                state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
+
+                locals.logger._contractIndex = CONTRACT_INDEX;
+                locals.logger._type = QUGATE_LOG_MULTISIG_EXECUTED;
+                locals.logger.gateId = input.gateId;
+                locals.logger.sender = qpi.invocator();
+                locals.logger.amount = releaseAmount;
+                LOG_INFO(locals.logger);
+            }
+        }
+    }
+
     // is responsible for iterating subsequent hops.
     //
     // Hop fee priority:
@@ -1844,86 +1937,14 @@ public:
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
 
-            // Check if sender is a guardian
-            locals.msigCfg = state.get()._multisigConfigs.get(locals.slotIdx);
-            locals.msigFoundGuardian = 0;
-            locals.msigGuardianIdx = 0;
-            for (uint8 _gi = 0; _gi < locals.msigCfg.guardianCount; _gi++)
+            locals.msigIn.slotIdx = locals.slotIdx;
+            locals.msigIn.gateId = input.gateId;
+            locals.msigIn.amount = locals.amount;
+            processMultisigVote(qpi, state, locals.msigIn, locals.msigOut, locals.msigLocals);
+            if (locals.msigOut.status != QUGATE_SUCCESS)
             {
-                if (locals.msigFoundGuardian == 0 && locals.msigCfg.guardians[_gi] == qpi.invocator())
-                {
-                    locals.msigFoundGuardian = 1;
-                    locals.msigGuardianIdx = _gi;
-                }
-            }
-
-            if (locals.msigFoundGuardian == 1)
-            {
-                // Check proposal expiry
-                if (locals.msigCfg.proposalActive == 1
-                    && (uint32)qpi.epoch() - locals.msigCfg.proposalEpoch > locals.msigCfg.proposalExpiryEpochs)
-                {
-                    // Proposal expired — reset
-                    locals.msigCfg.approvalBitmap = 0;
-                    locals.msigCfg.approvalCount = 0;
-                    locals.msigCfg.proposalActive = 0;
-                    state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigCfg);
-                    locals.logger._contractIndex = CONTRACT_INDEX;
-                    locals.logger._type = QUGATE_LOG_MULTISIG_EXPIRED;
-                    locals.logger.gateId = input.gateId;
-                    locals.logger.sender = qpi.invocator();
-                    locals.logger.amount = 0;
-                    LOG_INFO(locals.logger);
-                }
-
-                // Check if already voted
-                if ((locals.msigCfg.approvalBitmap & (1 << locals.msigGuardianIdx)) != 0)
-                {
-                    output.status = QUGATE_MULTISIG_ALREADY_VOTED;
-                    return;
-                }
-
-                // Record vote
-                locals.msigCfg.approvalBitmap = locals.msigCfg.approvalBitmap | (uint8)(1 << locals.msigGuardianIdx);
-                locals.msigCfg.approvalCount++;
-                if (locals.msigCfg.proposalActive == 0)
-                {
-                    locals.msigCfg.proposalActive = 1;
-                    locals.msigCfg.proposalEpoch = (uint32)qpi.epoch();
-                }
-                state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigCfg);
-
-                locals.logger._contractIndex = CONTRACT_INDEX;
-                locals.logger._type = QUGATE_LOG_MULTISIG_VOTE;
-                locals.logger.gateId = input.gateId;
-                locals.logger.sender = qpi.invocator();
-                locals.logger.amount = locals.amount;
-                LOG_INFO(locals.logger);
-
-                // Check threshold
-                locals.gate = state.get()._gates.get(locals.slotIdx);
-                if (locals.msigCfg.approvalCount >= locals.msigCfg.required && locals.gate.currentBalance > 0)
-                {
-                    // Transfer balance to target (recipients[0] is the target address)
-                    sint64 releaseAmount = (sint64)locals.gate.currentBalance;
-                    qpi.transfer(locals.gate.recipients.get(0), releaseAmount);
-                    locals.gate.totalForwarded += (uint64)releaseAmount;
-                    locals.gate.currentBalance = 0;
-                    state.mut()._gates.set(locals.slotIdx, locals.gate);
-
-                    // Reset proposal
-                    locals.msigCfg.approvalBitmap = 0;
-                    locals.msigCfg.approvalCount = 0;
-                    locals.msigCfg.proposalActive = 0;
-                    state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigCfg);
-
-                    locals.logger._contractIndex = CONTRACT_INDEX;
-                    locals.logger._type = QUGATE_LOG_MULTISIG_EXECUTED;
-                    locals.logger.gateId = input.gateId;
-                    locals.logger.sender = qpi.invocator();
-                    locals.logger.amount = releaseAmount;
-                    LOG_INFO(locals.logger);
-                }
+                output.status = locals.msigOut.status;
+                return;
             }
         }
 
@@ -2157,83 +2178,14 @@ public:
             locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
             LOG_INFO(locals.logger);
 
-            // Check if sender is a guardian
-            locals.msigCfg = state.get()._multisigConfigs.get(locals.slotIdx);
-            locals.msigFoundGuardian = 0;
-            locals.msigGuardianIdx = 0;
-            for (uint8 _gi = 0; _gi < locals.msigCfg.guardianCount; _gi++)
+            locals.msigIn.slotIdx = locals.slotIdx;
+            locals.msigIn.gateId = input.gateId;
+            locals.msigIn.amount = locals.amount;
+            processMultisigVote(qpi, state, locals.msigIn, locals.msigOut, locals.msigLocals);
+            if (locals.msigOut.status != QUGATE_SUCCESS)
             {
-                if (locals.msigFoundGuardian == 0 && locals.msigCfg.guardians[_gi] == qpi.invocator())
-                {
-                    locals.msigFoundGuardian = 1;
-                    locals.msigGuardianIdx = _gi;
-                }
-            }
-
-            if (locals.msigFoundGuardian == 1)
-            {
-                // Check proposal expiry
-                if (locals.msigCfg.proposalActive == 1
-                    && (uint32)qpi.epoch() - locals.msigCfg.proposalEpoch > locals.msigCfg.proposalExpiryEpochs)
-                {
-                    locals.msigCfg.approvalBitmap = 0;
-                    locals.msigCfg.approvalCount = 0;
-                    locals.msigCfg.proposalActive = 0;
-                    state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigCfg);
-                    locals.logger._contractIndex = CONTRACT_INDEX;
-                    locals.logger._type = QUGATE_LOG_MULTISIG_EXPIRED;
-                    locals.logger.gateId = input.gateId;
-                    locals.logger.sender = qpi.invocator();
-                    locals.logger.amount = 0;
-                    LOG_INFO(locals.logger);
-                }
-
-                // Check if already voted
-                if ((locals.msigCfg.approvalBitmap & (1 << locals.msigGuardianIdx)) != 0)
-                {
-                    output.status = QUGATE_MULTISIG_ALREADY_VOTED;
-                    return;
-                }
-
-                // Record vote
-                locals.msigCfg.approvalBitmap = locals.msigCfg.approvalBitmap | (uint8)(1 << locals.msigGuardianIdx);
-                locals.msigCfg.approvalCount++;
-                if (locals.msigCfg.proposalActive == 0)
-                {
-                    locals.msigCfg.proposalActive = 1;
-                    locals.msigCfg.proposalEpoch = (uint32)qpi.epoch();
-                }
-                state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigCfg);
-
-                locals.logger._contractIndex = CONTRACT_INDEX;
-                locals.logger._type = QUGATE_LOG_MULTISIG_VOTE;
-                locals.logger.gateId = input.gateId;
-                locals.logger.sender = qpi.invocator();
-                locals.logger.amount = locals.amount;
-                LOG_INFO(locals.logger);
-
-                // Check threshold
-                locals.gate = state.get()._gates.get(locals.slotIdx);
-                if (locals.msigCfg.approvalCount >= locals.msigCfg.required && locals.gate.currentBalance > 0)
-                {
-                    sint64 releaseAmount = (sint64)locals.gate.currentBalance;
-                    qpi.transfer(locals.gate.recipients.get(0), releaseAmount);
-                    locals.gate.totalForwarded += (uint64)releaseAmount;
-                    locals.gate.currentBalance = 0;
-                    state.mut()._gates.set(locals.slotIdx, locals.gate);
-
-                    locals.msigCfg.approvalBitmap = 0;
-                    locals.msigCfg.approvalCount = 0;
-                    locals.msigCfg.proposalActive = 0;
-                    state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigCfg);
-
-                    locals.logger._contractIndex = CONTRACT_INDEX;
-                    locals.logger._type = QUGATE_LOG_MULTISIG_EXECUTED;
-                    locals.logger.gateId = input.gateId;
-                    locals.logger.sender = qpi.invocator();
-                    locals.logger.amount = releaseAmount;
-                    LOG_INFO(locals.logger);
-                }
+                output.status = locals.msigOut.status;
+                return;
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
@@ -2714,7 +2666,7 @@ public:
         // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
         locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
-        if (input.gateId <= 0
+        if (input.gateId == 0
             || locals.slotIdx >= state.get()._gateCount
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
@@ -2929,6 +2881,23 @@ public:
                     qpi.unsubscribeOracle(locals.gate.oracleSubscriptionId);
                     locals.gate.oracleSubscriptionId = -1;
                 }
+                // Defensive cleanup of auxiliary configs for recycled slot
+                {
+                    HeartbeatConfig zeroCfg;
+                    zeroCfg.active = 0; zeroCfg.triggered = 0; zeroCfg.thresholdEpochs = 0;
+                    zeroCfg.lastHeartbeatEpoch = 0; zeroCfg.payoutPercentPerEpoch = 0;
+                    zeroCfg.minimumBalance = 0; zeroCfg.triggerEpoch = 0; zeroCfg.beneficiaryCount = 0;
+                    for (uint8 _zi = 0; _zi < 8; _zi++) { zeroCfg.beneficiaryAddresses[_zi] = id::zero(); zeroCfg.beneficiaryShares[_zi] = 0; }
+                    state.mut()._heartbeatConfigs.set(locals.slotIdx, zeroCfg);
+                    MultisigConfig zeroMs;
+                    for (uint8 _zi = 0; _zi < 8; _zi++) { zeroMs.guardians[_zi] = id::zero(); }
+                    zeroMs.guardianCount = 0; zeroMs.required = 0; zeroMs.proposalExpiryEpochs = 0;
+                    zeroMs.approvalBitmap = 0; zeroMs.approvalCount = 0; zeroMs.proposalEpoch = 0; zeroMs.proposalActive = 0;
+                    state.mut()._multisigConfigs.set(locals.slotIdx, zeroMs);
+                    TimeLockConfig zeroTl;
+                    zeroTl.unlockEpoch = 0; zeroTl.cancellable = 0; zeroTl.fired = 0; zeroTl.cancelled = 0; zeroTl.active = 0;
+                    state.mut()._timeLockConfigs.set(locals.slotIdx, zeroTl);
+                }
                 locals.gate.active = 0;
                 state.mut()._activeGates -= 1;
                 state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
@@ -3107,9 +3076,9 @@ public:
 
         // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
         // Decode source gate
-        locals.slotIdx = (uint64)(input.gateId) & QUGATE_GATE_ID_SLOT_MASK;
-        locals.encodedGen = (uint64)(input.gateId) >> QUGATE_GATE_ID_SLOT_BITS;
-        if (input.gateId <= 0
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
             || locals.slotIdx >= state.get()._gateCount
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
@@ -4166,21 +4135,18 @@ public:
             return;
         }
 
-        // Authorization: if no admin gate set, require owner; if admin gate set, require admin gate approval
-        if (locals.gate.hasAdminGate == 0)
+        // Authorization
+        if (qpi.invocator() != locals.gate.owner)
         {
-            // No admin gate — owner only
-            if (qpi.invocator() != locals.gate.owner)
+            // Non-owner: always needs admin gate approval
+            if (!locals.gate.hasAdminGate)
             {
                 output.status = QUGATE_UNAUTHORIZED;
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
                 LOG_WARNING(locals.logger);
                 return;
             }
-        }
-        else
-        {
-            // Admin gate is set — require admin gate approval (multisig resolved this epoch)
+            // Check admin gate approval
             locals.adminSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
             locals.adminApproved = 0;
             if (locals.adminSlot < state.get()._gateCount)
@@ -4196,7 +4162,7 @@ public:
                     }
                 }
             }
-            if (locals.adminApproved == 0 && qpi.invocator() != locals.gate.owner)
+            if (locals.adminApproved == 0)
             {
                 output.status = QUGATE_ADMIN_GATE_REQUIRED;
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
@@ -4204,6 +4170,7 @@ public:
                 return;
             }
         }
+        // Owner always authorized (can set or clear admin gate)
 
         // Clear admin gate
         if (input.adminGateId == -1)
@@ -4435,6 +4402,31 @@ public:
                     {
                         qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
                         locals.gate.chainReserve = 0;
+                    }
+
+                    // Clear mode-specific configs on expiry (prevents ghost state in recycled slots)
+                    if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
+                    {
+                        HeartbeatConfig zeroCfg;
+                        zeroCfg.active = 0; zeroCfg.triggered = 0; zeroCfg.thresholdEpochs = 0;
+                        zeroCfg.lastHeartbeatEpoch = 0; zeroCfg.payoutPercentPerEpoch = 0;
+                        zeroCfg.minimumBalance = 0; zeroCfg.triggerEpoch = 0; zeroCfg.beneficiaryCount = 0;
+                        for (uint8 _zi = 0; _zi < 8; _zi++) { zeroCfg.beneficiaryAddresses[_zi] = id::zero(); zeroCfg.beneficiaryShares[_zi] = 0; }
+                        state.mut()._heartbeatConfigs.set(locals.i, zeroCfg);
+                    }
+                    else if (locals.gate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        MultisigConfig zeroCfg;
+                        for (uint8 _zi = 0; _zi < 8; _zi++) { zeroCfg.guardians[_zi] = id::zero(); }
+                        zeroCfg.guardianCount = 0; zeroCfg.required = 0; zeroCfg.proposalExpiryEpochs = 0;
+                        zeroCfg.approvalBitmap = 0; zeroCfg.approvalCount = 0; zeroCfg.proposalEpoch = 0; zeroCfg.proposalActive = 0;
+                        state.mut()._multisigConfigs.set(locals.i, zeroCfg);
+                    }
+                    else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
+                    {
+                        TimeLockConfig zeroCfg;
+                        zeroCfg.unlockEpoch = 0; zeroCfg.cancellable = 0; zeroCfg.fired = 0; zeroCfg.cancelled = 0; zeroCfg.active = 0;
+                        state.mut()._timeLockConfigs.set(locals.i, zeroCfg);
                     }
 
                     locals.gate.active = 0;
