@@ -11,6 +11,9 @@
 //   RANDOM      - Select one recipient per payment using tick-based entropy
 //   CONDITIONAL - Only forward if sender matches whitelist, else bounce
 //   ORACLE      - Oracle-triggered distribution based on price/time conditions
+//   HEARTBEAT   - Dead-man's switch; distributes if not pinged within N epochs
+//   MULTISIG    - M-of-N guardian approval before funds release
+//   TIME_LOCK   - Funds locked until a target epoch, then released
 //
 // Anti-Spam:
 //   - Escalating creation fee: cost increases as capacity fills
@@ -40,7 +43,7 @@
 
 using namespace QPI;
 
-// Contract index — Pulse took index 24, QuGate uses 25
+// Contract index — Pulse took index 24, QuGate uses 26
 #ifndef CONTRACT_INDEX
 #define CONTRACT_INDEX 25
 #endif
@@ -437,7 +440,7 @@ public:
     // Configure M-of-N multisig guardians/threshold on a MULTISIG gate. Owner-only.
     struct configureMultisig_input
     {
-        uint32       gateId;
+        uint64       gateId;
         Array<id, 8> guardians;
         uint8        guardianCount;           // 1-8
         uint8        required;                // 1-guardianCount
@@ -451,7 +454,7 @@ public:
     // Query current multisig proposal state for a MULTISIG gate.
     struct getMultisigState_input
     {
-        uint32 gateId;
+        uint64 gateId;
     };
     struct getMultisigState_output
     {
@@ -468,7 +471,7 @@ public:
     // Configure TIME_LOCK mode on a TIME_LOCK gate. Owner-only.
     struct configureTimeLock_input
     {
-        uint32 gateId;
+        uint64 gateId;
         uint32 unlockEpoch;   // must be > current epoch
         uint8  cancellable;   // 1 = allow owner to cancel before unlock
     };
@@ -480,7 +483,7 @@ public:
     // Cancel a TIME_LOCK gate (owner-only, only if cancellable=1).
     struct cancelTimeLock_input
     {
-        uint32 gateId;
+        uint64 gateId;
     };
     struct cancelTimeLock_output
     {
@@ -516,7 +519,7 @@ public:
     // Query TIME_LOCK state for a gate.
     struct getTimeLockState_input
     {
-        uint32 gateId;
+        uint64 gateId;
     };
     struct getTimeLockState_output
     {
@@ -2249,6 +2252,60 @@ public:
                 LOG_INFO(locals.logger);
             }
         }
+
+        // Chain forwarding: if this gate has a chain link, forward to the next gate
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+        if (locals.gate.chainNextGateId != -1 && locals.gate.mode != QUGATE_MODE_ORACLE
+            && locals.gate.mode != QUGATE_MODE_MULTISIG
+            && locals.gate.mode != QUGATE_MODE_TIME_LOCK)
+        {
+            // Determine forwarded amount from mode handler outputs
+            sint64 chainAmount = 0;
+            if (locals.gate.mode == QUGATE_MODE_SPLIT)
+            {
+                chainAmount = locals.splitOut.forwarded;
+            }
+            else if (locals.gate.mode == QUGATE_MODE_ROUND_ROBIN)
+            {
+                chainAmount = locals.rrOut.forwarded;
+            }
+            else if (locals.gate.mode == QUGATE_MODE_THRESHOLD)
+            {
+                chainAmount = locals.threshOut.forwarded;
+            }
+            else if (locals.gate.mode == QUGATE_MODE_RANDOM)
+            {
+                chainAmount = locals.randOut.forwarded;
+            }
+            else if (locals.gate.mode == QUGATE_MODE_CONDITIONAL && locals.condOut.status == QUGATE_SUCCESS)
+            {
+                chainAmount = locals.condOut.forwarded;
+            }
+
+            if (chainAmount > 0)
+            {
+                sint64 currentChainGateId = locals.gate.chainNextGateId;
+                uint8 hop = 0;
+                while (hop < QUGATE_MAX_CHAIN_DEPTH && currentChainGateId != -1 && chainAmount > 0)
+                {
+                    uint64 nextSlot = (uint64)currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
+                    uint64 nextGen = (uint64)currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
+                    if (nextSlot >= state.get()._gateCount || nextGen == 0
+                        || state.get()._gateGenerations.get(nextSlot) != (uint16)(nextGen - 1))
+                    {
+                        break; // dead link
+                    }
+                    locals.chainIn.slotIdx = nextSlot;
+                    locals.chainIn.amount = chainAmount;
+                    locals.chainIn.hopCount = hop;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    chainAmount = locals.chainOut.forwarded;
+                    locals.nextChainGate = state.get()._gates.get(nextSlot);
+                    currentChainGateId = locals.nextChainGate.chainNextGateId;
+                    hop += 1;
+                }
+            }
+        }
     }
 
     PUBLIC_PROCEDURE_WITH_LOCALS(closeGate)
@@ -2595,6 +2652,11 @@ public:
 
         // Update configuration (mode stays the same)
         locals.gate.recipientCount = input.recipientCount;
+        // Reset round robin index if it would be out of bounds after recipient count change
+        if (locals.gate.mode == QUGATE_MODE_ROUND_ROBIN && locals.gate.roundRobinIndex >= input.recipientCount)
+        {
+            locals.gate.roundRobinIndex = 0;
+        }
         locals.gate.threshold = input.threshold;
         locals.gate.allowedSenderCount = input.allowedSenderCount;
 
@@ -2974,6 +3036,9 @@ public:
                 locals.entry.chainNextGateId = -1;
                 locals.entry.chainReserve = 0;
                 locals.entry.chainDepth = 0;
+                locals.entry.allowedSenderCount = 0;
+                locals.entry.adminGateId = -1;
+                locals.entry.hasAdminGate = 0;
                 for (locals.j = 0; locals.j < QUGATE_MAX_RECIPIENTS; locals.j++)
                 {
                     locals.entry.recipients.set(locals.j, id::zero());
@@ -3000,11 +3065,15 @@ public:
                 locals.entry.chainNextGateId = locals.gate.chainNextGateId;
                 locals.entry.chainReserve = locals.gate.chainReserve;
                 locals.entry.chainDepth = locals.gate.chainDepth;
+                locals.entry.allowedSenderCount = locals.gate.allowedSenderCount;
+                locals.entry.adminGateId = locals.gate.adminGateId;
+                locals.entry.hasAdminGate = locals.gate.hasAdminGate;
 
                 for (locals.j = 0; locals.j < QUGATE_MAX_RECIPIENTS; locals.j++)
                 {
                     locals.entry.recipients.set(locals.j, locals.gate.recipients.get(locals.j));
                     locals.entry.ratios.set(locals.j, locals.gate.ratios.get(locals.j));
+                    locals.entry.allowedSenders.set(locals.j, locals.gate.allowedSenders.get(locals.j));
                 }
 
                 output.gates.set(locals.i, locals.entry);
@@ -3564,8 +3633,8 @@ public:
         }
 
         // Decode versioned gateId
-        locals.slotIdx = (uint64)input.gateId & QUGATE_GATE_ID_SLOT_MASK;
-        locals.encodedGen = (uint64)input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
         if (input.gateId == 0
             || locals.slotIdx >= state.get()._gateCount
             || locals.encodedGen == 0
@@ -3713,8 +3782,8 @@ public:
         output.proposalActive = 0;
 
         // Decode versioned gateId
-        locals.slotIdx = (uint64)input.gateId & QUGATE_GATE_ID_SLOT_MASK;
-        locals.encodedGen = (uint64)input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
         if (input.gateId == 0
             || locals.slotIdx >= state.get()._gateCount
             || locals.encodedGen == 0
@@ -3765,8 +3834,8 @@ public:
         }
 
         // Decode versioned gateId
-        locals.slotIdx = (uint64)input.gateId & QUGATE_GATE_ID_SLOT_MASK;
-        locals.encodedGen = (uint64)input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
         if (input.gateId == 0
             || locals.slotIdx >= state.get()._gateCount
             || locals.encodedGen == 0
@@ -3873,8 +3942,8 @@ public:
         }
 
         // Decode versioned gateId
-        locals.slotIdx = (uint64)input.gateId & QUGATE_GATE_ID_SLOT_MASK;
-        locals.encodedGen = (uint64)input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
         if (input.gateId == 0
             || locals.slotIdx >= state.get()._gateCount
             || locals.encodedGen == 0
@@ -4015,8 +4084,8 @@ public:
         output.epochsRemaining = 0;
 
         // Decode versioned gateId
-        locals.slotIdx = (uint64)input.gateId & QUGATE_GATE_ID_SLOT_MASK;
-        locals.encodedGen = (uint64)input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
         if (input.gateId == 0
             || locals.slotIdx >= state.get()._gateCount
             || locals.encodedGen == 0
