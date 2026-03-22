@@ -514,6 +514,7 @@ public:
     };
 
     // Query TIME_LOCK state for a gate.
+    struct getTimeLockState_input
     {
         uint32 gateId;
     };
