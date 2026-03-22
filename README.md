@@ -32,7 +32,7 @@ QuGate is a **network primitive** — shared, permissionless payment routing inf
 
 ## Overview
 
-QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of eight modes (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, ORACLE, HEARTBEAT, MULTISIG). Gates are composable: the output of one gate can be forwarded into another, enabling multi-stage payment pipelines without writing custom contracts.
+QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of nine modes (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, ORACLE, HEARTBEAT, MULTISIG, TIME_LOCK). Gates are composable: the output of one gate can be forwarded into another, enabling multi-stage payment pipelines without writing custom contracts.
 
 Gate-to-gate forwarding can happen in two ways:
 1. **Manual forwarding**: An external actor (client app, bot) calls sendToGate on the next gate.
@@ -845,6 +845,88 @@ Read-only query for current multisig proposal state.
 | proposalActive | uint8 | 1 if a proposal is in progress |
 | guardians | Array\<id, 8\> | Guardian public keys from MultisigConfig |
 
+#### configureTimeLock (Input Type 18)
+
+Configures a TIME_LOCK gate with an unlock epoch and cancellability flag. Owner only. The unlock epoch must be in the future.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | uint32 | 4 | Target TIME_LOCK gate ID |
+| unlockEpoch | uint32 | 4 | Epoch when funds release (must be > current epoch) |
+| cancellable | uint8 | 1 | 1 = owner can cancel before unlock |
+
+**Output**: `status` (sint64)
+
+**Validation**: Gate must be mode 8 (TIME_LOCK) and active. `unlockEpoch` must be greater than the current epoch. Owner only.
+
+#### cancelTimeLock (Input Type 19)
+
+Cancels a TIME_LOCK gate before the unlock epoch. Owner only. Requires `cancellable=1`. Refunds all held balance to the gate owner and closes the gate.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | uint32 | 4 | Target TIME_LOCK gate ID |
+
+**Output**: `status` (sint64)
+
+**Validation**: Gate must be TIME_LOCK, active, not yet fired, and `cancellable=1`. Returns `QUGATE_TIME_LOCK_NOT_CANCELLABLE` (-24) if cancellable=0, `QUGATE_TIME_LOCK_ALREADY_FIRED` (-23) if already unlocked.
+
+#### getTimeLockState (Input Type 20)
+
+Read-only query for TIME_LOCK gate state.
+
+**Input**: `gateId` (uint32)
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| status | sint64 | 0 on success, negative on error |
+| unlockEpoch | uint32 | Target epoch for fund release |
+| cancellable | uint8 | 1 if owner can cancel |
+| fired | uint8 | 1 if funds have been released |
+| cancelled | uint8 | 1 if cancelled by owner |
+| active | uint8 | 1 if time lock is configured |
+| currentBalance | sint64 | Held balance |
+| currentEpoch | uint32 | Current network epoch |
+| epochsRemaining | uint32 | Epochs until unlock (0 if fired or past) |
+
+#### setAdminGate (Input Type 21)
+
+Sets or clears the admin gate on a gate. When setting, the admin gate must exist and be MULTISIG mode. Owner-only if no admin gate is currently set; requires admin gate approval if one is already set.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | uint64 | 8 | Target gate ID |
+| adminGateId | sint64 | 8 | MULTISIG gate ID to assign (-1 to clear) |
+
+**Output**: `status` (sint64)
+
+**Validation**: Target gate must be active. Admin gate (if not -1) must exist, be active, and be MULTISIG mode. Returns `QUGATE_INVALID_ADMIN_GATE` (-27) on invalid admin gate. Returns `QUGATE_ADMIN_GATE_REQUIRED` (-26) if admin gate is set and caller lacks approval.
+
+#### getAdminGate (Input Type 22)
+
+Read-only query for admin gate configuration on a gate.
+
+**Input**: `gateId` (uint64)
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| hasAdminGate | uint8 | 1 if an admin gate is assigned |
+| adminGateId | sint64 | Versioned gate ID of the admin gate (-1 if none) |
+| adminGateMode | uint8 | Mode of the admin gate (should be MULTISIG=7) |
+| guardianCount | uint8 | Number of guardians on the admin gate |
+| required | uint8 | M-of-N threshold on the admin gate |
+| guardians | Array\<id, 8\> | Guardian public keys from the admin gate's MultisigConfig |
+
 ---
 
 ## Wire Format
@@ -907,7 +989,7 @@ _expiryEpochs   uint64                          Inactivity epochs before expiry 
 
 ```
 owner               id (32 bytes)       Gate creator
-mode                uint8               Gate mode (0-5, immutable)
+mode                uint8               Gate mode (0-8, immutable)
 recipientCount      uint8               Active recipients (1-8)
 active              uint8               1 = active, 0 = closed/expired
 allowedSenderCount  uint8               Allowed senders for CONDITIONAL
@@ -932,6 +1014,8 @@ oracleSubscriptionId sint32             Subscription ID; -1 if not subscribed (O
 chainNextGateId     sint64              Next gate in chain; -1 if terminal
 chainReserve        sint64              QU reserve for hop fees
 chainDepth          uint8               Position in chain (0 = root)
+adminGateId         sint64              MULTISIG gate ID for governance; -1 if none
+hasAdminGate        uint8               1 if adminGateId is set
 ```
 
 ### Free-List
@@ -1019,9 +1103,9 @@ Until the shareholder infrastructure is wired, fees are set during `INITIALIZE` 
 
 ## Design Decisions
 
-### Why 8 modes?
+### Why 9 modes?
 
-These eight modes cover the most common payment routing and custody patterns observed in blockchain applications: proportional splitting (revenue share), rotation (load balancing/fairness), accumulation (crowdfunding/escrow), randomization (lottery/raffle), access control (whitelisting), oracle-triggered distribution (conditional release), heartbeat-based inheritance (dead-man's switch), and M-of-N multisig approval (DAO treasury, joint accounts). Together they can be composed to handle most real-world payment flows without custom contracts.
+These nine modes cover the most common payment routing and custody patterns observed in blockchain applications: proportional splitting (revenue share), rotation (load balancing/fairness), accumulation (crowdfunding/escrow), randomization (lottery/raffle), access control (whitelisting), oracle-triggered distribution (conditional release), heartbeat-based inheritance (dead-man's switch), M-of-N multisig approval (DAO treasury, joint accounts), and epoch-based time locks (vesting, escrow). Together they can be composed to handle most real-world payment flows without custom contracts.
 
 ### Why 8 max recipients?
 
@@ -1235,7 +1319,7 @@ make -j$(nproc) Qubic
 # Stop any miner first — node needs ~27GB RAM
 systemctl stop qlab 2>/dev/null
 
-./build/src/Qubic  # HTTP RPC on port 41841
+./build/src/Qubic --sm 3 --ticking-delay 1500  # HTTP RPC on port 41841
 # Verify: curl http://localhost:41841/v1/latest-stats
 ```
 
@@ -1243,7 +1327,7 @@ systemctl stop qlab 2>/dev/null
 
 ```bash
 export QUBIC_CLI=/path/to/qubic-cli
-python3 tests/test_all_modes.py        # All 7 modes (21+ checks)
+python3 tests/test_all_modes.py        # All 9 modes (25+ checks)
 python3 tests/test_heartbeat.py        # HEARTBEAT mode (10 tests, epoch-dependent)
 python3 tests/test_multisig.py         # MULTISIG mode (10 tests)
 python3 tests/test_stress_50gates.py   # 50-gate stress test

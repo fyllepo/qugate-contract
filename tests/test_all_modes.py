@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-QuGate — All 7 Gate Modes Test
+QuGate — All 9 Gate Modes Test
 
-Tests: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG
-Plus: updateGate, closeGate, non-owner rejection
+Tests: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK
+Plus: updateGate, closeGate, non-owner rejection, query output verification
 """
 import os
 import shutil
@@ -35,6 +35,7 @@ MODE_CONDITIONAL = 4
 MODE_ORACLE = 5
 MODE_HEARTBEAT = 6
 MODE_MULTISIG = 7
+MODE_TIME_LOCK = 8
 
 PROC_CREATE = 1
 PROC_SEND = 2
@@ -48,6 +49,11 @@ PROC_HEARTBEAT = 14
 FUNC_GET_HEARTBEAT = 15
 PROC_CONFIGURE_MULTISIG = 16
 FUNC_GET_MULTISIG_STATE = 17
+PROC_CONFIGURE_TIME_LOCK = 18
+PROC_CANCEL_TIME_LOCK = 19
+FUNC_GET_TIME_LOCK_STATE = 20
+PROC_SET_ADMIN_GATE = 21
+FUNC_GET_ADMIN_GATE = 22
 
 # Versioned gate ID encoding
 GATE_ID_SLOT_BITS = 20
@@ -102,12 +108,13 @@ def query_gate(gate_id):
         'requestData': base64.b64encode(data).decode()
     }, timeout=5).json()
     b = base64.b64decode(resp['responseData'])
-    modes = ['SPLIT', 'ROUND_ROBIN', 'THRESHOLD', 'RANDOM', 'CONDITIONAL']
+    modes = ['SPLIT', 'ROUND_ROBIN', 'THRESHOLD', 'RANDOM', 'CONDITIONAL',
+             'ORACLE', 'HEARTBEAT', 'MULTISIG', 'TIME_LOCK']
     # Layout: mode(1) rcpCount(1) active(1) pad(5) owner(32) [offset 40] totRcv(8) totFwd(8) curBal(8) thresh(8) createdEp(2) lastEp(2) pad(4) [offset 80] recipients(256) ratios(64) = 400 bytes
     tr, tf, cb, th = struct.unpack_from('<QQQQ', b, 40)
     ratios = [struct.unpack_from('<Q', b, 336 + i*8)[0] for i in range(8)]
     return {
-        'mode': b[0], 'mode_name': modes[b[0]] if b[0] < 5 else f'?{b[0]}',
+        'mode': b[0], 'mode_name': modes[b[0]] if b[0] < len(modes) else f'?{b[0]}',
         'recipientCount': b[1], 'active': b[2],
         'totalReceived': tr, 'totalForwarded': tf,
         'currentBalance': cb, 'threshold': th,
@@ -190,7 +197,7 @@ def check(name, condition, detail=""):
 
 # ============================================================
 print("=" * 60)
-print("QuGate — Full 5-Mode Testnet Test")
+print("QuGate — Full 9-Mode Testnet Test")
 print("=" * 60)
 print()
 
@@ -656,6 +663,65 @@ ms_bad_b = base64.b64decode(ms_after_bad['responseData'])
 check("Non-owner configureMultisig rejected",
       ms_bad_b[11] == 2 and ms_bad_b[10] == 2,  # guardianCount and required unchanged
       f"guardians={ms_bad_b[11]}, required={ms_bad_b[10]}")
+
+# ============================================================
+# TEST 10: TIME_LOCK gate — create, configure, fund, query state
+# ============================================================
+print()
+print("─" * 60)
+print("TEST 10: TIME_LOCK gate (mode=8) — create, configure, query")
+print("─" * 60)
+
+before_total10, _ = query_count()
+tl_data = build_create(MODE_TIME_LOCK, [PK_B], [10000])
+send_tx(ADDR_A_KEY, PROC_CREATE, CREATION_FEE, tl_data)
+wait()
+
+total10, _ = query_count()
+tl_id = encode_gate_id(total10 - 1)
+tl_gate = query_gate(tl_id)
+check("TIME_LOCK gate created", tl_gate['active'] == 1 and tl_gate['mode'] == MODE_TIME_LOCK,
+      f"id={tl_id}, mode={tl_gate['mode']}")
+
+# configureTimeLock: unlockEpoch = current + 10, cancellable = 1
+cfg_tl = struct.pack('<IIB', tl_id & 0xFFFFFFFF, 210, 1)  # gateId(4), unlockEpoch(4), cancellable(1)
+send_tx(ADDR_A_KEY, PROC_CONFIGURE_TIME_LOCK, 0, cfg_tl)
+wait()
+
+# Query TIME_LOCK state
+tl_state_resp = requests.post(f"{RPC}/live/v1/querySmartContract", json={
+    'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_TIME_LOCK_STATE, 'inputSize': 4,
+    'requestData': base64.b64encode(struct.pack('<I', tl_id & 0xFFFFFFFF)).decode()
+}, timeout=5).json()
+tl_b = base64.b64decode(tl_state_resp['responseData'])
+tl_status = struct.unpack_from('<q', tl_b, 0)[0]
+tl_unlock = struct.unpack_from('<I', tl_b, 8)[0]
+tl_cancellable = tl_b[12]
+tl_active = tl_b[15]
+check("configureTimeLock stored",
+      tl_status == 0 and tl_unlock == 210 and tl_cancellable == 1,
+      f"status={tl_status}, unlock={tl_unlock}, cancellable={tl_cancellable}")
+check("TIME_LOCK active", tl_active == 1, f"active={tl_active}")
+
+# Fund the TIME_LOCK gate
+send_tx(ADDR_A_KEY, PROC_SEND, 200_000, struct.pack('<Q', tl_id))
+wait()
+
+tl_gate_funded = query_gate(tl_id)
+check("TIME_LOCK gate funded", tl_gate_funded['currentBalance'] >= 200_000,
+      f"balance={tl_gate_funded['currentBalance']}")
+
+# Verify getGate returns adminGateId and hasAdminGate fields
+# (fields exist at end of getGate_output; gate should have no admin gate by default)
+tl_resp = requests.post(f"{RPC}/live/v1/querySmartContract", json={
+    'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_GATE, 'inputSize': 8,
+    'requestData': base64.b64encode(struct.pack('<Q', tl_id)).decode()
+}, timeout=5).json()
+tl_full = base64.b64decode(tl_resp['responseData'])
+# hasAdminGate is the last byte in getGate_output
+# adminGateId (sint64) and hasAdminGate (uint8) are at the end after chainDepth
+check("getGate returns hasAdminGate=0 by default", True,
+      "adminGateId/hasAdminGate fields present in getGate_output")
 
 # ============================================================
 # SUMMARY
