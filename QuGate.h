@@ -2099,6 +2099,18 @@ public:
                     currentChainGateId = locals.nextChainGate.chainNextGateId;
                     hop += 1;
                 }
+                // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance
+                if (chainAmount > 0)
+                {
+                    locals.gate = state.get()._gates.get(locals.slotIdx);
+                    locals.gate.currentBalance += (uint64)chainAmount;
+                    locals.gate.totalForwarded -= (uint64)chainAmount; // undo the premature forward count
+                    state.mut()._gates.set(locals.slotIdx, locals.gate);
+                    locals.logger._type = QUGATE_LOG_CHAIN_HOP_INSUFFICIENT;
+                    locals.logger.gateId = input.gateId;
+                    locals.logger.amount = chainAmount;
+                    LOG_INFO(locals.logger);
+                }
             }
         }
     }
@@ -2338,6 +2350,18 @@ public:
                     locals.nextChainGate = state.get()._gates.get(nextSlot);
                     currentChainGateId = locals.nextChainGate.chainNextGateId;
                     hop += 1;
+                }
+                // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance
+                if (chainAmount > 0)
+                {
+                    locals.gate = state.get()._gates.get(locals.slotIdx);
+                    locals.gate.currentBalance += (uint64)chainAmount;
+                    locals.gate.totalForwarded -= (uint64)chainAmount; // undo the premature forward count
+                    state.mut()._gates.set(locals.slotIdx, locals.gate);
+                    locals.logger._type = QUGATE_LOG_CHAIN_HOP_INSUFFICIENT;
+                    locals.logger.gateId = input.gateId;
+                    locals.logger.amount = chainAmount;
+                    LOG_INFO(locals.logger);
                 }
             }
         }
@@ -2968,6 +2992,18 @@ public:
                     locals.nextChainGate = state.get()._gates.get(nextSlot);
                     currentChainGateId = locals.nextChainGate.chainNextGateId;
                     hop++;
+                }
+                // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance
+                if (chainAmount > 0)
+                {
+                    locals.gate = state.get()._gates.get(locals.slotIdx);
+                    locals.gate.currentBalance += (uint64)chainAmount;
+                    locals.gate.totalForwarded -= (uint64)chainAmount; // undo the premature forward count
+                    state.mut()._gates.set(locals.slotIdx, locals.gate);
+                    locals.logger._type = QUGATE_LOG_CHAIN_HOP_INSUFFICIENT;
+                    locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.slotIdx) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.slotIdx;
+                    locals.logger.amount = chainAmount;
+                    LOG_INFO(locals.logger);
                 }
             }
 
@@ -4847,6 +4883,18 @@ public:
                             GateConfig nextGate = state.get()._gates.get(nextSlot);
                             currentChainGateId = nextGate.chainNextGateId;
                             hop++;
+                        }
+                        // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance
+                        if (chainAmount > 0)
+                        {
+                            locals.gate = state.get()._gates.get(locals.i);
+                            locals.gate.currentBalance += (uint64)chainAmount;
+                            locals.gate.totalForwarded -= (uint64)chainAmount; // undo the premature forward count
+                            state.mut()._gates.set(locals.i, locals.gate);
+                            locals.logger._type = QUGATE_LOG_CHAIN_HOP_INSUFFICIENT;
+                            locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+                            locals.logger.amount = chainAmount;
+                            LOG_INFO(locals.logger);
                         }
                     }
 

@@ -22,11 +22,12 @@ QuGate is a **network primitive** — shared, permissionless payment routing inf
 10. [Shareholder Governance](#shareholder-governance)
 11. [Design Decisions](#design-decisions)
 12. [Security Model](#security-model)
-13. [Status Codes](#status-codes)
-14. [Log Types](#log-types)
-15. [Building and Testing](#building-and-testing)
-16. [Known Limitations](#known-limitations)
-17. [File Listing](#file-listing)
+13. [Edge Cases and Safety](#edge-cases-and-safety)
+14. [Status Codes](#status-codes)
+15. [Log Types](#log-types)
+16. [Building and Testing](#building-and-testing)
+17. [Known Limitations](#known-limitations)
+18. [File Listing](#file-listing)
 
 ---
 
@@ -1162,6 +1163,47 @@ The `TIME_AFTER` condition type (oracle condition 2) interprets the oracle reply
 ### activeGates Underflow Guard
 
 The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_EPOCH`, and oracle ONCE-mode auto-close prevents underflow from double-close scenarios.
+
+---
+
+## Edge Cases and Safety
+
+### Dead Chain Links
+
+When a gate is chained to another gate that has been closed, expired, or recycled, the chain forwarding detects the dead link and reverts undeliverable funds to the source gate's currentBalance. The owner can then either fix the chain via setChain or close the gate to recover funds. No QU is lost.
+
+### Chain-Only Gates (0 Recipients)
+
+Gates with recipientCount=0 are valid only when chainNextGateId is set. All funds flow through the chain. If the chain link dies, funds revert to currentBalance. The owner can always closeGate to recover.
+
+### Admin Gate Expiry
+
+If a gate's admin MULTISIG gate expires or is closed, the gate owner can still clear the admin gate (setAdminGate with adminGateId=-1) and regain full control. This prevents permanently locked gates.
+
+### Heartbeat + Expiry Interaction
+
+Calling heartbeat() refreshes lastActivityEpoch, preventing the 50-epoch expiry from firing. If the owner stops calling heartbeat(), the heartbeat trigger fires first (at thresholdEpochs), then payouts run. The gate won't expire during active payouts because END_EPOCH payout processing counts as implicit activity.
+
+### Round Robin After Recipient Reduction
+
+When updateGate reduces recipientCount, the roundRobinIndex is automatically reset to 0 if it would be out of bounds. This prevents payments to zeroed addresses.
+
+### MULTISIG Proposal Expiry
+
+Incomplete proposals (fewer than M votes) automatically reset after proposalExpiryEpochs. Funds remain in the gate and a new proposal can begin. Guardian votes are tracked via a bitmap — each guardian can only vote once per proposal.
+
+### Oracle Reserve Exhaustion
+
+When an ORACLE gate's oracleReserve drops below the per-epoch subscription fee, the oracle subscription lapses. Accumulated funds remain in currentBalance. The owner can re-fund via fundGate or withdraw via withdrawReserve. No funds are lost.
+
+### Fund Recovery
+
+The owner can always recover funds via:
+- closeGate: refunds currentBalance, oracleReserve, chainReserve to owner
+- withdrawReserve: retrieves oracle or chain reserves without closing
+- cancelTimeLock: refunds TIME_LOCK balance (if cancellable)
+
+No QU can be permanently locked in the contract (assuming the owner retains access).
 
 ---
 
