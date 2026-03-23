@@ -1058,16 +1058,23 @@ Use `getFees()` to query the current escalated fee before creating a gate.
 
 ### Gate Expiry
 
-Gates with no activity (no `sendToGate` or `updateGate`) for `_expiryEpochs` epochs are automatically closed during `END_EPOCH`. The expiry check uses:
+Gates with no activity for `_expiryEpochs` epochs are expired via two complementary mechanisms:
+
+1. **Lazy expiry on interaction** (primary): When any procedure (`sendToGate`, `sendToGateVerified`, `updateGate`, `closeGate`, `fundGate`, `setChain`) touches a gate, it checks whether the gate has exceeded its inactivity window. If so, the gate is expired inline — balances (current, oracle reserve, chain reserve) are refunded to the owner, the slot is freed, and the caller is refunded. The `getGate` function also reports expired gates as `active=0` without mutating state.
+
+2. **END_EPOCH sweep** (safety net): The `END_EPOCH` handler still scans all gates each epoch. This catches gates that nobody interacts with. At scale, most expiries happen lazily, reducing `END_EPOCH` processing load.
+
+The expiry check uses:
 
 ```
 if (epoch() - lastActivityEpoch >= expiryEpochs)  →  expire
 ```
 
 Expired gates:
-- Have any held balance (THRESHOLD mode) refunded to the owner
+- Have any held balance (current, oracle reserve, chain reserve) refunded to the owner
 - Are marked inactive
 - Have their slot pushed onto the free-list
+- Have their generation counter incremented (invalidates old gate IDs)
 
 Default expiry: 50 epochs (approximately 1 year at current epoch length). Set to 0 to disable expiry entirely. Shareholder-adjustable.
 
@@ -1183,6 +1190,10 @@ Gates with recipientCount=0 are valid only when chainNextGateId is set. All fund
 ### Admin Gate Expiry
 
 If a gate's admin MULTISIG gate expires or is closed, the gate owner can still clear the admin gate (setAdminGate with adminGateId=-1) and regain full control. This prevents permanently locked gates.
+
+### Lazy Expiry on Interaction
+
+When a procedure (`sendToGate`, `updateGate`, `closeGate`, `fundGate`, `setChain`) encounters an expired gate, it expires the gate inline and refunds all balances to the owner. The caller receives `QUGATE_GATE_NOT_ACTIVE` and their invocation reward is refunded. This means most expiries happen on first interaction after the inactivity window, rather than waiting for the next `END_EPOCH` sweep. The `END_EPOCH` sweep remains as a safety net for gates that nobody interacts with.
 
 ### Heartbeat + Expiry Interaction
 
@@ -1402,7 +1413,7 @@ See `TESTNET_RESULTS.md` for detailed results.
 
 3. **getGatesByOwner is O(n) linear scan.** It iterates all gate slots to find gates by owner. At 4,096 slots this is acceptable; at higher X_MULTIPLIER values it may become slow. Limited to 16 results.
 
-4. **END_EPOCH expiry iterates all gates.** The expiry check runs every epoch and scans all gate slots. At high capacity this adds per-epoch computation.
+4. **END_EPOCH expiry iterates all gates.** The expiry check runs every epoch and scans all gate slots. At high capacity this adds per-epoch computation. Lazy expiry on interaction handles most cases, reducing the practical load, but the full scan remains as a safety net.
 
 5. **Shareholder governance is not yet wired.** Fee parameters are set at initialization and cannot be changed until `DEFINE_SHAREHOLDER_PROPOSAL_STORAGE` is enabled with a valid contract asset name.
 

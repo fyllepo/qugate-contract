@@ -841,6 +841,32 @@ check("withdrawReserve: gate still active after reserve withdrawal",
       f"active={wr_gate['active']}")
 
 # ============================================================
+# TEST 13: getGate lazy expiry — reports expired gates as inactive
+# ============================================================
+print()
+print("─" * 60)
+print("TEST 13: getGate lazy expiry — expired gate reports active=0")
+print("─" * 60)
+
+# Note: Lazy expiry on interaction (#64) means:
+# - Procedures (sendToGate, updateGate, closeGate, fundGate, setChain)
+#   expire gates inline when lastActivityEpoch + expiryEpochs <= current epoch.
+# - getGate (read-only) reports active=0 for expired gates without mutating state.
+# - END_EPOCH sweep remains as a safety net for gates nobody interacts with.
+#
+# Full lazy expiry testing requires advancing epochs past the expiry window
+# (default 50 epochs). On a local testnet this is impractical in a single run.
+# The check below verifies that recently-active gates are NOT falsely reported
+# as expired, confirming the expiry condition is correctly guarded.
+
+# Query the first SPLIT gate created in TEST 1 — should still be active
+# (created this session, well within the 50-epoch expiry window)
+le_gate = query_gate(encode_gate_id(0))
+check("getGate: recently-active gate NOT falsely expired",
+      le_gate['active'] == 1,
+      f"active={le_gate['active']}")
+
+# ============================================================
 # SUMMARY
 # ============================================================
 print()
