@@ -158,6 +158,7 @@ constexpr uint32 QUGATE_LOG_TIME_LOCK_CANCELLED  = 24; // owner cancelled, funds
 constexpr uint32 QUGATE_LOG_TIME_LOCK_CONFIGURED = 25; // time lock created
 constexpr uint32 QUGATE_LOG_ADMIN_GATE_SET       = 26; // admin gate assigned to a gate
 constexpr uint32 QUGATE_LOG_ADMIN_GATE_CLEARED   = 27; // admin gate removed from a gate
+constexpr uint32 QUGATE_LOG_ADMIN_APPROVAL_USED  = 28; // admin gate approval consumed for a config change
 
 // Failure log types use high range
 constexpr uint32 QUGATE_LOG_FAIL_INVALID_GATE = 100;
@@ -514,6 +515,30 @@ public:
         uint8  guardianCount;      // Number of guardians on the admin gate
         uint8  required;           // M-of-N threshold
         Array<id, 8> guardians;    // Guardian public keys from the admin gate's MultisigConfig
+    };
+
+    // Withdraw from a gate's oracleReserve or chainReserve without closing. Owner only (or admin gate).
+    struct withdrawReserve_input
+    {
+        uint64 gateId;
+        uint8  reserveTarget;  // 0 = oracleReserve, 1 = chainReserve
+        uint64 amount;         // 0 = withdraw all
+    };
+    struct withdrawReserve_output
+    {
+        sint64 status;
+        uint64 withdrawn;
+    };
+
+    // Query gates by mode — returns up to 16 active gates matching a given mode.
+    struct getGatesByMode_input
+    {
+        uint8 mode;
+    };
+    struct getGatesByMode_output
+    {
+        Array<uint64, QUGATE_MAX_OWNER_GATES> gateIds;
+        uint64 count;
     };
 
     // Query TIME_LOCK state for a gate.
@@ -943,6 +968,10 @@ public:
         uint8  inhK;
         uint8  inhBeneCount;
         uint32 inhEpochsInactive;
+        // Heartbeat chain forwarding
+        routeToGate_input rtIn;
+        routeToGate_output rtOut;
+        routeToGate_locals rtLocals;
         // Multisig processing
         MultisigConfig msigCfg;
         // TIME_LOCK processing
@@ -1005,6 +1034,22 @@ public:
         uint64 adminSlot;
         MultisigConfig adminCfg;
         uint8 i;
+    };
+
+    struct withdrawReserve_locals
+    {
+        QuGateLogger logger;
+        GateConfig gate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        MultisigConfig adminCheckMs;
+    };
+
+    struct getGatesByMode_locals
+    {
+        uint64 i;
     };
 
     // Oracle notification callback types
@@ -2324,6 +2369,12 @@ public:
                 LOG_WARNING(locals.logger);
                 return;
             }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         if (locals.gate.active == 0)
@@ -2502,6 +2553,12 @@ public:
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
                 LOG_WARNING(locals.logger);
                 return;
+            }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
             }
         }
 
@@ -3127,6 +3184,12 @@ public:
                 LOG_WARNING(locals.logger);
                 return;
             }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         if (locals.gate.active == 0)
@@ -3333,6 +3396,12 @@ public:
                 LOG_WARNING(locals.logger);
                 return;
             }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         // Gate must be active
@@ -3348,15 +3417,6 @@ public:
         if (locals.gate.mode != QUGATE_MODE_HEARTBEAT)
         {
             output.status = QUGATE_HEARTBEAT_NOT_ACTIVE;
-            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
-            LOG_WARNING(locals.logger);
-            return;
-        }
-
-        // Cannot reconfigure after trigger
-        if (state.get()._heartbeatConfigs.get(locals.slotIdx).triggered == 1)
-        {
-            output.status = QUGATE_HEARTBEAT_TRIGGERED;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
@@ -3647,6 +3707,12 @@ public:
                 LOG_WARNING(locals.logger);
                 return;
             }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         // Gate must be active
@@ -3848,6 +3914,12 @@ public:
                 LOG_WARNING(locals.logger);
                 return;
             }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         // Gate must be active
@@ -3955,6 +4027,12 @@ public:
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
                 LOG_WARNING(locals.logger);
                 return;
+            }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
             }
         }
 
@@ -4264,12 +4342,187 @@ public:
     }
 
     // =============================================
+    // withdrawReserve — withdraw from oracleReserve or chainReserve
+    // =============================================
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(withdrawReserve)
+    {
+        output.status = QUGATE_SUCCESS;
+        output.withdrawn = 0;
+
+        locals.logger._contractIndex = CONTRACT_INDEX;
+        locals.logger.sender = qpi.invocator();
+        locals.logger.gateId = input.gateId;
+        locals.logger.amount = 0;
+
+        // Refund any attached QU
+        if (qpi.invocationReward() > 0)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+        }
+
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            output.status = QUGATE_INVALID_GATE_ID;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+
+        // Authorization: owner OR admin gate approval
+        if (locals.gate.owner != qpi.invocator())
+        {
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
+            {
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
+            }
+            if (adminAuth == 0)
+            {
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
+        }
+
+        // Gate must be active
+        if (locals.gate.active == 0)
+        {
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        if (input.reserveTarget == 0)
+        {
+            // oracleReserve — gate must be ORACLE mode
+            if (locals.gate.mode != QUGATE_MODE_ORACLE)
+            {
+                output.status = QUGATE_INVALID_MODE;
+                locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+
+            sint64 available = locals.gate.oracleReserve;
+            if (available <= 0)
+            {
+                output.status = QUGATE_SUCCESS;
+                output.withdrawn = 0;
+                return;
+            }
+
+            uint64 toWithdraw = (uint64)available;
+            if (input.amount != 0 && input.amount < toWithdraw)
+            {
+                toWithdraw = input.amount;
+            }
+
+            locals.gate.oracleReserve -= (sint64)toWithdraw;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+
+            qpi.transfer(qpi.invocator(), toWithdraw);
+            output.withdrawn = toWithdraw;
+        }
+        else if (input.reserveTarget == 1)
+        {
+            // chainReserve — gate must have a chain link
+            if (locals.gate.chainNextGateId == -1)
+            {
+                output.status = QUGATE_INVALID_CHAIN;
+                locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+
+            sint64 available = locals.gate.chainReserve;
+            if (available <= 0)
+            {
+                output.status = QUGATE_SUCCESS;
+                output.withdrawn = 0;
+                return;
+            }
+
+            uint64 toWithdraw = (uint64)available;
+            if (input.amount != 0 && input.amount < toWithdraw)
+            {
+                toWithdraw = input.amount;
+            }
+
+            locals.gate.chainReserve -= (sint64)toWithdraw;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+
+            qpi.transfer(qpi.invocator(), toWithdraw);
+            output.withdrawn = toWithdraw;
+        }
+        else
+        {
+            output.status = QUGATE_INVALID_MODE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
+        locals.logger.amount = (sint64)output.withdrawn;
+        LOG_INFO(locals.logger);
+    }
+
+    // =============================================
+    // getGatesByMode — query active gates by mode
+    // =============================================
+
+    PUBLIC_FUNCTION_WITH_LOCALS(getGatesByMode)
+    {
+        output.count = 0;
+        for (locals.i = 0; locals.i < state.get()._gateCount && output.count < QUGATE_MAX_OWNER_GATES; locals.i++)
+        {
+            if (state.get()._gates.get(locals.i).active == 1
+                && state.get()._gates.get(locals.i).mode == input.mode)
+            {
+                output.gateIds.set(output.count,
+                    ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i);
+                output.count += 1;
+            }
+        }
+    }
+
+    // =============================================
     // Registration
     // =============================================
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
     {
-        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState 18=configureTimeLock 19=cancelTimeLock 20=getTimeLockState 21=setAdminGate 22=getAdminGate
+        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState 18=configureTimeLock 19=cancelTimeLock 20=getTimeLockState 21=setAdminGate 22=getAdminGate 23=withdrawReserve 24=getGatesByMode
         REGISTER_USER_PROCEDURE(createGate, 1);
         REGISTER_USER_PROCEDURE(sendToGate, 2);
         REGISTER_USER_PROCEDURE(closeGate, 3);
@@ -4292,6 +4545,8 @@ public:
         REGISTER_USER_FUNCTION(getTimeLockState, 20);
         REGISTER_USER_PROCEDURE(setAdminGate, 21);
         REGISTER_USER_FUNCTION(getAdminGate, 22);
+        REGISTER_USER_PROCEDURE(withdrawReserve, 23);
+        REGISTER_USER_FUNCTION(getGatesByMode, 24);
         REGISTER_USER_PROCEDURE_NOTIFICATION(OraclePriceNotification);
     }
 
@@ -4523,6 +4778,29 @@ public:
                         locals.logger.sender = locals.gate.owner;
                         locals.logger.amount = locals.inhPayoutTotal;
                         LOG_INFO(locals.logger);
+                    }
+
+                    // Chain forwarding after heartbeat payout
+                    locals.gate = state.get()._gates.get(locals.i);
+                    if (locals.gate.chainNextGateId != -1 && locals.inhPayoutTotal > 0)
+                    {
+                        sint64 chainAmount = locals.inhPayoutTotal;
+                        sint64 currentChainGateId = locals.gate.chainNextGateId;
+                        uint8 hop = 0;
+                        while (hop < QUGATE_MAX_CHAIN_DEPTH && currentChainGateId != -1 && chainAmount > 0)
+                        {
+                            uint64 nextSlot = (uint64)currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
+                            uint64 nextGen = (uint64)currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
+                            if (nextSlot >= state.get()._gateCount || nextGen == 0
+                                || state.get()._gateGenerations.get(nextSlot) != (uint16)(nextGen - 1))
+                                break;
+                            locals.rtIn.slotIdx = nextSlot; locals.rtIn.amount = chainAmount; locals.rtIn.hopCount = hop;
+                            routeToGate(qpi, state, locals.rtIn, locals.rtOut, locals.rtLocals);
+                            chainAmount = locals.rtOut.forwarded;
+                            GateConfig nextGate = state.get()._gates.get(nextSlot);
+                            currentChainGateId = nextGate.chainNextGateId;
+                            hop++;
+                        }
                     }
 
                     // Auto-close gate if balance dropped to or below minimum
