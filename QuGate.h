@@ -1183,7 +1183,15 @@ public:
         }
 
         // Validate recipient count
-        if (input.recipientCount == 0 || input.recipientCount > QUGATE_MAX_RECIPIENTS)
+        if (input.recipientCount > QUGATE_MAX_RECIPIENTS)
+        {
+            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            output.status = QUGATE_INVALID_RECIPIENT_COUNT;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+        if (input.recipientCount == 0 && input.chainNextGateId == -1)
         {
             qpi.transfer(qpi.invocator(), qpi.invocationReward());
             output.status = QUGATE_INVALID_RECIPIENT_COUNT;
@@ -1203,7 +1211,7 @@ public:
         }
 
         // Validate SPLIT ratios
-        if (input.mode == QUGATE_MODE_SPLIT)
+        if (input.mode == QUGATE_MODE_SPLIT && input.recipientCount > 0)
         {
             locals.totalRatio = 0;
             for (locals.i = 0; locals.i < input.recipientCount; locals.i++)
@@ -1518,6 +1526,12 @@ public:
     {
         locals.gate = state.get()._gates.get(input.gateIdx);
 
+        if (locals.gate.recipientCount == 0)
+        {
+            output.forwarded = input.amount;
+            return;
+        }
+
         locals.totalRatio = 0;
         for (locals.i = 0; locals.i < locals.gate.recipientCount; locals.i++)
         {
@@ -1553,6 +1567,12 @@ public:
     {
         locals.gate = state.get()._gates.get(input.gateIdx);
 
+        if (locals.gate.recipientCount == 0)
+        {
+            output.forwarded = input.amount;
+            return;
+        }
+
         qpi.transfer(locals.gate.recipients.get(locals.gate.roundRobinIndex), input.amount);
         locals.gate.totalForwarded += input.amount;
         locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
@@ -1574,7 +1594,7 @@ public:
             locals.gate.totalForwarded += locals.gate.currentBalance;
 
             // If chained, don't transfer to recipient — chain code will handle forwarding
-            if (locals.gate.chainNextGateId == -1)
+            if (locals.gate.recipientCount > 0 && locals.gate.chainNextGateId == -1)
             {
                 qpi.transfer(locals.gate.recipients.get(0), locals.gate.currentBalance);
             }
@@ -1588,6 +1608,12 @@ public:
     PRIVATE_PROCEDURE_WITH_LOCALS(processRandom)
     {
         locals.gate = state.get()._gates.get(input.gateIdx);
+
+        if (locals.gate.recipientCount == 0)
+        {
+            output.forwarded = input.amount;
+            return;
+        }
 
         // NOTE: entropy is publicly observable — not cryptographically random
         locals.recipientIdx = QPI::mod(locals.gate.totalReceived + qpi.tick(), (uint64)locals.gate.recipientCount);
@@ -1615,9 +1641,16 @@ public:
 
         if (locals.senderAllowed)
         {
-            qpi.transfer(locals.gate.recipients.get(0), input.amount);
-            locals.gate.totalForwarded += input.amount;
-            output.forwarded = input.amount;
+            if (locals.gate.recipientCount == 0)
+            {
+                output.forwarded = input.amount;
+            }
+            else
+            {
+                qpi.transfer(locals.gate.recipients.get(0), input.amount);
+                locals.gate.totalForwarded += input.amount;
+                output.forwarded = input.amount;
+            }
         }
         else
         {
@@ -1703,7 +1736,10 @@ public:
             {
                 // Transfer balance to target (recipients[0] is the target address)
                 sint64 releaseAmount = (sint64)locals.gate.currentBalance;
-                qpi.transfer(locals.gate.recipients.get(0), releaseAmount);
+                if (locals.gate.recipientCount > 0)
+                {
+                    qpi.transfer(locals.gate.recipients.get(0), releaseAmount);
+                }
                 locals.gate.totalForwarded += (uint64)releaseAmount;
                 locals.gate.currentBalance = 0;
                 state.mut()._gates.set(input.slotIdx, locals.gate);
@@ -2588,7 +2624,18 @@ public:
         }
 
         // Validate new recipient count
-        if (input.recipientCount == 0 || input.recipientCount > QUGATE_MAX_RECIPIENTS)
+        if (input.recipientCount > QUGATE_MAX_RECIPIENTS)
+        {
+            if (qpi.invocationReward() > 0)
+            {
+                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            }
+            output.status = QUGATE_INVALID_RECIPIENT_COUNT;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+        if (input.recipientCount == 0 && state.get()._gates.get(locals.slotIdx).chainNextGateId == -1)
         {
             if (qpi.invocationReward() > 0)
             {
@@ -2614,7 +2661,7 @@ public:
         }
 
         // Validate SPLIT ratios if gate is SPLIT mode
-        if (locals.gate.mode == QUGATE_MODE_SPLIT)
+        if (locals.gate.mode == QUGATE_MODE_SPLIT && input.recipientCount > 0)
         {
             locals.totalRatio = 0;
             for (locals.i = 0; locals.i < input.recipientCount; locals.i++)
@@ -4910,7 +4957,10 @@ public:
                 if (locals.gate.currentBalance > 0)
                 {
                     locals.tlReleaseAmount = (sint64)locals.gate.currentBalance;
-                    qpi.transfer(locals.gate.recipients.get(0), locals.tlReleaseAmount);
+                    if (locals.gate.recipientCount > 0)
+                    {
+                        qpi.transfer(locals.gate.recipients.get(0), locals.tlReleaseAmount);
+                    }
                     locals.gate.totalForwarded += (uint64)locals.tlReleaseAmount;
                     locals.gate.currentBalance = 0;
                     state.mut()._gates.set(locals.i, locals.gate);

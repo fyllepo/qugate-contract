@@ -129,7 +129,8 @@ def query_count():
     t, a = struct.unpack('<QQ', b[:16])
     return t, a
 
-def build_create(mode, recipients_pk, ratios, threshold=0, allowed_senders=None):
+def build_create(mode, recipients_pk, ratios, threshold=0, allowed_senders=None,
+                 chain_next_gate_id=-1):
     data = bytearray()
     data += struct.pack('<B', mode)
     data += struct.pack('<B', len(recipients_pk))
@@ -145,6 +146,14 @@ def build_create(mode, recipients_pk, ratios, threshold=0, allowed_senders=None)
         else:
             data += bytes(32)
     data += struct.pack('<B', len(allowed_senders) if allowed_senders else 0)
+    # Oracle fields (zeroed for non-oracle modes)
+    data += bytes(32)  # oracleId
+    data += bytes(32)  # oracleCurrency1
+    data += bytes(32)  # oracleCurrency2
+    data += struct.pack('<BB', 0, 0)  # oracleCondition, oracleTriggerMode
+    data += struct.pack('<q', 0)  # oracleThreshold
+    # Chain field
+    data += struct.pack('<q', chain_next_gate_id)
     return bytes(data)
 
 def build_update(gate_id, recipients_pk, ratios, threshold=0, allowed_senders=None):
@@ -722,6 +731,65 @@ tl_full = base64.b64decode(tl_resp['responseData'])
 # adminGateId (sint64) and hasAdminGate (uint8) are at the end after chainDepth
 check("getGate returns hasAdminGate=0 by default", True,
       "adminGateId/hasAdminGate fields present in getGate_output")
+
+# ============================================================
+# CHAIN-ONLY GATES (recipientCount=0 with chain forwarding)
+# ============================================================
+print()
+print("--- Chain-Only Gates (0 recipients + chain) ---")
+
+# Step 1: Create a target SPLIT gate with real recipients
+chain_target_data = build_create(MODE_SPLIT, [PK_B, PK_C], [50, 50])
+send_tx(ADDR_A_KEY, PROC_CREATE, CREATION_FEE, chain_target_data)
+wait()
+
+total_ct, _ = query_count()
+target_slot = total_ct - 1
+target_gate_id = encode_gate_id(target_slot)
+target_gate = query_gate(target_gate_id)
+check("Chain target SPLIT gate created", target_gate['active'] == 1 and target_gate['mode'] == MODE_SPLIT,
+      f"id={target_gate_id}, mode={target_gate['mode_name']}")
+
+# Step 2: Create a THRESHOLD gate with recipientCount=0 and chainNextGateId pointing to the SPLIT gate
+bal_b_before = get_balance(ADDR_B)
+bal_c_before = get_balance(ADDR_C)
+
+chain_only_data = build_create(MODE_THRESHOLD, [], [], threshold=15000,
+                               chain_next_gate_id=target_gate_id)
+send_tx(ADDR_A_KEY, PROC_CREATE, CREATION_FEE, chain_only_data)
+wait()
+
+total_co, _ = query_count()
+co_slot = total_co - 1
+co_gate_id = encode_gate_id(co_slot)
+co_gate = query_gate(co_gate_id)
+check("Chain-only THRESHOLD gate created (0 recipients)",
+      co_gate['active'] == 1 and co_gate['recipientCount'] == 0 and co_gate['threshold'] == 15000,
+      f"id={co_gate_id}, recipients={co_gate['recipientCount']}, threshold={co_gate['threshold']}")
+
+# Step 3: Send below threshold — should accumulate
+send_tx(ADDR_A_KEY, PROC_SEND, 10000, struct.pack('<Q', co_gate_id))
+wait()
+co_gate = query_gate(co_gate_id)
+check("Chain-only: below threshold, funds held",
+      co_gate['currentBalance'] == 10000,
+      f"balance={co_gate['currentBalance']}")
+
+# Step 4: Send enough to trigger threshold — should forward via chain to SPLIT gate
+send_tx(ADDR_A_KEY, PROC_SEND, 10000, struct.pack('<Q', co_gate_id))
+wait()
+co_gate = query_gate(co_gate_id)
+check("Chain-only: threshold triggered, balance flushed",
+      co_gate['currentBalance'] == 0,
+      f"balance={co_gate['currentBalance']}")
+
+# Verify chain forwarding reached the SPLIT gate recipients (minus hop fee)
+bal_b_after = get_balance(ADDR_B)
+bal_c_after = get_balance(ADDR_C)
+total_received = (bal_b_after - bal_b_before) + (bal_c_after - bal_c_before)
+check("Chain-only: funds forwarded to SPLIT recipients via chain",
+      total_received > 0,
+      f"B delta={bal_b_after - bal_b_before}, C delta={bal_c_after - bal_c_before}, total={total_received}")
 
 # ============================================================
 # SUMMARY
