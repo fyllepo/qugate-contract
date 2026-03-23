@@ -3,7 +3,9 @@
 QuGate — All 9 Gate Modes Test
 
 Tests: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK
-Plus: updateGate, closeGate, non-owner rejection, query output verification
+Plus: updateGate, closeGate, non-owner rejection, query output verification,
+      chain-only gates (0 recipients with chain forwarding)
+Note: ORACLE mode tested separately in test_oracle.py (requires oracle provider)
 """
 import os
 import shutil
@@ -54,6 +56,8 @@ PROC_CANCEL_TIME_LOCK = 19
 FUNC_GET_TIME_LOCK_STATE = 20
 PROC_SET_ADMIN_GATE = 21
 FUNC_GET_ADMIN_GATE = 22
+PROC_WITHDRAW_RESERVE = 23
+FUNC_GET_GATES_BY_MODE = 24
 
 # Versioned gate ID encoding
 GATE_ID_SLOT_BITS = 20
@@ -790,6 +794,51 @@ total_received = (bal_b_after - bal_b_before) + (bal_c_after - bal_c_before)
 check("Chain-only: funds forwarded to SPLIT recipients via chain",
       total_received > 0,
       f"B delta={bal_b_after - bal_b_before}, C delta={bal_c_after - bal_c_before}, total={total_received}")
+
+# ============================================================
+# TEST 11: getGatesByMode — query gates by mode
+# ============================================================
+print()
+print("─" * 60)
+print("TEST 11: getGatesByMode — query SPLIT gates")
+print("─" * 60)
+
+gbm_data = struct.pack('<B', MODE_SPLIT)
+gbm_resp = requests.post(f"{RPC}/live/v1/querySmartContract", json={
+    'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_GATES_BY_MODE,
+    'inputSize': len(gbm_data),
+    'requestData': base64.b64encode(gbm_data).decode()
+}, timeout=5).json()
+gbm_b = base64.b64decode(gbm_resp['responseData'])
+# Output: Array<uint64, 16> gateIds (128 bytes) + uint64 count (8 bytes)
+gbm_count = struct.unpack_from('<Q', gbm_b, 128)[0]
+check("getGatesByMode returns at least 1 SPLIT gate",
+      gbm_count >= 1,
+      f"count={gbm_count}")
+if gbm_count > 0:
+    first_id = struct.unpack_from('<Q', gbm_b, 0)[0]
+    check("getGatesByMode first gate ID is valid",
+          first_id > 0,
+          f"gateId={first_id}")
+
+# ============================================================
+# TEST 12: withdrawReserve — withdraw chain reserve from a gate
+# ============================================================
+print()
+print("─" * 60)
+print("TEST 12: withdrawReserve — withdraw from chain reserve")
+print("─" * 60)
+
+# Use the chain-only gate which should have chain reserve
+# withdrawReserve_input: gateId(8) reserveTarget(1) amount(8)
+wr_data = struct.pack('<QBQ', co_gate_id, 1, 0)  # reserveTarget=1 (chain), amount=0 (all)
+wr_resp = send_tx(ADDR_A_KEY, PROC_WITHDRAW_RESERVE, 0, wr_data)
+wait()
+# Verify gate still active after withdraw
+wr_gate = query_gate(co_gate_id)
+check("withdrawReserve: gate still active after reserve withdrawal",
+      wr_gate['active'] == 1,
+      f"active={wr_gate['active']}")
 
 # ============================================================
 # SUMMARY

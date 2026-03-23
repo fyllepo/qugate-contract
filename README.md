@@ -530,6 +530,10 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 | 20 | getTimeLockState | PUBLIC_FUNCTION | Query TIME_LOCK gate state and epochs remaining |
 | 21 | setAdminGate | PUBLIC_PROCEDURE | Set or clear admin gate (MULTISIG governance) on any gate |
 | 22 | getAdminGate | PUBLIC_FUNCTION | Query admin gate configuration for a gate |
+| 23 | withdrawReserve | PUBLIC_PROCEDURE | Withdraw from oracle or chain reserve without closing (owner only) |
+| 24 | getGatesByMode | PUBLIC_FUNCTION | Query up to 16 active gates matching a given mode |
+
+**Totals**: 14 procedures + 10 functions = 24 registered entry points.
 
 ### Procedures (State-Changing)
 
@@ -1422,6 +1426,25 @@ See `TESTNET_RESULTS.md` for detailed results.
 | `TESTNET_RESULTS.md` | Testnet verification results |
 | `tests/` | Python testnet test scripts (17 scripts incl. test_heartbeat.py, test_multisig.py) |
 | `.github/workflows/` | CI: contract verification |
+
+---
+
+## QPI Compliance
+
+QuGate is written to pass `qubic-contract-verify` with one known exception (the preprocessor guard).
+
+| Requirement | Status |
+|-------------|--------|
+| No C-style arrays in state structs | `Array<T, N>` throughout; `.get()` / `.set()` access |
+| No division operator (`/`) | All division via `QPI::div()` |
+| No modulo operator (`%`) | All modulo via `QPI::mod()` |
+| No double quotes, single quotes in source | Clean |
+| No square bracket access (`[]`) | `.get()` / `.set()` only |
+| `state.get()` / `state.mut()` dirty-tracking | Used exclusively |
+| No `double`, `float`, `typedef`, `union` | Not used |
+| No double underscores in identifiers | Not used |
+
+**Preprocessor guard**: The `#ifndef CONTRACT_INDEX` / `#define` / `#endif` block at the top of `QuGate.h` exists for testnet flexibility (allows overriding the contract index at compile time). `qubic-contract-verify` will flag this. **Remove the guard before mainnet submission** and replace with a plain `constexpr` or the assigned contract index.
 
 ---
 

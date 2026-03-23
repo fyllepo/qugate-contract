@@ -5,7 +5,7 @@
 //   and QU flows according to the logic.
 //
 // Gate Modes:
-//   SPLIT       - Distribute to N addresses by ratio (e.g. 40/30/20/10)
+//   SPLIT       - Distribute to N addresses by ratio (e.g. 40:30:20:10)
 //   ROUND_ROBIN - Cycle through addresses, one per payment
 //   THRESHOLD   - Accumulate until amount reached, then forward
 //   RANDOM      - Select one recipient per payment using tick-based entropy
@@ -43,7 +43,9 @@
 
 using namespace QPI;
 
-// Contract index — Pulse took index 24, QuGate uses 26
+// Contract index — Pulse took index 24, QuGate uses 25
+// NOTE: The preprocessor guard below must be removed before mainnet submission.
+// qubic-contract-verify will flag it. It is only here for testnet flexibility.
 #ifndef CONTRACT_INDEX
 #define CONTRACT_INDEX 25
 #endif
@@ -58,7 +60,7 @@ constexpr uint64 QUGATE_MAX_RATIO = 10000;       // Max ratio per recipient (pre
 constexpr uint64 QUGATE_DEFAULT_CREATION_FEE = 100000;
 constexpr uint64 QUGATE_DEFAULT_MIN_SEND = 1000;
 
-// Escalating fee: fee = baseFee * (1 + activeGates / FEE_ESCALATION_STEP)
+// Escalating fee: fee = baseFee * (1 + QPI::div(activeGates, FEE_ESCALATION_STEP))
 constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
 
 // Gate expiry: gates with no activity for this many epochs auto-close
@@ -170,7 +172,7 @@ constexpr uint32 QUGATE_LOG_FAIL_NO_SLOTS = 105;
 constexpr uint32 QUGATE_LOG_FAIL_OWNER_MISMATCH = 106;
 
 // Asset name for shareholder proposals
-constexpr uint64 QUGATE_CONTRACT_ASSET_NAME = 76228174763345ULL; // "QUGATE" as uint64 little-endian
+constexpr uint64 QUGATE_CONTRACT_ASSET_NAME = 76228174763345ULL; // QUGATE as uint64 little-endian
 
 // Future extension struct (Qubic convention)
 struct QUGATE2
@@ -187,13 +189,13 @@ struct HeartbeatConfig
 {
     uint32  thresholdEpochs;       // epochs without heartbeat() before trigger (>= 1)
     uint32  lastHeartbeatEpoch;    // epoch of last heartbeat() call (or configureHeartbeat)
-    uint8   payoutPercentPerEpoch; // % of balance to pay each epoch after trigger (1-100)
+    uint8   payoutPercentPerEpoch; // percent of balance to pay each epoch after trigger (1-100)
     sint64  minimumBalance;        // stop paying when balance drops below this
     uint8   active;                // 1 = heartbeat mode enabled on this gate
     uint8   triggered;             // 1 once threshold exceeded
     uint32  triggerEpoch;          // epoch when triggered
-    id      beneficiaryAddresses[8];  // inline beneficiary addresses
-    uint8   beneficiaryShares[8];     // inline beneficiary share percents
+    Array<id, 8>    beneficiaryAddresses;  // inline beneficiary addresses
+    Array<uint8, 8> beneficiaryShares;     // inline beneficiary share percents
     uint8   beneficiaryCount;
 };
 
@@ -204,7 +206,7 @@ struct HeartbeatConfig
 
 struct MultisigConfig
 {
-    id           guardians[8];
+    Array<id, 8> guardians;
     uint8        guardianCount;
     uint8        required;              // M of N required approvals
     uint32       proposalExpiryEpochs;  // epochs before unfinished proposal resets
@@ -1155,7 +1157,7 @@ public:
         locals.logger.gateId = 0;
         locals.logger.amount = qpi.invocationReward();
 
-        // Calculate escalated fee: baseFee * (1 + activeGates / STEP)
+        // Calculate escalated fee: baseFee * (1 + QPI::div(activeGates, STEP))
         locals.currentFee = state.get()._creationFee * (1 + QPI::div(state.get()._activeGates, QUGATE_FEE_ESCALATION_STEP));
 
         // Validate creation fee (escalated)
@@ -1680,7 +1682,7 @@ public:
         locals.guardianIdx = 0;
         for (uint8 _gi = 0; _gi < locals.msigCfg.guardianCount; _gi++)
         {
-            if (locals.foundGuardian == 0 && locals.msigCfg.guardians[_gi] == qpi.invocator())
+            if (locals.foundGuardian == 0 && locals.msigCfg.guardians.get(_gi) == qpi.invocator())
             {
                 locals.foundGuardian = 1;
                 locals.guardianIdx = _gi;
@@ -1734,7 +1736,7 @@ public:
             locals.gate = state.get()._gates.get(input.slotIdx);
             if (locals.msigCfg.approvalCount >= locals.msigCfg.required && locals.gate.currentBalance > 0)
             {
-                // Transfer balance to target (recipients[0] is the target address)
+                // Transfer balance to target (recipients.get(0) is the target address)
                 sint64 releaseAmount = (sint64)locals.gate.currentBalance;
                 if (locals.gate.recipientCount > 0)
                 {
@@ -2492,8 +2494,8 @@ public:
             locals.hbZeroCfg.beneficiaryCount = 0;
             for (uint8 _bi = 0; _bi < 8; _bi++)
             {
-                locals.hbZeroCfg.beneficiaryAddresses[_bi] = id::zero();
-                locals.hbZeroCfg.beneficiaryShares[_bi] = 0;
+                locals.hbZeroCfg.beneficiaryAddresses.set(_bi, id::zero());
+                locals.hbZeroCfg.beneficiaryShares.set(_bi, 0);
             }
             state.mut()._heartbeatConfigs.set(locals.slotIdx, locals.hbZeroCfg);
         }
@@ -2503,7 +2505,7 @@ public:
         {
             for (uint8 _ci = 0; _ci < 8; _ci++)
             {
-                locals.msigZeroCfg.guardians[_ci] = id::zero();
+                locals.msigZeroCfg.guardians.set(_ci, id::zero());
             }
             locals.msigZeroCfg.guardianCount = 0;
             locals.msigZeroCfg.required = 0;
@@ -2918,7 +2920,7 @@ public:
         {
             if (input.reply.denominator > 0)
             {
-                locals.priceScaled = input.reply.numerator * 1000000 / input.reply.denominator;
+                locals.priceScaled = QPI::div(input.reply.numerator * 1000000, input.reply.denominator);
                 if (locals.priceScaled > locals.gate.oracleThreshold)
                 {
                     locals.conditionMet = 1;
@@ -2929,7 +2931,7 @@ public:
         {
             if (input.reply.denominator > 0)
             {
-                locals.priceScaled = input.reply.numerator * 1000000 / input.reply.denominator;
+                locals.priceScaled = QPI::div(input.reply.numerator * 1000000, input.reply.denominator);
                 if (locals.priceScaled < locals.gate.oracleThreshold)
                 {
                     locals.conditionMet = 1;
@@ -3027,10 +3029,10 @@ public:
                     zeroCfg.active = 0; zeroCfg.triggered = 0; zeroCfg.thresholdEpochs = 0;
                     zeroCfg.lastHeartbeatEpoch = 0; zeroCfg.payoutPercentPerEpoch = 0;
                     zeroCfg.minimumBalance = 0; zeroCfg.triggerEpoch = 0; zeroCfg.beneficiaryCount = 0;
-                    for (uint8 _zi = 0; _zi < 8; _zi++) { zeroCfg.beneficiaryAddresses[_zi] = id::zero(); zeroCfg.beneficiaryShares[_zi] = 0; }
+                    for (uint8 _zi = 0; _zi < 8; _zi++) { zeroCfg.beneficiaryAddresses.set(_zi, id::zero()); zeroCfg.beneficiaryShares.set(_zi, 0); }
                     state.mut()._heartbeatConfigs.set(locals.slotIdx, zeroCfg);
                     MultisigConfig zeroMs;
-                    for (uint8 _zi = 0; _zi < 8; _zi++) { zeroMs.guardians[_zi] = id::zero(); }
+                    for (uint8 _zi = 0; _zi < 8; _zi++) { zeroMs.guardians.set(_zi, id::zero()); }
                     zeroMs.guardianCount = 0; zeroMs.required = 0; zeroMs.proposalExpiryEpochs = 0;
                     zeroMs.approvalBitmap = 0; zeroMs.approvalCount = 0; zeroMs.proposalEpoch = 0; zeroMs.proposalActive = 0;
                     state.mut()._multisigConfigs.set(locals.slotIdx, zeroMs);
@@ -3561,13 +3563,13 @@ public:
         {
             if (locals.i < input.beneficiaryCount)
             {
-                locals.cfg.beneficiaryAddresses[locals.i] = input.beneficiaryAddresses.get(locals.i);
-                locals.cfg.beneficiaryShares[locals.i] = input.beneficiaryShares.get(locals.i);
+                locals.cfg.beneficiaryAddresses.set(locals.i, input.beneficiaryAddresses.get(locals.i));
+                locals.cfg.beneficiaryShares.set(locals.i, input.beneficiaryShares.get(locals.i));
             }
             else
             {
-                locals.cfg.beneficiaryAddresses[locals.i] = id::zero();
-                locals.cfg.beneficiaryShares[locals.i] = 0;
+                locals.cfg.beneficiaryAddresses.set(locals.i, id::zero());
+                locals.cfg.beneficiaryShares.set(locals.i, 0);
             }
         }
         state.mut()._heartbeatConfigs.set(locals.slotIdx, locals.cfg);
@@ -3722,8 +3724,8 @@ public:
         output.beneficiaryCount = locals.cfg.beneficiaryCount;
         for (locals.i = 0; locals.i < 8; locals.i++)
         {
-            output.beneficiaryAddresses.set(locals.i, locals.cfg.beneficiaryAddresses[locals.i]);
-            output.beneficiaryShares.set(locals.i, locals.cfg.beneficiaryShares[locals.i]);
+            output.beneficiaryAddresses.set(locals.i, locals.cfg.beneficiaryAddresses.get(locals.i));
+            output.beneficiaryShares.set(locals.i, locals.cfg.beneficiaryShares.get(locals.i));
         }
     }
 
@@ -3863,11 +3865,11 @@ public:
         {
             if (_gi < input.guardianCount)
             {
-                locals.cfg.guardians[_gi] = input.guardians.get(_gi);
+                locals.cfg.guardians.set(_gi, input.guardians.get(_gi));
             }
             else
             {
-                locals.cfg.guardians[_gi] = id::zero();
+                locals.cfg.guardians.set(_gi, id::zero());
             }
         }
         locals.cfg.guardianCount = input.guardianCount;
@@ -3930,7 +3932,7 @@ public:
         output.proposalActive = locals.cfg.proposalActive;
         for (locals.i = 0; locals.i < locals.cfg.guardianCount; locals.i++)
         {
-            output.guardians.set(locals.i, locals.cfg.guardians[locals.i]);
+            output.guardians.set(locals.i, locals.cfg.guardians.get(locals.i));
         }
     }
 
@@ -4418,7 +4420,7 @@ public:
                 output.required = locals.adminCfg.required;
                 for (locals.i = 0; locals.i < locals.adminCfg.guardianCount; locals.i++)
                 {
-                    output.guardians.set(locals.i, locals.adminCfg.guardians[locals.i]);
+                    output.guardians.set(locals.i, locals.adminCfg.guardians.get(locals.i));
                 }
             }
         }
@@ -4749,13 +4751,13 @@ public:
                         zeroCfg.active = 0; zeroCfg.triggered = 0; zeroCfg.thresholdEpochs = 0;
                         zeroCfg.lastHeartbeatEpoch = 0; zeroCfg.payoutPercentPerEpoch = 0;
                         zeroCfg.minimumBalance = 0; zeroCfg.triggerEpoch = 0; zeroCfg.beneficiaryCount = 0;
-                        for (uint8 _zi = 0; _zi < 8; _zi++) { zeroCfg.beneficiaryAddresses[_zi] = id::zero(); zeroCfg.beneficiaryShares[_zi] = 0; }
+                        for (uint8 _zi = 0; _zi < 8; _zi++) { zeroCfg.beneficiaryAddresses.set(_zi, id::zero()); zeroCfg.beneficiaryShares.set(_zi, 0); }
                         state.mut()._heartbeatConfigs.set(locals.i, zeroCfg);
                     }
                     else if (locals.gate.mode == QUGATE_MODE_MULTISIG)
                     {
                         MultisigConfig zeroCfg;
-                        for (uint8 _zi = 0; _zi < 8; _zi++) { zeroCfg.guardians[_zi] = id::zero(); }
+                        for (uint8 _zi = 0; _zi < 8; _zi++) { zeroCfg.guardians.set(_zi, id::zero()); }
                         zeroCfg.guardianCount = 0; zeroCfg.required = 0; zeroCfg.proposalExpiryEpochs = 0;
                         zeroCfg.approvalBitmap = 0; zeroCfg.approvalCount = 0; zeroCfg.proposalEpoch = 0; zeroCfg.proposalActive = 0;
                         state.mut()._multisigConfigs.set(locals.i, zeroCfg);
@@ -4822,7 +4824,7 @@ public:
                 locals.inhBalance = (sint64)locals.gate.currentBalance;
                 if (locals.inhBalance > locals.inhCfg.minimumBalance)
                 {
-                    locals.inhPayoutTotal = locals.inhBalance * (sint64)locals.inhCfg.payoutPercentPerEpoch / 100;
+                    locals.inhPayoutTotal = QPI::div(locals.inhBalance * (sint64)locals.inhCfg.payoutPercentPerEpoch, 100);
                     if (locals.inhPayoutTotal > 0)
                     {
                         locals.inhBeneCount = locals.inhCfg.beneficiaryCount;
@@ -4835,18 +4837,18 @@ public:
                                 locals.inhPriorSum = 0;
                                 for (locals.inhK = 0; locals.inhK < locals.inhJ; locals.inhK++)
                                 {
-                                    locals.inhPriorSum += locals.inhPayoutTotal * (sint64)locals.inhCfg.beneficiaryShares[locals.inhK] / 100;
+                                    locals.inhPriorSum += QPI::div(locals.inhPayoutTotal * (sint64)locals.inhCfg.beneficiaryShares.get(locals.inhK), 100);
                                 }
                                 locals.inhShare = locals.inhPayoutTotal - locals.inhPriorSum;
                             }
                             else
                             {
-                                locals.inhShare = locals.inhPayoutTotal * (sint64)locals.inhCfg.beneficiaryShares[locals.inhJ] / 100;
+                                locals.inhShare = QPI::div(locals.inhPayoutTotal * (sint64)locals.inhCfg.beneficiaryShares.get(locals.inhJ), 100);
                             }
 
                             if (locals.inhShare > 0)
                             {
-                                qpi.transfer(locals.inhCfg.beneficiaryAddresses[locals.inhJ], locals.inhShare);
+                                qpi.transfer(locals.inhCfg.beneficiaryAddresses.get(locals.inhJ), locals.inhShare);
                                 locals.gate.totalForwarded += (uint64)locals.inhShare;
                                 locals.gate.currentBalance -= (uint64)locals.inhShare;
                             }
@@ -5001,7 +5003,7 @@ public:
 
             if ((uint32)qpi.epoch() >= locals.tlCfg.unlockEpoch)
             {
-                // Release funds to target (recipients[0])
+                // Release funds to target (recipients.get(0))
                 if (locals.gate.currentBalance > 0)
                 {
                     locals.tlReleaseAmount = (sint64)locals.gate.currentBalance;
