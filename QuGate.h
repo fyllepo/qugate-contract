@@ -5030,6 +5030,13 @@ public:
                 if (locals.inhBalance > locals.inhCfg.minimumBalance)
                 {
                     locals.inhPayoutTotal = (sint64)QPI::div((uint64)(locals.inhBalance * (sint64)locals.inhCfg.payoutPercentPerEpoch), (uint64)100);
+
+                    // Zeno fix: if payout rounds to 0 but balance remains, sweep remaining balance
+                    if (locals.inhPayoutTotal == 0 && locals.inhBalance > 0)
+                    {
+                        locals.inhPayoutTotal = locals.inhBalance;
+                    }
+
                     if (locals.inhPayoutTotal > 0)
                     {
                         locals.inhBeneCount = locals.inhCfg.beneficiaryCount;
