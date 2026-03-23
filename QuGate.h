@@ -666,7 +666,7 @@ public:
 
         // O(1) oracle callback lookup. Maintained by BEGIN_EPOCH and all close paths.
         // O(1) reverse lookup: oracleSubscriptionId → slot index
-        HashMap<sint32, uint64, 512> _subscriptionToSlot;
+        HashMap<sint32, uint64, QUGATE_MAX_GATES> _subscriptionToSlot;
 
         // Heartbeat mode state — indexed by gate slot (same index as _gates)
         // Beneficiaries are stored inline in HeartbeatConfig
@@ -1918,6 +1918,39 @@ public:
             return;
         }
 
+        // Lazy expiry check: expire gate if inactive too long
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+            && locals.gate.active == 1)
+        {
+            if (locals.gate.currentBalance > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
+                locals.gate.currentBalance = 0;
+            }
+            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
+                locals.gate.oracleReserve = 0;
+            }
+            if (locals.gate.chainReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
+                locals.gate.chainReserve = 0;
+            }
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
+            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
+            LOG_INFO(locals.logger);
+            return;
+        }
+
         locals.amount = qpi.invocationReward();
         if (locals.amount <= 0)
         {
@@ -2155,6 +2188,39 @@ public:
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Lazy expiry check: expire gate if inactive too long
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+            && locals.gate.active == 1)
+        {
+            if (locals.gate.currentBalance > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
+                locals.gate.currentBalance = 0;
+            }
+            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
+                locals.gate.oracleReserve = 0;
+            }
+            if (locals.gate.chainReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
+                locals.gate.chainReserve = 0;
+            }
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
+            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
+            LOG_INFO(locals.logger);
             return;
         }
 
@@ -2451,6 +2517,39 @@ public:
             return;
         }
 
+        // Lazy expiry check: expire gate if inactive too long
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+            && locals.gate.active == 1)
+        {
+            if (locals.gate.currentBalance > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
+                locals.gate.currentBalance = 0;
+            }
+            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
+                locals.gate.oracleReserve = 0;
+            }
+            if (locals.gate.chainReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
+                locals.gate.chainReserve = 0;
+            }
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
+            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
+            LOG_INFO(locals.logger);
+            return;
+        }
+
         // Refund any held balance (THRESHOLD / ORACLE mode)
         if (locals.gate.currentBalance > 0)
         {
@@ -2633,6 +2732,39 @@ public:
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Lazy expiry check: expire gate if inactive too long
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+            && locals.gate.active == 1)
+        {
+            if (locals.gate.currentBalance > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
+                locals.gate.currentBalance = 0;
+            }
+            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
+                locals.gate.oracleReserve = 0;
+            }
+            if (locals.gate.chainReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
+                locals.gate.chainReserve = 0;
+            }
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
+            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
+            LOG_INFO(locals.logger);
             return;
         }
 
@@ -2822,6 +2954,39 @@ public:
             output.result = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Lazy expiry check: expire gate if inactive too long
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+            && locals.gate.active == 1)
+        {
+            if (locals.gate.currentBalance > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
+                locals.gate.currentBalance = 0;
+            }
+            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
+                locals.gate.oracleReserve = 0;
+            }
+            if (locals.gate.chainReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
+                locals.gate.chainReserve = 0;
+            }
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
+            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            output.result = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
+            LOG_INFO(locals.logger);
             return;
         }
 
@@ -3097,6 +3262,13 @@ public:
         output.chainDepth = locals.gate.chainDepth;
         output.adminGateId = locals.gate.adminGateId;
         output.hasAdminGate = locals.gate.hasAdminGate;
+
+        // Report as inactive if expired (function can't mutate state)
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs)
+        {
+            output.active = 0;
+        }
     }
 
     PUBLIC_FUNCTION(getGateCount)
@@ -3286,6 +3458,39 @@ public:
             output.result = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Lazy expiry check: expire gate if inactive too long
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+            && locals.gate.active == 1)
+        {
+            if (locals.gate.currentBalance > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
+                locals.gate.currentBalance = 0;
+            }
+            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
+                locals.gate.oracleReserve = 0;
+            }
+            if (locals.gate.chainReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
+                locals.gate.chainReserve = 0;
+            }
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
+            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            output.result = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
+            LOG_INFO(locals.logger);
             return;
         }
 
