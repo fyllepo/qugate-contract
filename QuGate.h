@@ -2920,7 +2920,7 @@ public:
         {
             if (input.reply.denominator > 0)
             {
-                locals.priceScaled = QPI::div(input.reply.numerator * 1000000, input.reply.denominator);
+                locals.priceScaled = (sint64)QPI::div((uint64)(input.reply.numerator * 1000000), (uint64)input.reply.denominator);
                 if (locals.priceScaled > locals.gate.oracleThreshold)
                 {
                     locals.conditionMet = 1;
@@ -2931,7 +2931,7 @@ public:
         {
             if (input.reply.denominator > 0)
             {
-                locals.priceScaled = QPI::div(input.reply.numerator * 1000000, input.reply.denominator);
+                locals.priceScaled = (sint64)QPI::div((uint64)(input.reply.numerator * 1000000), (uint64)input.reply.denominator);
                 if (locals.priceScaled < locals.gate.oracleThreshold)
                 {
                     locals.conditionMet = 1;
@@ -4824,7 +4824,7 @@ public:
                 locals.inhBalance = (sint64)locals.gate.currentBalance;
                 if (locals.inhBalance > locals.inhCfg.minimumBalance)
                 {
-                    locals.inhPayoutTotal = QPI::div(locals.inhBalance * (sint64)locals.inhCfg.payoutPercentPerEpoch, 100);
+                    locals.inhPayoutTotal = (sint64)QPI::div((uint64)(locals.inhBalance * (sint64)locals.inhCfg.payoutPercentPerEpoch), (uint64)100);
                     if (locals.inhPayoutTotal > 0)
                     {
                         locals.inhBeneCount = locals.inhCfg.beneficiaryCount;
@@ -4837,13 +4837,13 @@ public:
                                 locals.inhPriorSum = 0;
                                 for (locals.inhK = 0; locals.inhK < locals.inhJ; locals.inhK++)
                                 {
-                                    locals.inhPriorSum += QPI::div(locals.inhPayoutTotal * (sint64)locals.inhCfg.beneficiaryShares.get(locals.inhK), 100);
+                                    locals.inhPriorSum += (sint64)QPI::div((uint64)(locals.inhPayoutTotal * (sint64)locals.inhCfg.beneficiaryShares.get(locals.inhK)), (uint64)100);
                                 }
                                 locals.inhShare = locals.inhPayoutTotal - locals.inhPriorSum;
                             }
                             else
                             {
-                                locals.inhShare = QPI::div(locals.inhPayoutTotal * (sint64)locals.inhCfg.beneficiaryShares.get(locals.inhJ), 100);
+                                locals.inhShare = (sint64)QPI::div((uint64)(locals.inhPayoutTotal * (sint64)locals.inhCfg.beneficiaryShares.get(locals.inhJ)), (uint64)100);
                             }
 
                             if (locals.inhShare > 0)
