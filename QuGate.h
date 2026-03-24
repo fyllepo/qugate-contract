@@ -2142,6 +2142,21 @@ public:
             state.mut()._gates.set(input.slotIdx, locals.gate);
             output.forwarded = locals.amountAfterFee;
         }
+        else if (locals.gate.mode == QUGATE_MODE_HEARTBEAT
+                 || locals.gate.mode == QUGATE_MODE_MULTISIG
+                 || locals.gate.mode == QUGATE_MODE_TIME_LOCK)
+        {
+            // Accumulate-on-arrival modes: funds held in currentBalance until mode-specific release
+            // HEARTBEAT: released by epoch trigger after inactivity threshold
+            // MULTISIG: released when guardians reach quorum
+            // TIME_LOCK: released at unlockEpoch
+            locals.gate = state.get()._gates.get(input.slotIdx);
+            locals.gate.currentBalance += locals.amountAfterFee;
+            locals.gate.totalReceived += (uint64)locals.amountAfterFee;
+            locals.gate.lastActivityEpoch = qpi.epoch();
+            state.mut()._gates.set(input.slotIdx, locals.gate);
+            output.forwarded = locals.amountAfterFee;
+        }
         // NOTE: CONDITIONAL mode as chain target requires SELF in allowedSenders — invocator here is the contract, not an external sender.
 
         // Log hop
@@ -2489,9 +2504,7 @@ public:
 
         // Chain forwarding: if this gate has a chain link, forward to the next gate
         locals.gate = state.get()._gates.get(locals.slotIdx);
-        if (locals.gate.chainNextGateId != -1 && locals.gate.mode != QUGATE_MODE_ORACLE
-            && locals.gate.mode != QUGATE_MODE_MULTISIG
-            && locals.gate.mode != QUGATE_MODE_TIME_LOCK)
+        if (locals.gate.chainNextGateId != -1 && locals.gate.mode != QUGATE_MODE_ORACLE)
         {
             // Determine forwarded amount from mode handler outputs
             sint64 chainAmount = 0;
@@ -2515,6 +2528,10 @@ public:
             {
                 chainAmount = locals.condOut.forwarded;
             }
+
+            // Accumulate-on-arrival modes: chainAmount is 0 at send time
+            // (funds accumulate, chain forwarding happens at release time via
+            // processMultisigVote / END_EPOCH heartbeat / END_EPOCH time-lock)
 
             if (chainAmount > 0)
             {
@@ -2899,9 +2916,7 @@ public:
 
         // Chain forwarding: if this gate has a chain link, forward to the next gate
         locals.gate = state.get()._gates.get(locals.slotIdx);
-        if (locals.gate.chainNextGateId != -1 && locals.gate.mode != QUGATE_MODE_ORACLE
-            && locals.gate.mode != QUGATE_MODE_MULTISIG
-            && locals.gate.mode != QUGATE_MODE_TIME_LOCK)
+        if (locals.gate.chainNextGateId != -1 && locals.gate.mode != QUGATE_MODE_ORACLE)
         {
             // Determine forwarded amount from mode handler outputs
             sint64 chainAmount = 0;
@@ -2925,6 +2940,10 @@ public:
             {
                 chainAmount = locals.condOut.forwarded;
             }
+
+            // Accumulate-on-arrival modes: chainAmount is 0 at send time
+            // (funds accumulate, chain forwarding happens at release time via
+            // processMultisigVote / END_EPOCH heartbeat / END_EPOCH time-lock)
 
             if (chainAmount > 0)
             {
