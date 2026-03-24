@@ -12,8 +12,11 @@
 //   CONDITIONAL - Only forward if sender matches whitelist, else bounce
 //   ORACLE      - Oracle-triggered distribution based on price/time conditions
 //   HEARTBEAT   - Dead-man's switch; distributes if not pinged within N epochs
+//                 Recipients configured via configureHeartbeat (recipientCount=0 at creation)
 //   MULTISIG    - M-of-N guardian approval before funds release
+//                 Guardians configured via configureMultisig (recipientCount=0 at creation)
 //   TIME_LOCK   - Funds locked until a target epoch, then released
+//                 Unlock configured via configureTimeLock (recipientCount=0 at creation)
 //
 // Anti-Spam:
 //   - Escalating creation fee: cost increases as capacity fills
@@ -47,7 +50,7 @@ using namespace QPI;
 // NOTE: The preprocessor guard below must be removed before mainnet submission.
 // qubic-contract-verify will flag it. It is only here for testnet flexibility.
 #ifndef CONTRACT_INDEX
-#define CONTRACT_INDEX 25
+#define CONTRACT_INDEX 26
 #endif
 
 // Capacity scales with network via X_MULTIPLIER
@@ -1193,7 +1196,12 @@ public:
             LOG_WARNING(locals.logger);
             return;
         }
-        if (input.recipientCount == 0 && input.chainNextGateId == -1)
+        // Modes 6 (HEARTBEAT), 7 (MULTISIG), 8 (TIME_LOCK) configure recipients
+        // via separate procedures, so recipientCount == 0 is valid at creation time.
+        if (input.recipientCount == 0 && input.chainNextGateId == -1
+            && input.mode != QUGATE_MODE_HEARTBEAT
+            && input.mode != QUGATE_MODE_MULTISIG
+            && input.mode != QUGATE_MODE_TIME_LOCK)
         {
             qpi.transfer(qpi.invocator(), qpi.invocationReward());
             output.status = QUGATE_INVALID_RECIPIENT_COUNT;
