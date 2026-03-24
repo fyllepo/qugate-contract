@@ -1845,6 +1845,8 @@ public:
         {
             if (locals.gate.recipientCount == 0)
             {
+                // No recipients — chain forwarding will handle delivery
+                locals.gate.totalForwarded += input.amount;
                 output.forwarded = input.amount;
             }
             else
