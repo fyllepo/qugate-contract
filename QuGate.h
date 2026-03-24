@@ -1578,8 +1578,10 @@ public:
 
             if (locals.share > 0)
             {
-                qpi.transfer(locals.gate.recipients.get(locals.i), locals.share);
-                locals.distributed += locals.share;
+                if (qpi.transfer(locals.gate.recipients.get(locals.i), locals.share) >= 0) // [QG-07]
+                {
+                    locals.distributed += locals.share;
+                }
             }
         }
 
@@ -1598,9 +1600,11 @@ public:
             return;
         }
 
-        qpi.transfer(locals.gate.recipients.get(locals.gate.roundRobinIndex), input.amount);
-        locals.gate.totalForwarded += input.amount;
-        locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
+        if (qpi.transfer(locals.gate.recipients.get(locals.gate.roundRobinIndex), input.amount) >= 0) // [QG-08]
+        {
+            locals.gate.totalForwarded += input.amount;
+            locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
+        }
 
         state.mut()._gates.set(input.gateIdx, locals.gate);
         output.forwarded = input.amount;
@@ -1615,16 +1619,23 @@ public:
 
         if (locals.gate.currentBalance >= locals.gate.threshold)
         {
-            output.forwarded = locals.gate.currentBalance;
-            locals.gate.totalForwarded += locals.gate.currentBalance;
-
-            // If chained, don't transfer to recipient — chain code will handle forwarding
+            // [QG-09] Transfer-first: only update state if transfer succeeds (or chained)
             if (locals.gate.recipientCount > 0 && locals.gate.chainNextGateId == -1)
             {
-                qpi.transfer(locals.gate.recipients.get(0), locals.gate.currentBalance);
+                if (qpi.transfer(locals.gate.recipients.get(0), locals.gate.currentBalance) >= 0)
+                {
+                    output.forwarded = locals.gate.currentBalance;
+                    locals.gate.totalForwarded += locals.gate.currentBalance;
+                    locals.gate.currentBalance = 0;
+                }
             }
-
-            locals.gate.currentBalance = 0;
+            else
+            {
+                // Chained: no direct transfer, chain code handles forwarding
+                output.forwarded = locals.gate.currentBalance;
+                locals.gate.totalForwarded += locals.gate.currentBalance;
+                locals.gate.currentBalance = 0;
+            }
         }
 
         state.mut()._gates.set(input.gateIdx, locals.gate);
@@ -1642,8 +1653,10 @@ public:
 
         // NOTE: entropy is publicly observable — not cryptographically random
         locals.recipientIdx = QPI::mod(locals.gate.totalReceived + qpi.tick(), (uint64)locals.gate.recipientCount);
-        qpi.transfer(locals.gate.recipients.get(locals.recipientIdx), input.amount);
-        locals.gate.totalForwarded += input.amount;
+        if (qpi.transfer(locals.gate.recipients.get(locals.recipientIdx), input.amount) >= 0) // [QG-10]
+        {
+            locals.gate.totalForwarded += input.amount;
+        }
 
         state.mut()._gates.set(input.gateIdx, locals.gate);
         output.forwarded = input.amount;
@@ -1672,9 +1685,11 @@ public:
             }
             else
             {
-                qpi.transfer(locals.gate.recipients.get(0), input.amount);
-                locals.gate.totalForwarded += input.amount;
-                output.forwarded = input.amount;
+                if (qpi.transfer(locals.gate.recipients.get(0), input.amount) >= 0) // [QG-11]
+                {
+                    locals.gate.totalForwarded += input.amount;
+                    output.forwarded = input.amount;
+                }
             }
         }
         else
@@ -1761,19 +1776,30 @@ public:
             {
                 // Transfer balance to target (recipients.get(0) is the target address)
                 sint64 releaseAmount = (sint64)locals.gate.currentBalance;
+                uint8 transferred = 0;
                 if (locals.gate.recipientCount > 0)
                 {
-                    qpi.transfer(locals.gate.recipients.get(0), releaseAmount);
+                    if (qpi.transfer(locals.gate.recipients.get(0), releaseAmount) >= 0) // [QG-12]
+                    {
+                        transferred = 1;
+                    }
                 }
-                locals.gate.totalForwarded += (uint64)releaseAmount;
-                locals.gate.currentBalance = 0;
-                state.mut()._gates.set(input.slotIdx, locals.gate);
+                else
+                {
+                    transferred = 1; // No recipient, chain will handle
+                }
+                if (transferred)
+                {
+                    locals.gate.totalForwarded += (uint64)releaseAmount;
+                    locals.gate.currentBalance = 0;
+                    state.mut()._gates.set(input.slotIdx, locals.gate);
 
-                // Reset proposal
-                locals.msigCfg.approvalBitmap = 0;
-                locals.msigCfg.approvalCount = 0;
-                locals.msigCfg.proposalActive = 0;
-                state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
+                    // Reset proposal
+                    locals.msigCfg.approvalBitmap = 0;
+                    locals.msigCfg.approvalCount = 0;
+                    locals.msigCfg.proposalActive = 0;
+                    state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
+                }
 
                 locals.logger._contractIndex = CONTRACT_INDEX;
                 locals.logger._type = QUGATE_LOG_MULTISIG_EXECUTED;
@@ -1949,18 +1975,24 @@ public:
         {
             if (locals.gate.currentBalance > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
-                locals.gate.currentBalance = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-01]
+                {
+                    locals.gate.currentBalance = 0;
+                }
             }
             if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
-                locals.gate.oracleReserve = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-01]
+                {
+                    locals.gate.oracleReserve = 0;
+                }
             }
             if (locals.gate.chainReserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
-                locals.gate.chainReserve = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-01]
+                {
+                    locals.gate.chainReserve = 0;
+                }
             }
             locals.gate.active = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
@@ -2223,18 +2255,24 @@ public:
         {
             if (locals.gate.currentBalance > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
-                locals.gate.currentBalance = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-02]
+                {
+                    locals.gate.currentBalance = 0;
+                }
             }
             if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
-                locals.gate.oracleReserve = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-02]
+                {
+                    locals.gate.oracleReserve = 0;
+                }
             }
             if (locals.gate.chainReserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
-                locals.gate.chainReserve = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-02]
+                {
+                    locals.gate.chainReserve = 0;
+                }
             }
             locals.gate.active = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
@@ -2550,18 +2588,24 @@ public:
         {
             if (locals.gate.currentBalance > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
-                locals.gate.currentBalance = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-03]
+                {
+                    locals.gate.currentBalance = 0;
+                }
             }
             if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
-                locals.gate.oracleReserve = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-03]
+                {
+                    locals.gate.oracleReserve = 0;
+                }
             }
             if (locals.gate.chainReserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
-                locals.gate.chainReserve = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-03]
+                {
+                    locals.gate.chainReserve = 0;
+                }
             }
             locals.gate.active = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
@@ -2579,8 +2623,10 @@ public:
         // Refund any held balance (THRESHOLD / ORACLE mode)
         if (locals.gate.currentBalance > 0)
         {
-            qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
-            locals.gate.currentBalance = 0;
+            if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-06]
+            {
+                locals.gate.currentBalance = 0;
+            }
         }
 
         // Refund oracle reserve and unsubscribe
@@ -2588,8 +2634,10 @@ public:
         {
             if (locals.gate.oracleReserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
-                locals.gate.oracleReserve = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-06]
+                {
+                    locals.gate.oracleReserve = 0;
+                }
             }
             if (locals.gate.oracleSubscriptionId >= 0)
             {
@@ -2602,8 +2650,10 @@ public:
         // Refund chain reserve
         if (locals.gate.chainReserve > 0)
         {
-            qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
-            locals.gate.chainReserve = 0;
+            if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-06]
+            {
+                locals.gate.chainReserve = 0;
+            }
         }
 
         // Clear heartbeat config on close
@@ -2992,18 +3042,24 @@ public:
         {
             if (locals.gate.currentBalance > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
-                locals.gate.currentBalance = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-04]
+                {
+                    locals.gate.currentBalance = 0;
+                }
             }
             if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
-                locals.gate.oracleReserve = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-04]
+                {
+                    locals.gate.oracleReserve = 0;
+                }
             }
             if (locals.gate.chainReserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
-                locals.gate.chainReserve = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-04]
+                {
+                    locals.gate.chainReserve = 0;
+                }
             }
             locals.gate.active = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
@@ -3207,8 +3263,10 @@ public:
             {
                 if (locals.gate.oracleReserve > 0)
                 {
-                    qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
-                    locals.gate.oracleReserve = 0;
+                    if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-13]
+                    {
+                        locals.gate.oracleReserve = 0;
+                    }
                 }
                 if (locals.gate.oracleSubscriptionId >= 0)
                 {
@@ -3497,18 +3555,24 @@ public:
         {
             if (locals.gate.currentBalance > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
-                locals.gate.currentBalance = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-05]
+                {
+                    locals.gate.currentBalance = 0;
+                }
             }
             if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
-                locals.gate.oracleReserve = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-05]
+                {
+                    locals.gate.oracleReserve = 0;
+                }
             }
             if (locals.gate.chainReserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
-                locals.gate.chainReserve = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-05]
+                {
+                    locals.gate.chainReserve = 0;
+                }
             }
             locals.gate.active = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
@@ -4419,8 +4483,10 @@ public:
         // Refund held balance to owner
         if (locals.gate.currentBalance > 0)
         {
-            qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
-            locals.gate.currentBalance = 0;
+            if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-18]
+            {
+                locals.gate.currentBalance = 0;
+            }
         }
 
         // Mark cancelled
@@ -4773,11 +4839,12 @@ public:
                 toWithdraw = input.amount;
             }
 
-            locals.gate.oracleReserve -= (sint64)toWithdraw;
-            state.mut()._gates.set(locals.slotIdx, locals.gate);
-
-            qpi.transfer(qpi.invocator(), toWithdraw);
-            output.withdrawn = toWithdraw;
+            if (qpi.transfer(qpi.invocator(), toWithdraw) >= 0) // [QG-19]
+            {
+                locals.gate.oracleReserve -= (sint64)toWithdraw;
+                state.mut()._gates.set(locals.slotIdx, locals.gate);
+                output.withdrawn = toWithdraw;
+            }
         }
         else if (input.reserveTarget == 1)
         {
@@ -4804,11 +4871,12 @@ public:
                 toWithdraw = input.amount;
             }
 
-            locals.gate.chainReserve -= (sint64)toWithdraw;
-            state.mut()._gates.set(locals.slotIdx, locals.gate);
-
-            qpi.transfer(qpi.invocator(), toWithdraw);
-            output.withdrawn = toWithdraw;
+            if (qpi.transfer(qpi.invocator(), toWithdraw) >= 0) // [QG-20]
+            {
+                locals.gate.chainReserve -= (sint64)toWithdraw;
+                state.mut()._gates.set(locals.slotIdx, locals.gate);
+                output.withdrawn = toWithdraw;
+            }
         }
         else
         {
@@ -4960,8 +5028,10 @@ public:
                     // Refund any held balance (THRESHOLD / ORACLE mode)
                     if (locals.gate.currentBalance > 0)
                     {
-                        qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
-                        locals.gate.currentBalance = 0;
+                        if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-14]
+                        {
+                            locals.gate.currentBalance = 0;
+                        }
                     }
 
                     // Refund oracle reserve on expiry
@@ -4969,8 +5039,10 @@ public:
                     {
                         if (locals.gate.oracleReserve > 0)
                         {
-                            qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
-                            locals.gate.oracleReserve = 0;
+                            if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-14]
+                            {
+                                locals.gate.oracleReserve = 0;
+                            }
                         }
                         if (locals.gate.oracleSubscriptionId >= 0)
                         {
@@ -4981,8 +5053,10 @@ public:
                     // Refund chain reserve on expiry
                     if (locals.gate.chainReserve > 0)
                     {
-                        qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
-                        locals.gate.chainReserve = 0;
+                        if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-14]
+                        {
+                            locals.gate.chainReserve = 0;
+                        }
                     }
 
                     // Clear mode-specific configs on expiry (prevents ghost state in recycled slots)
@@ -5096,9 +5170,11 @@ public:
 
                             if (locals.inhShare > 0)
                             {
-                                qpi.transfer(locals.inhCfg.beneficiaryAddresses.get(locals.inhJ), locals.inhShare);
-                                locals.gate.totalForwarded += (uint64)locals.inhShare;
-                                locals.gate.currentBalance -= (uint64)locals.inhShare;
+                                if (qpi.transfer(locals.inhCfg.beneficiaryAddresses.get(locals.inhJ), locals.inhShare) >= 0) // [QG-15]
+                                {
+                                    locals.gate.totalForwarded += (uint64)locals.inhShare;
+                                    locals.gate.currentBalance -= (uint64)locals.inhShare;
+                                }
                             }
                         }
 
@@ -5155,8 +5231,10 @@ public:
                         // Refund any remaining dust to owner rather than lose it
                         if (locals.gate.currentBalance > 0)
                         {
-                            qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
-                            locals.gate.currentBalance = 0;
+                            if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-16]
+                            {
+                                locals.gate.currentBalance = 0;
+                            }
                         }
 
                         locals.gate.active = 0;
@@ -5255,13 +5333,24 @@ public:
                 if (locals.gate.currentBalance > 0)
                 {
                     locals.tlReleaseAmount = (sint64)locals.gate.currentBalance;
+                    uint8 tlTransferred = 0;
                     if (locals.gate.recipientCount > 0)
                     {
-                        qpi.transfer(locals.gate.recipients.get(0), locals.tlReleaseAmount);
+                        if (qpi.transfer(locals.gate.recipients.get(0), locals.tlReleaseAmount) >= 0) // [QG-17]
+                        {
+                            tlTransferred = 1;
+                        }
                     }
-                    locals.gate.totalForwarded += (uint64)locals.tlReleaseAmount;
-                    locals.gate.currentBalance = 0;
-                    state.mut()._gates.set(locals.i, locals.gate);
+                    else
+                    {
+                        tlTransferred = 1;
+                    }
+                    if (tlTransferred)
+                    {
+                        locals.gate.totalForwarded += (uint64)locals.tlReleaseAmount;
+                        locals.gate.currentBalance = 0;
+                        state.mut()._gates.set(locals.i, locals.gate);
+                    }
                 }
 
                 locals.tlCfg.fired = 1;
