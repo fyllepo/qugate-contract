@@ -688,6 +688,7 @@ public:
 
     struct createGate_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig newGate;
         uint64 totalRatio;
@@ -814,6 +815,7 @@ public:
 
     struct fundGate_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         uint64 slotIdx;
@@ -822,6 +824,7 @@ public:
 
     struct setChain_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         GateConfig targetGate;
@@ -840,6 +843,7 @@ public:
 
     struct sendToGateVerified_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         sint64 amount;
@@ -875,6 +879,7 @@ public:
 
     struct sendToGate_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         sint64 amount;
@@ -910,6 +915,7 @@ public:
 
     struct closeGate_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         uint64 slotIdx;
@@ -924,6 +930,7 @@ public:
 
     struct updateGate_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         uint64 totalRatio;
@@ -986,6 +993,7 @@ public:
 
     struct configureTimeLock_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         uint64 slotIdx;
@@ -998,6 +1006,7 @@ public:
 
     struct cancelTimeLock_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         uint64 slotIdx;
@@ -1019,6 +1028,7 @@ public:
 
     struct setAdminGate_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         GateConfig adminGate;
@@ -1043,6 +1053,7 @@ public:
 
     struct withdrawReserve_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         uint64 slotIdx;
@@ -1089,6 +1100,7 @@ public:
 
     struct configureHeartbeat_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         uint64 slotIdx;
@@ -1103,6 +1115,7 @@ public:
 
     struct heartbeat_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         uint64 slotIdx;
@@ -1121,6 +1134,7 @@ public:
 
     struct configureMultisig_locals
     {
+        sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
         uint64 slotIdx;
@@ -1150,6 +1164,7 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(createGate)
     {
+        locals.invReward = qpi.invocationReward();
         output.status = QUGATE_SUCCESS;
         output.gateId = 0;
         output.feePaid = 0;
@@ -1158,17 +1173,17 @@ public:
         locals.logger._contractIndex = CONTRACT_INDEX;
         locals.logger.sender = qpi.invocator();
         locals.logger.gateId = 0;
-        locals.logger.amount = qpi.invocationReward();
+        locals.logger.amount = locals.invReward;
 
         // Calculate escalated fee: baseFee * (1 + QPI::div(activeGates, STEP))
         locals.currentFee = state.get()._creationFee * (1 + QPI::div(state.get()._activeGates, QUGATE_FEE_ESCALATION_STEP));
 
         // Validate creation fee (escalated)
-        if (qpi.invocationReward() < (sint64)locals.currentFee)
+        if (locals.invReward < (sint64)locals.currentFee)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_INSUFFICIENT_FEE;
             locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
@@ -1180,7 +1195,7 @@ public:
         if (input.mode > QUGATE_MODE_TIME_LOCK)
         {
             // Refund all
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_INVALID_MODE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -1190,7 +1205,7 @@ public:
         // Validate recipient count
         if (input.recipientCount > QUGATE_MAX_RECIPIENTS)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_INVALID_RECIPIENT_COUNT;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -1203,7 +1218,7 @@ public:
             && input.mode != QUGATE_MODE_MULTISIG
             && input.mode != QUGATE_MODE_TIME_LOCK)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_INVALID_RECIPIENT_COUNT;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -1213,7 +1228,7 @@ public:
         // Check capacity — try free-list first
         if (state.get()._freeCount == 0 && state.get()._gateCount >= QUGATE_MAX_GATES)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_NO_FREE_SLOTS;
             locals.logger._type = QUGATE_LOG_FAIL_NO_SLOTS;
             LOG_WARNING(locals.logger);
@@ -1228,7 +1243,7 @@ public:
             {
                 if (input.ratios.get(locals.i) > QUGATE_MAX_RATIO)
                 {
-                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                    qpi.transfer(qpi.invocator(), locals.invReward);
                     output.status = QUGATE_INVALID_RATIO;
                     locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                     LOG_WARNING(locals.logger);
@@ -1238,7 +1253,7 @@ public:
             }
             if (locals.totalRatio == 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
                 output.status = QUGATE_INVALID_RATIO;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                 LOG_WARNING(locals.logger);
@@ -1249,7 +1264,7 @@ public:
         // Validate THRESHOLD > 0
         if (input.mode == QUGATE_MODE_THRESHOLD && input.threshold == 0)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_INVALID_THRESHOLD;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -1259,7 +1274,7 @@ public:
         // Validate allowedSenderCount
         if (input.allowedSenderCount > QUGATE_MAX_RECIPIENTS)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_INVALID_SENDER_COUNT;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -1274,7 +1289,7 @@ public:
                 || input.oracleThreshold <= 0
                 || input.oracleTriggerMode > QUGATE_ORACLE_TRIGGER_RECURRING)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
                 output.status = QUGATE_INVALID_ORACLE_CONFIG;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                 LOG_WARNING(locals.logger);
@@ -1391,7 +1406,7 @@ public:
                 {
                     state.mut()._gateCount -= 1;
                 }
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
                 output.status = QUGATE_INVALID_CHAIN;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                 LOG_WARNING(locals.logger);
@@ -1411,7 +1426,7 @@ public:
                 {
                     state.mut()._gateCount -= 1;
                 }
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
                 output.status = QUGATE_INVALID_CHAIN;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                 LOG_WARNING(locals.logger);
@@ -1431,7 +1446,7 @@ public:
                 {
                     state.mut()._gateCount -= 1;
                 }
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
                 output.status = QUGATE_INVALID_CHAIN;
                 locals.logger._type = QUGATE_LOG_CHAIN_CYCLE;
                 LOG_WARNING(locals.logger);
@@ -1455,7 +1470,7 @@ public:
                         {
                             state.mut()._gateCount -= 1;
                         }
-                        qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                        qpi.transfer(qpi.invocator(), locals.invReward);
                         output.status = QUGATE_INVALID_CHAIN;
                         locals.logger._type = QUGATE_LOG_CHAIN_CYCLE;
                         LOG_WARNING(locals.logger);
@@ -1485,7 +1500,7 @@ public:
                     {
                         state.mut()._gateCount -= 1;
                     }
-                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                    qpi.transfer(qpi.invocator(), locals.invReward);
                     output.status = QUGATE_INVALID_CHAIN;
                     locals.logger._type = QUGATE_LOG_CHAIN_CYCLE;
                     LOG_WARNING(locals.logger);
@@ -1507,16 +1522,16 @@ public:
         output.feePaid = locals.currentFee;
 
         // Handle excess: for ORACLE mode, excess goes to oracleReserve; otherwise refund
-        if (qpi.invocationReward() > (sint64)locals.currentFee)
+        if (locals.invReward > (sint64)locals.currentFee)
         {
             if (input.mode == QUGATE_MODE_ORACLE)
             {
-                locals.newGate.oracleReserve = qpi.invocationReward() - (sint64)locals.currentFee;
+                locals.newGate.oracleReserve = locals.invReward - (sint64)locals.currentFee;
                 state.mut()._gates.set(locals.slotIdx, locals.newGate);
             }
             else
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward() - (sint64)locals.currentFee);
+                qpi.transfer(qpi.invocator(), locals.invReward - (sint64)locals.currentFee);
             }
         }
 
@@ -1887,11 +1902,12 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(sendToGate)
     {
+        locals.invReward = qpi.invocationReward();
         output.status = QUGATE_SUCCESS;
 
         locals.logger._contractIndex = CONTRACT_INDEX;
         locals.logger.sender = qpi.invocator();
-        locals.logger.amount = qpi.invocationReward();
+        locals.logger.amount = locals.invReward;
         locals.logger.gateId = input.gateId;
 
         // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
@@ -1902,9 +1918,9 @@ public:
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
@@ -1916,9 +1932,9 @@ public:
 
         if (locals.gate.active == 0)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
@@ -1952,14 +1968,14 @@ public:
             state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
             state.mut()._freeCount += 1;
             state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
             LOG_INFO(locals.logger);
             return;
         }
 
-        locals.amount = qpi.invocationReward();
+        locals.amount = locals.invReward;
         if (locals.amount <= 0)
         {
             output.status = QUGATE_DUST_AMOUNT;
@@ -2160,11 +2176,12 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(sendToGateVerified)
     {
+        locals.invReward = qpi.invocationReward();
         output.status = QUGATE_SUCCESS;
 
         locals.logger._contractIndex = CONTRACT_INDEX;
         locals.logger.sender = qpi.invocator();
-        locals.logger.amount = qpi.invocationReward();
+        locals.logger.amount = locals.invReward;
         locals.logger.gateId = input.gateId;
 
         // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
@@ -2175,9 +2192,9 @@ public:
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
@@ -2189,9 +2206,9 @@ public:
 
         if (locals.gate.active == 0)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
@@ -2225,7 +2242,7 @@ public:
             state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
             state.mut()._freeCount += 1;
             state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
             LOG_INFO(locals.logger);
@@ -2235,9 +2252,9 @@ public:
         // Owner verification — refund and reject if mismatch
         if (locals.gate.owner != input.expectedOwner)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_OWNER_MISMATCH;
             locals.logger._type = QUGATE_LOG_FAIL_OWNER_MISMATCH;
@@ -2245,7 +2262,7 @@ public:
             return;
         }
 
-        locals.amount = qpi.invocationReward();
+        locals.amount = locals.invReward;
         if (locals.amount <= 0)
         {
             output.status = QUGATE_DUST_AMOUNT;
@@ -2445,6 +2462,7 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(closeGate)
     {
+        locals.invReward = qpi.invocationReward();
         output.status = QUGATE_SUCCESS;
 
         // Init logger
@@ -2461,9 +2479,9 @@ public:
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
@@ -2496,9 +2514,9 @@ public:
             }
             if (adminAuth == 0)
             {
-                if (qpi.invocationReward() > 0)
+                if (locals.invReward > 0)
                 {
-                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                    qpi.transfer(qpi.invocator(), locals.invReward);
                 }
                 output.status = QUGATE_UNAUTHORIZED;
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
@@ -2515,9 +2533,9 @@ public:
 
         if (locals.gate.active == 0)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
@@ -2551,7 +2569,7 @@ public:
             state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
             state.mut()._freeCount += 1;
             state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
             LOG_INFO(locals.logger);
@@ -2651,9 +2669,9 @@ public:
         }
 
         // Refund invocation reward
-        if (qpi.invocationReward() > 0)
+        if (locals.invReward > 0)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
         // Log success
@@ -2663,6 +2681,7 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(updateGate)
     {
+        locals.invReward = qpi.invocationReward();
         output.status = QUGATE_SUCCESS;
 
         // Init logger
@@ -2679,9 +2698,9 @@ public:
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
@@ -2714,9 +2733,9 @@ public:
             }
             if (adminAuth == 0)
             {
-                if (qpi.invocationReward() > 0)
+                if (locals.invReward > 0)
                 {
-                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                    qpi.transfer(qpi.invocator(), locals.invReward);
                 }
                 output.status = QUGATE_UNAUTHORIZED;
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
@@ -2733,9 +2752,9 @@ public:
 
         if (locals.gate.active == 0)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
@@ -2769,7 +2788,7 @@ public:
             state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
             state.mut()._freeCount += 1;
             state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
             LOG_INFO(locals.logger);
@@ -2779,9 +2798,9 @@ public:
         // Oracle gates with pending balance cannot change recipients — prevents rug-pull of accumulated funds
         if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.currentBalance > 0)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_UNAUTHORIZED;
             locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
@@ -2792,9 +2811,9 @@ public:
         // Validate new recipient count
         if (input.recipientCount > QUGATE_MAX_RECIPIENTS)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_INVALID_RECIPIENT_COUNT;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
@@ -2803,9 +2822,9 @@ public:
         }
         if (input.recipientCount == 0 && state.get()._gates.get(locals.slotIdx).chainNextGateId == -1)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_INVALID_RECIPIENT_COUNT;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
@@ -2816,9 +2835,9 @@ public:
         // Validate allowedSenderCount bounds
         if (input.allowedSenderCount > QUGATE_MAX_RECIPIENTS)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_INVALID_SENDER_COUNT;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
@@ -2834,9 +2853,9 @@ public:
             {
                 if (input.ratios.get(locals.i) > QUGATE_MAX_RATIO)
                 {
-                    if (qpi.invocationReward() > 0)
+                    if (locals.invReward > 0)
                     {
-                        qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                        qpi.transfer(qpi.invocator(), locals.invReward);
                     }
                     output.status = QUGATE_INVALID_RATIO;
                     locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
@@ -2847,9 +2866,9 @@ public:
             }
             if (locals.totalRatio == 0)
             {
-                if (qpi.invocationReward() > 0)
+                if (locals.invReward > 0)
                 {
-                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                    qpi.transfer(qpi.invocator(), locals.invReward);
                 }
                 output.status = QUGATE_INVALID_RATIO;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
@@ -2861,9 +2880,9 @@ public:
         // Validate THRESHOLD if gate is THRESHOLD mode
         if (locals.gate.mode == QUGATE_MODE_THRESHOLD && input.threshold == 0)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.status = QUGATE_INVALID_THRESHOLD;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
@@ -2910,9 +2929,9 @@ public:
 
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
-        if (qpi.invocationReward() > 0)
+        if (locals.invReward > 0)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
         // Log success
@@ -2926,12 +2945,13 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(fundGate)
     {
+        locals.invReward = qpi.invocationReward();
         output.result = QUGATE_SUCCESS;
 
         locals.logger._contractIndex = CONTRACT_INDEX;
         locals.logger.sender = qpi.invocator();
         locals.logger.gateId = input.gateId;
-        locals.logger.amount = qpi.invocationReward();
+        locals.logger.amount = locals.invReward;
 
         // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
@@ -2941,9 +2961,9 @@ public:
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.result = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
@@ -2955,9 +2975,9 @@ public:
 
         if (locals.gate.active == 0)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.result = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
@@ -2991,14 +3011,14 @@ public:
             state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
             state.mut()._freeCount += 1;
             state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
             output.result = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
             LOG_INFO(locals.logger);
             return;
         }
 
-        if (qpi.invocationReward() <= 0)
+        if (locals.invReward <= 0)
         {
             output.result = QUGATE_DUST_AMOUNT;
             return;
@@ -3009,39 +3029,39 @@ public:
             // Oracle reserve
             if (locals.gate.mode != QUGATE_MODE_ORACLE)
             {
-                if (qpi.invocationReward() > 0)
+                if (locals.invReward > 0)
                 {
-                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                    qpi.transfer(qpi.invocator(), locals.invReward);
                 }
                 output.result = QUGATE_INVALID_ORACLE_CONFIG;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                 LOG_WARNING(locals.logger);
                 return;
             }
-            locals.gate.oracleReserve += qpi.invocationReward();
+            locals.gate.oracleReserve += locals.invReward;
         }
         else if (input.reserveTarget == 1)
         {
             // Chain reserve — gate must have a chain link
             if (locals.gate.chainNextGateId == -1)
             {
-                if (qpi.invocationReward() > 0)
+                if (locals.invReward > 0)
                 {
-                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                    qpi.transfer(qpi.invocator(), locals.invReward);
                 }
                 output.result = QUGATE_INVALID_CHAIN;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                 LOG_WARNING(locals.logger);
                 return;
             }
-            locals.gate.chainReserve += qpi.invocationReward();
+            locals.gate.chainReserve += locals.invReward;
         }
         else
         {
             // Invalid reserveTarget
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.result = QUGATE_INVALID_CHAIN;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
@@ -3389,6 +3409,7 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(setChain)
     {
+        locals.invReward = qpi.invocationReward();
         output.result = QUGATE_SUCCESS;
 
         locals.logger._contractIndex = CONTRACT_INDEX;
@@ -3405,9 +3426,9 @@ public:
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.result = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
@@ -3440,9 +3461,9 @@ public:
             }
             if (adminAuth == 0)
             {
-                if (qpi.invocationReward() > 0)
+                if (locals.invReward > 0)
                 {
-                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                    qpi.transfer(qpi.invocator(), locals.invReward);
                 }
                 output.result = QUGATE_UNAUTHORIZED;
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
@@ -3459,9 +3480,9 @@ public:
 
         if (locals.gate.active == 0)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.result = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
@@ -3495,7 +3516,7 @@ public:
             state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
             state.mut()._freeCount += 1;
             state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
-            if (qpi.invocationReward() > 0) qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
             output.result = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
             LOG_INFO(locals.logger);
@@ -3503,11 +3524,11 @@ public:
         }
 
         // Require hop fee as update cost
-        if (qpi.invocationReward() < QUGATE_CHAIN_HOP_FEE)
+        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.result = QUGATE_INSUFFICIENT_FEE;
             locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
@@ -3522,9 +3543,9 @@ public:
             locals.gate.chainDepth = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
             qpi.burn(QUGATE_CHAIN_HOP_FEE);
-            if (qpi.invocationReward() > QUGATE_CHAIN_HOP_FEE)
+            if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward() - QUGATE_CHAIN_HOP_FEE);
+                qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
             }
             output.result = QUGATE_SUCCESS;
             return;
@@ -3539,9 +3560,9 @@ public:
             || locals.targetEncodedGen == 0
             || state.get()._gateGenerations.get(locals.targetSlot) != (uint16)(locals.targetEncodedGen - 1))
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.result = QUGATE_INVALID_CHAIN;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
@@ -3552,9 +3573,9 @@ public:
         locals.targetGate = state.get()._gates.get(locals.targetSlot);
         if (locals.targetGate.active == 0)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.result = QUGATE_INVALID_CHAIN;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
@@ -3566,9 +3587,9 @@ public:
         locals.newDepth = locals.targetGate.chainDepth + 1;
         if (locals.newDepth >= QUGATE_MAX_CHAIN_DEPTH)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.result = QUGATE_INVALID_CHAIN;
             locals.logger._type = QUGATE_LOG_CHAIN_CYCLE;
@@ -3583,9 +3604,9 @@ public:
         {
             if (locals.walkSlot == locals.slotIdx)
             {
-                if (qpi.invocationReward() > 0)
+                if (locals.invReward > 0)
                 {
-                    qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                    qpi.transfer(qpi.invocator(), locals.invReward);
                 }
                 output.result = QUGATE_INVALID_CHAIN;
                 locals.logger._type = QUGATE_LOG_CHAIN_CYCLE;
@@ -3607,9 +3628,9 @@ public:
         }
         if (locals.walkSlot == locals.slotIdx)
         {
-            if (qpi.invocationReward() > 0)
+            if (locals.invReward > 0)
             {
-                qpi.transfer(qpi.invocator(), qpi.invocationReward());
+                qpi.transfer(qpi.invocator(), locals.invReward);
             }
             output.result = QUGATE_INVALID_CHAIN;
             locals.logger._type = QUGATE_LOG_CHAIN_CYCLE;
@@ -3623,9 +3644,9 @@ public:
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
         qpi.burn(QUGATE_CHAIN_HOP_FEE);
-        if (qpi.invocationReward() > QUGATE_CHAIN_HOP_FEE)
+        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward() - QUGATE_CHAIN_HOP_FEE);
+            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
         }
 
         output.result = QUGATE_SUCCESS;
@@ -3637,6 +3658,7 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(configureHeartbeat)
     {
+        locals.invReward = qpi.invocationReward();
         output.status = QUGATE_SUCCESS;
 
         locals.logger._contractIndex = CONTRACT_INDEX;
@@ -3645,9 +3667,9 @@ public:
         locals.logger.amount = 0;
 
         // Refund any attached QU
-        if (qpi.invocationReward() > 0)
+        if (locals.invReward > 0)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
         // Decode versioned gateId
@@ -3801,6 +3823,7 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(heartbeat)
     {
+        locals.invReward = qpi.invocationReward();
         output.status = QUGATE_SUCCESS;
         output.epochRecorded = 0;
 
@@ -3810,9 +3833,9 @@ public:
         locals.logger.amount = 0;
 
         // Refund any attached QU
-        if (qpi.invocationReward() > 0)
+        if (locals.invReward > 0)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
         // Decode versioned gateId
@@ -3948,6 +3971,7 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(configureMultisig)
     {
+        locals.invReward = qpi.invocationReward();
         output.status = QUGATE_SUCCESS;
 
         locals.logger._contractIndex = CONTRACT_INDEX;
@@ -3956,9 +3980,9 @@ public:
         locals.logger.amount = 0;
 
         // Refund any attached QU
-        if (qpi.invocationReward() > 0)
+        if (locals.invReward > 0)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
         // Decode versioned gateId
@@ -4155,6 +4179,7 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(configureTimeLock)
     {
+        locals.invReward = qpi.invocationReward();
         output.status = QUGATE_SUCCESS;
 
         locals.logger._contractIndex = CONTRACT_INDEX;
@@ -4163,9 +4188,9 @@ public:
         locals.logger.amount = 0;
 
         // Refund any attached QU
-        if (qpi.invocationReward() > 0)
+        if (locals.invReward > 0)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
         // Decode versioned gateId
@@ -4269,6 +4294,7 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(cancelTimeLock)
     {
+        locals.invReward = qpi.invocationReward();
         output.status = QUGATE_SUCCESS;
 
         locals.logger._contractIndex = CONTRACT_INDEX;
@@ -4277,9 +4303,9 @@ public:
         locals.logger.amount = 0;
 
         // Refund any attached QU
-        if (qpi.invocationReward() > 0)
+        if (locals.invReward > 0)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
         // Decode versioned gateId
@@ -4473,6 +4499,7 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(setAdminGate)
     {
+        locals.invReward = qpi.invocationReward();
         output.status = QUGATE_SUCCESS;
 
         locals.logger._contractIndex = CONTRACT_INDEX;
@@ -4481,9 +4508,9 @@ public:
         locals.logger.amount = 0;
 
         // Refund any attached QU
-        if (qpi.invocationReward() > 0)
+        if (locals.invReward > 0)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
         // Decode versioned gateId
@@ -4645,6 +4672,7 @@ public:
 
     PUBLIC_PROCEDURE_WITH_LOCALS(withdrawReserve)
     {
+        locals.invReward = qpi.invocationReward();
         output.status = QUGATE_SUCCESS;
         output.withdrawn = 0;
 
@@ -4654,9 +4682,9 @@ public:
         locals.logger.amount = 0;
 
         // Refund any attached QU
-        if (qpi.invocationReward() > 0)
+        if (locals.invReward > 0)
         {
-            qpi.transfer(qpi.invocator(), qpi.invocationReward());
+            qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
         // Decode versioned gateId
