@@ -3280,10 +3280,17 @@ public:
                     zeroCfg.active = 0; zeroCfg.triggered = 0; zeroCfg.thresholdEpochs = 0;
                     zeroCfg.lastHeartbeatEpoch = 0; zeroCfg.payoutPercentPerEpoch = 0;
                     zeroCfg.minimumBalance = 0; zeroCfg.triggerEpoch = 0; zeroCfg.beneficiaryCount = 0;
-                    for (uint8 _zi = 0; _zi < 8; _zi++) { zeroCfg.beneficiaryAddresses.set(_zi, id::zero()); zeroCfg.beneficiaryShares.set(_zi, 0); }
+                    for (uint8 _zi = 0; _zi < 8; _zi++)
+                    {
+                        zeroCfg.beneficiaryAddresses.set(_zi, id::zero());
+                        zeroCfg.beneficiaryShares.set(_zi, 0);
+                    }
                     state.mut()._heartbeatConfigs.set(locals.slotIdx, zeroCfg);
                     MultisigConfig zeroMs;
-                    for (uint8 _zi = 0; _zi < 8; _zi++) { zeroMs.guardians.set(_zi, id::zero()); }
+                    for (uint8 _zi = 0; _zi < 8; _zi++)
+                    {
+                        zeroMs.guardians.set(_zi, id::zero());
+                    }
                     zeroMs.guardianCount = 0; zeroMs.required = 0; zeroMs.proposalExpiryEpochs = 0;
                     zeroMs.approvalBitmap = 0; zeroMs.approvalCount = 0; zeroMs.proposalEpoch = 0; zeroMs.proposalActive = 0;
                     state.mut()._multisigConfigs.set(locals.slotIdx, zeroMs);
@@ -5066,13 +5073,20 @@ public:
                         zeroCfg.active = 0; zeroCfg.triggered = 0; zeroCfg.thresholdEpochs = 0;
                         zeroCfg.lastHeartbeatEpoch = 0; zeroCfg.payoutPercentPerEpoch = 0;
                         zeroCfg.minimumBalance = 0; zeroCfg.triggerEpoch = 0; zeroCfg.beneficiaryCount = 0;
-                        for (uint8 _zi = 0; _zi < 8; _zi++) { zeroCfg.beneficiaryAddresses.set(_zi, id::zero()); zeroCfg.beneficiaryShares.set(_zi, 0); }
+                        for (uint8 _zi = 0; _zi < 8; _zi++)
+                        {
+                            zeroCfg.beneficiaryAddresses.set(_zi, id::zero());
+                            zeroCfg.beneficiaryShares.set(_zi, 0);
+                        }
                         state.mut()._heartbeatConfigs.set(locals.i, zeroCfg);
                     }
                     else if (locals.gate.mode == QUGATE_MODE_MULTISIG)
                     {
                         MultisigConfig zeroCfg;
-                        for (uint8 _zi = 0; _zi < 8; _zi++) { zeroCfg.guardians.set(_zi, id::zero()); }
+                        for (uint8 _zi = 0; _zi < 8; _zi++)
+                        {
+                            zeroCfg.guardians.set(_zi, id::zero());
+                        }
                         zeroCfg.guardianCount = 0; zeroCfg.required = 0; zeroCfg.proposalExpiryEpochs = 0;
                         zeroCfg.approvalBitmap = 0; zeroCfg.approvalCount = 0; zeroCfg.proposalEpoch = 0; zeroCfg.proposalActive = 0;
                         state.mut()._multisigConfigs.set(locals.i, zeroCfg);
