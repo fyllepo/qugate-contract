@@ -1641,6 +1641,8 @@ public:
 
         if (locals.gate.recipientCount == 0)
         {
+            locals.gate.totalForwarded += input.amount;
+            state.mut()._gates.set(input.gateIdx, locals.gate);
             output.forwarded = input.amount;
             return;
         }
@@ -1703,6 +1705,8 @@ public:
 
         if (locals.gate.recipientCount == 0)
         {
+            locals.gate.totalForwarded += input.amount;
+            state.mut()._gates.set(input.gateIdx, locals.gate);
             output.forwarded = input.amount;
             return;
         }
@@ -1721,6 +1725,7 @@ public:
                 output.deferredGateAmount = input.amount;
                 locals.gate.totalForwarded += input.amount;
                 locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
+                output.forwarded = input.amount;
             }
         }
         else
@@ -1729,11 +1734,11 @@ public:
             {
                 locals.gate.totalForwarded += input.amount;
                 locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
+                output.forwarded = input.amount;
             }
         }
 
         state.mut()._gates.set(input.gateIdx, locals.gate);
-        output.forwarded = input.amount;
     }
 
     PRIVATE_PROCEDURE_WITH_LOCALS(processThreshold)
@@ -1793,6 +1798,8 @@ public:
 
         if (locals.gate.recipientCount == 0)
         {
+            locals.gate.totalForwarded += input.amount;
+            state.mut()._gates.set(input.gateIdx, locals.gate);
             output.forwarded = input.amount;
             return;
         }
@@ -1812,6 +1819,7 @@ public:
                 output.deferredGateSlot = targetSlot;
                 output.deferredGateAmount = input.amount;
                 locals.gate.totalForwarded += input.amount;
+                output.forwarded = input.amount;
             }
         }
         else
@@ -1819,11 +1827,11 @@ public:
             if (qpi.transfer(locals.gate.recipients.get(locals.recipientIdx), input.amount) >= 0) // [QG-10]
             {
                 locals.gate.totalForwarded += input.amount;
+                output.forwarded = input.amount;
             }
         }
 
         state.mut()._gates.set(input.gateIdx, locals.gate);
-        output.forwarded = input.amount;
     }
 
     PRIVATE_PROCEDURE_WITH_LOCALS(processConditional)
