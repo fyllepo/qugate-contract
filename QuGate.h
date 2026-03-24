@@ -135,6 +135,8 @@ constexpr sint64 QUGATE_TIME_LOCK_EPOCH_PAST      = -25; // unlockEpoch is in th
 constexpr sint64 QUGATE_ADMIN_GATE_REQUIRED       = -26; // config change needs admin gate approval
 constexpr sint64 QUGATE_INVALID_ADMIN_GATE        = -27; // adminGateId doesn't exist or isn't MULTISIG mode
 constexpr sint64 QUGATE_INVALID_GATE_RECIPIENT    = -28; // recipientGateIds entry is invalid (bad slot/gen/inactive)
+constexpr sint64 QUGATE_INVALID_ADMIN_CYCLE       = -29; // adminGateId creates a circular admin chain (self or loop)
+constexpr sint64 QUGATE_MULTISIG_PROPOSAL_ACTIVE  = -30; // configureMultisig blocked while proposal is in progress
 
 // Log type constants (positive = success events, high numbers = actions)
 constexpr uint32 QUGATE_LOG_GATE_CREATED = 1;
@@ -1085,6 +1087,10 @@ public:
         uint64 adminEncodedGen;
         QUGATE_MultisigConfig msCfg;
         uint8 adminApproved;
+        // Cycle detection
+        uint64 walkSlot;
+        GateConfig walkGate;
+        uint8 walkStep;
     };
 
     struct getAdminGate_locals
@@ -4641,6 +4647,25 @@ public:
             return;
         }
 
+        // Prevent reconfiguration while a proposal is active (#79)
+        locals.cfg = state.get()._multisigConfigs.get(locals.slotIdx);
+        if (locals.cfg.proposalActive == 1)
+        {
+            // Allow if proposal has expired
+            if (locals.cfg.proposalExpiryEpochs > 0
+                && (uint32)qpi.epoch() - locals.cfg.proposalEpoch > locals.cfg.proposalExpiryEpochs)
+            {
+                // Proposal expired — allow reconfig
+            }
+            else
+            {
+                output.status = QUGATE_MULTISIG_PROPOSAL_ACTIVE;
+                locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+        }
+
         // Validate guardianCount 1-8
         if (input.guardianCount == 0 || input.guardianCount > 8)
         {
@@ -5198,6 +5223,39 @@ public:
             return;
         }
 
+        // Prevent self-referential admin gate
+        if (locals.adminSlot == locals.slotIdx)
+        {
+            output.status = QUGATE_INVALID_ADMIN_CYCLE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Walk admin gate chain to detect cycles (max QUGATE_MAX_CHAIN_DEPTH steps)
+        locals.walkSlot = locals.adminSlot;
+        for (locals.walkStep = 0; locals.walkStep < QUGATE_MAX_CHAIN_DEPTH; locals.walkStep++)
+        {
+            locals.walkGate = state.get()._gates.get(locals.walkSlot);
+            if (locals.walkGate.adminGateId == -1 || locals.walkGate.hasAdminGate == 0)
+            {
+                break;
+            }
+            uint64 nextAdminSlot = (uint64)(locals.walkGate.adminGateId) & QUGATE_GATE_ID_SLOT_MASK;
+            if (nextAdminSlot == locals.slotIdx)
+            {
+                output.status = QUGATE_INVALID_ADMIN_CYCLE;
+                locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+            if (nextAdminSlot >= state.get()._gateCount)
+            {
+                break;
+            }
+            locals.walkSlot = nextAdminSlot;
+        }
+
         // Set admin gate
         locals.gate.adminGateId = input.adminGateId;
         locals.gate.hasAdminGate = 1;
@@ -5545,6 +5603,28 @@ public:
             // active==1 guard prevents double-close / activeGates underflow (intentional)
             if (locals.gate.active == 1 && state.get()._expiryEpochs > 0)
             {
+                // Exempt long-duration modes from inactivity expiry (#77)
+                if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
+                {
+                    locals.tlCfg = state.get()._timeLockConfigs.get(locals.i);
+                    if (locals.tlCfg.active == 1 && locals.tlCfg.fired == 0 && locals.tlCfg.cancelled == 0)
+                    {
+                        continue;
+                    }
+                }
+                if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
+                {
+                    locals.inhCfg = state.get()._heartbeatConfigs.get(locals.i);
+                    if (locals.inhCfg.active == 1 && locals.inhCfg.triggered == 0)
+                    {
+                        continue;
+                    }
+                }
+                if (locals.gate.mode == QUGATE_MODE_MULTISIG && locals.gate.currentBalance > 0)
+                {
+                    continue;
+                }
+
                 if (qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs)
                 {
                     // Refund any held balance (THRESHOLD / ORACLE mode)
