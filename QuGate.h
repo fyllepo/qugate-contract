@@ -816,6 +816,11 @@ public:
     struct routeToGate_output
     {
         sint64 forwarded;
+        // Deferred gate-as-recipient routing — caller must dispatch via routeToGate
+        uint8 deferredCount;
+        Array<uint64, 8> deferredGateSlots;
+        Array<sint64, 8> deferredGateAmounts;
+        uint8 deferredHopCount;
     };
     struct routeToGate_locals
     {
@@ -1405,6 +1410,27 @@ public:
             else
             {
                 locals.newGate.allowedSenders.set(locals.i, id::zero());
+            }
+        }
+
+        // Validate gate-as-recipient IDs (must be -1 or valid active gate with correct generation)
+        for (locals.i = 0; locals.i < input.recipientCount; locals.i++)
+        {
+            if (input.recipientGateIds.get(locals.i) >= 0)
+            {
+                uint64 rgSlot = (uint64)(input.recipientGateIds.get(locals.i)) & QUGATE_GATE_ID_SLOT_MASK;
+                uint64 rgGen = (uint64)(input.recipientGateIds.get(locals.i)) >> QUGATE_GATE_ID_SLOT_BITS;
+                if (rgSlot >= state.get()._gateCount
+                    || rgGen == 0
+                    || state.get()._gateGenerations.get(rgSlot) != (uint16)(rgGen - 1)
+                    || state.get()._gates.get(rgSlot).active == 0)
+                {
+                    qpi.transfer(qpi.invocator(), locals.invReward);
+                    output.status = QUGATE_INVALID_GATE_RECIPIENT;
+                    locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+                    LOG_WARNING(locals.logger);
+                    return;
+                }
             }
         }
 
@@ -2033,21 +2059,13 @@ public:
             locals.splitIn.amount = locals.amountAfterFee;
             processSplit(qpi, state, locals.splitIn, locals.splitOut, locals.splitLocals);
             output.forwarded = locals.splitOut.forwarded;
-            // Route deferred gate-recipients
+            // Bubble deferred gate-recipients to caller (no self-recursion)
+            output.deferredCount = locals.splitOut.deferredCount;
+            output.deferredHopCount = input.hopCount + 1;
             for (uint8 _dg = 0; _dg < locals.splitOut.deferredCount; _dg++)
             {
-                locals.splitIn.gateIdx = locals.splitOut.deferredGateSlots.get(_dg);
-                locals.splitIn.amount = locals.splitOut.deferredGateAmounts.get(_dg);
-                // Re-use routeToGate via recursive call pattern — but we can't recurse directly.
-                // Instead, use a simple inline route: call the mode processor of the target gate.
-                // For simplicity and safety, we route via routeToGate with incremented hopCount.
-                routeToGate_input _rtIn;
-                routeToGate_output _rtOut;
-                routeToGate_locals _rtLocals;
-                _rtIn.slotIdx = locals.splitOut.deferredGateSlots.get(_dg);
-                _rtIn.amount = locals.splitOut.deferredGateAmounts.get(_dg);
-                _rtIn.hopCount = input.hopCount + 1;
-                routeToGate(qpi, state, _rtIn, _rtOut, _rtLocals);
+                output.deferredGateSlots.set(_dg, locals.splitOut.deferredGateSlots.get(_dg));
+                output.deferredGateAmounts.set(_dg, locals.splitOut.deferredGateAmounts.get(_dg));
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_ROUND_ROBIN)
@@ -2058,13 +2076,10 @@ public:
             output.forwarded = locals.rrOut.forwarded;
             if (locals.rrOut.deferredToGate == 1)
             {
-                routeToGate_input _rtIn;
-                routeToGate_output _rtOut;
-                routeToGate_locals _rtLocals;
-                _rtIn.slotIdx = locals.rrOut.deferredGateSlot;
-                _rtIn.amount = locals.rrOut.deferredGateAmount;
-                _rtIn.hopCount = input.hopCount + 1;
-                routeToGate(qpi, state, _rtIn, _rtOut, _rtLocals);
+                output.deferredCount = 1;
+                output.deferredHopCount = input.hopCount + 1;
+                output.deferredGateSlots.set(0, locals.rrOut.deferredGateSlot);
+                output.deferredGateAmounts.set(0, locals.rrOut.deferredGateAmount);
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_THRESHOLD)
@@ -2075,13 +2090,10 @@ public:
             output.forwarded = locals.threshOut.forwarded;
             if (locals.threshOut.deferredToGate == 1)
             {
-                routeToGate_input _rtIn;
-                routeToGate_output _rtOut;
-                routeToGate_locals _rtLocals;
-                _rtIn.slotIdx = locals.threshOut.deferredGateSlot;
-                _rtIn.amount = locals.threshOut.deferredGateAmount;
-                _rtIn.hopCount = input.hopCount + 1;
-                routeToGate(qpi, state, _rtIn, _rtOut, _rtLocals);
+                output.deferredCount = 1;
+                output.deferredHopCount = input.hopCount + 1;
+                output.deferredGateSlots.set(0, locals.threshOut.deferredGateSlot);
+                output.deferredGateAmounts.set(0, locals.threshOut.deferredGateAmount);
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_RANDOM)
@@ -2092,13 +2104,10 @@ public:
             output.forwarded = locals.randOut.forwarded;
             if (locals.randOut.deferredToGate == 1)
             {
-                routeToGate_input _rtIn;
-                routeToGate_output _rtOut;
-                routeToGate_locals _rtLocals;
-                _rtIn.slotIdx = locals.randOut.deferredGateSlot;
-                _rtIn.amount = locals.randOut.deferredGateAmount;
-                _rtIn.hopCount = input.hopCount + 1;
-                routeToGate(qpi, state, _rtIn, _rtOut, _rtLocals);
+                output.deferredCount = 1;
+                output.deferredHopCount = input.hopCount + 1;
+                output.deferredGateSlots.set(0, locals.randOut.deferredGateSlot);
+                output.deferredGateAmounts.set(0, locals.randOut.deferredGateAmount);
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_ORACLE)
@@ -3259,6 +3268,27 @@ public:
             else
             {
                 locals.gate.allowedSenders.set(locals.i, id::zero());
+            }
+        }
+
+        // Validate gate-as-recipient IDs
+        for (locals.i = 0; locals.i < input.recipientCount; locals.i++)
+        {
+            if (input.recipientGateIds.get(locals.i) >= 0)
+            {
+                uint64 rgSlot = (uint64)(input.recipientGateIds.get(locals.i)) & QUGATE_GATE_ID_SLOT_MASK;
+                uint64 rgGen = (uint64)(input.recipientGateIds.get(locals.i)) >> QUGATE_GATE_ID_SLOT_BITS;
+                if (rgSlot >= state.get()._gateCount
+                    || rgGen == 0
+                    || state.get()._gateGenerations.get(rgSlot) != (uint16)(rgGen - 1)
+                    || state.get()._gates.get(rgSlot).active == 0)
+                {
+                    if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
+                    output.status = QUGATE_INVALID_GATE_RECIPIENT;
+                    locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+                    LOG_WARNING(locals.logger);
+                    return;
+                }
             }
         }
 
