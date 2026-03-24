@@ -185,7 +185,7 @@ struct QUGATE2
 // =============================================
 
 // Per-gate heartbeat configuration
-struct HeartbeatConfig
+struct QUGATE_HeartbeatConfig
 {
     uint32  thresholdEpochs;       // epochs without heartbeat() before trigger (>= 1)
     uint32  lastHeartbeatEpoch;    // epoch of last heartbeat() call (or configureHeartbeat)
@@ -204,7 +204,7 @@ struct HeartbeatConfig
 // (defined outside QUGATE so it can be used in StateData)
 // =============================================
 
-struct MultisigConfig
+struct QUGATE_MultisigConfig
 {
     Array<id, 8> guardians;
     uint8        guardianCount;
@@ -221,7 +221,7 @@ struct MultisigConfig
 // (defined outside QUGATE so it can be used in StateData)
 // =============================================
 
-struct TimeLockConfig
+struct QUGATE_TimeLockConfig
 {
     uint32 unlockEpoch;    // epoch when funds release
     uint8  cancellable;    // 1 = owner can cancel and refund before unlock
@@ -230,7 +230,7 @@ struct TimeLockConfig
     uint8  active;         // 1 = time lock is configured on this gate
 };
 
-// HeartbeatBeneficiary removed — beneficiaries are now stored inline in HeartbeatConfig
+// HeartbeatBeneficiary removed — beneficiaries are now stored inline in QUGATE_HeartbeatConfig
 
 struct QUGATE : public ContractBase
 {
@@ -468,7 +468,7 @@ public:
         uint8  guardianCount;
         uint32 proposalEpoch;
         uint8  proposalActive;
-        Array<id, 8> guardians;  // Guardian public keys from MultisigConfig
+        Array<id, 8> guardians;  // Guardian public keys from QUGATE_MultisigConfig
     };
 
     // Configure TIME_LOCK mode on a TIME_LOCK gate. Owner-only.
@@ -516,7 +516,7 @@ public:
         uint8  adminGateMode;  // mode of the admin gate (should be QUGATE_MODE_MULTISIG)
         uint8  guardianCount;      // Number of guardians on the admin gate
         uint8  required;           // M-of-N threshold
-        Array<id, 8> guardians;    // Guardian public keys from the admin gate's MultisigConfig
+        Array<id, 8> guardians;    // Guardian public keys from the admin gate's QUGATE_MultisigConfig
     };
 
     // Withdraw from a gate's oracleReserve or chainReserve without closing. Owner only (or admin gate).
@@ -669,14 +669,14 @@ public:
         HashMap<sint32, uint64, QUGATE_MAX_GATES> _subscriptionToSlot;
 
         // Heartbeat mode state — indexed by gate slot (same index as _gates)
-        // Beneficiaries are stored inline in HeartbeatConfig
-        Array<HeartbeatConfig, QUGATE_MAX_GATES> _heartbeatConfigs;
+        // Beneficiaries are stored inline in QUGATE_HeartbeatConfig
+        Array<QUGATE_HeartbeatConfig, QUGATE_MAX_GATES> _heartbeatConfigs;
 
         // Multisig mode state — indexed by gate slot (same index as _gates)
-        Array<MultisigConfig, QUGATE_MAX_GATES> _multisigConfigs;
+        Array<QUGATE_MultisigConfig, QUGATE_MAX_GATES> _multisigConfigs;
 
         // TIME_LOCK mode state — indexed by gate slot (same index as _gates)
-        Array<TimeLockConfig, QUGATE_MAX_GATES> _timeLockConfigs;
+        Array<QUGATE_TimeLockConfig, QUGATE_MAX_GATES> _timeLockConfigs;
     };
 
     // =============================================
@@ -808,7 +808,7 @@ public:
 
     struct processMultisigVote_input { uint64 slotIdx; uint64 gateId; sint64 amount; };
     struct processMultisigVote_output { sint64 status; };
-    struct processMultisigVote_locals { GateConfig gate; MultisigConfig msigCfg; uint8 foundGuardian; uint8 guardianIdx; QuGateLogger logger; };
+    struct processMultisigVote_locals { GateConfig gate; QUGATE_MultisigConfig msigCfg; uint8 foundGuardian; uint8 guardianIdx; QuGateLogger logger; };
 
     struct fundGate_locals
     {
@@ -835,7 +835,7 @@ public:
         GateConfig walkGate;
         // Admin gate check
         GateConfig adminCheckGate;
-        MultisigConfig adminCheckMs;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct sendToGateVerified_locals
@@ -871,7 +871,7 @@ public:
         processMultisigVote_output msigOut;
         processMultisigVote_locals msigLocals;
         // TIME_LOCK processing
-        TimeLockConfig tlCfg;
+        QUGATE_TimeLockConfig tlCfg;
     };
 
     struct sendToGate_locals
@@ -907,7 +907,7 @@ public:
         processMultisigVote_output msigOut;
         processMultisigVote_locals msigLocals;
         // TIME_LOCK processing
-        TimeLockConfig tlCfg;
+        QUGATE_TimeLockConfig tlCfg;
     };
 
     struct closeGate_locals
@@ -917,12 +917,12 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        HeartbeatConfig hbZeroCfg;
-        MultisigConfig msigZeroCfg;
-        TimeLockConfig tlZeroCfg;
+        QUGATE_HeartbeatConfig hbZeroCfg;
+        QUGATE_MultisigConfig msigZeroCfg;
+        QUGATE_TimeLockConfig tlZeroCfg;
         // Admin gate check
         GateConfig adminCheckGate;
-        MultisigConfig adminCheckMs;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct updateGate_locals
@@ -936,7 +936,7 @@ public:
         uint64 encodedGen;
         // Admin gate check
         GateConfig adminCheckGate;
-        MultisigConfig adminCheckMs;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct getGate_locals
@@ -968,7 +968,7 @@ public:
         QuGateLogger logger;
         GateConfig gate;
         // Heartbeat processing
-        HeartbeatConfig inhCfg;
+        QUGATE_HeartbeatConfig inhCfg;
         sint64 inhBalance;
         sint64 inhPayoutTotal;
         sint64 inhShare;
@@ -982,9 +982,9 @@ public:
         routeToGate_output rtOut;
         routeToGate_locals rtLocals;
         // Multisig processing
-        MultisigConfig msigCfg;
+        QUGATE_MultisigConfig msigCfg;
         // TIME_LOCK processing
-        TimeLockConfig tlCfg;
+        QUGATE_TimeLockConfig tlCfg;
         sint64 tlReleaseAmount;
     };
 
@@ -995,10 +995,10 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        TimeLockConfig cfg;
+        QUGATE_TimeLockConfig cfg;
         // Admin gate check
         GateConfig adminCheckGate;
-        MultisigConfig adminCheckMs;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct cancelTimeLock_locals
@@ -1008,11 +1008,11 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        TimeLockConfig cfg;
-        TimeLockConfig zeroCfg;
+        QUGATE_TimeLockConfig cfg;
+        QUGATE_TimeLockConfig zeroCfg;
         // Admin gate check
         GateConfig adminCheckGate;
-        MultisigConfig adminCheckMs;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct getTimeLockState_locals
@@ -1020,7 +1020,7 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        TimeLockConfig cfg;
+        QUGATE_TimeLockConfig cfg;
     };
 
     struct setAdminGate_locals
@@ -1033,7 +1033,7 @@ public:
         uint64 encodedGen;
         uint64 adminSlot;
         uint64 adminEncodedGen;
-        MultisigConfig msCfg;
+        QUGATE_MultisigConfig msCfg;
         uint8 adminApproved;
     };
 
@@ -1044,7 +1044,7 @@ public:
         uint64 slotIdx;
         uint64 encodedGen;
         uint64 adminSlot;
-        MultisigConfig adminCfg;
+        QUGATE_MultisigConfig adminCfg;
         uint8 i;
     };
 
@@ -1057,7 +1057,7 @@ public:
         uint64 encodedGen;
         // Admin gate check
         GateConfig adminCheckGate;
-        MultisigConfig adminCheckMs;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct getGatesByMode_locals
@@ -1104,10 +1104,10 @@ public:
         uint64 encodedGen;
         uint8  i;
         uint16 shareSum;
-        HeartbeatConfig cfg;
+        QUGATE_HeartbeatConfig cfg;
         // Admin gate check
         GateConfig adminCheckGate;
-        MultisigConfig adminCheckMs;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct heartbeat_locals
@@ -1117,7 +1117,7 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        HeartbeatConfig cfg;
+        QUGATE_HeartbeatConfig cfg;
     };
 
     struct getHeartbeat_locals
@@ -1125,7 +1125,7 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        HeartbeatConfig cfg;
+        QUGATE_HeartbeatConfig cfg;
         uint8 i;
     };
 
@@ -1136,12 +1136,12 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        MultisigConfig cfg;
+        QUGATE_MultisigConfig cfg;
         uint8 i;
         uint8 j;
         // Admin gate check
         GateConfig adminCheckGate;
-        MultisigConfig adminCheckMs;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct getMultisigState_locals
@@ -1149,7 +1149,7 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        MultisigConfig cfg;
+        QUGATE_MultisigConfig cfg;
         uint8 i;
     };
 
@@ -3273,7 +3273,7 @@ public:
                 }
                 // Defensive cleanup of auxiliary configs for recycled slot
                 {
-                    HeartbeatConfig zeroCfg;
+                    QUGATE_HeartbeatConfig zeroCfg;
                     zeroCfg.active = 0; zeroCfg.triggered = 0; zeroCfg.thresholdEpochs = 0;
                     zeroCfg.lastHeartbeatEpoch = 0; zeroCfg.payoutPercentPerEpoch = 0;
                     zeroCfg.minimumBalance = 0; zeroCfg.triggerEpoch = 0; zeroCfg.beneficiaryCount = 0;
@@ -3283,7 +3283,7 @@ public:
                         zeroCfg.beneficiaryShares.set(_zi, 0);
                     }
                     state.mut()._heartbeatConfigs.set(locals.slotIdx, zeroCfg);
-                    MultisigConfig zeroMs;
+                    QUGATE_MultisigConfig zeroMs;
                     for (uint8 _zi = 0; _zi < 8; _zi++)
                     {
                         zeroMs.guardians.set(_zi, id::zero());
@@ -3291,7 +3291,7 @@ public:
                     zeroMs.guardianCount = 0; zeroMs.required = 0; zeroMs.proposalExpiryEpochs = 0;
                     zeroMs.approvalBitmap = 0; zeroMs.approvalCount = 0; zeroMs.proposalEpoch = 0; zeroMs.proposalActive = 0;
                     state.mut()._multisigConfigs.set(locals.slotIdx, zeroMs);
-                    TimeLockConfig zeroTl;
+                    QUGATE_TimeLockConfig zeroTl;
                     zeroTl.unlockEpoch = 0; zeroTl.cancellable = 0; zeroTl.fired = 0; zeroTl.cancelled = 0; zeroTl.active = 0;
                     state.mut()._timeLockConfigs.set(locals.slotIdx, zeroTl);
                 }
@@ -5066,7 +5066,7 @@ public:
                     // Clear mode-specific configs on expiry (prevents ghost state in recycled slots)
                     if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
                     {
-                        HeartbeatConfig zeroCfg;
+                        QUGATE_HeartbeatConfig zeroCfg;
                         zeroCfg.active = 0; zeroCfg.triggered = 0; zeroCfg.thresholdEpochs = 0;
                         zeroCfg.lastHeartbeatEpoch = 0; zeroCfg.payoutPercentPerEpoch = 0;
                         zeroCfg.minimumBalance = 0; zeroCfg.triggerEpoch = 0; zeroCfg.beneficiaryCount = 0;
@@ -5079,7 +5079,7 @@ public:
                     }
                     else if (locals.gate.mode == QUGATE_MODE_MULTISIG)
                     {
-                        MultisigConfig zeroCfg;
+                        QUGATE_MultisigConfig zeroCfg;
                         for (uint8 _zi = 0; _zi < 8; _zi++)
                         {
                             zeroCfg.guardians.set(_zi, id::zero());
@@ -5090,7 +5090,7 @@ public:
                     }
                     else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
                     {
-                        TimeLockConfig zeroCfg;
+                        QUGATE_TimeLockConfig zeroCfg;
                         zeroCfg.unlockEpoch = 0; zeroCfg.cancellable = 0; zeroCfg.fired = 0; zeroCfg.cancelled = 0; zeroCfg.active = 0;
                         state.mut()._timeLockConfigs.set(locals.i, zeroCfg);
                     }
