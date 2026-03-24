@@ -17,14 +17,16 @@ union m256i {
     int64_t  m256i_i64[4];
     uint64_t m256i_u64[4];
 
-    static m256i zero() {
+    static m256i zero()
+    {
         m256i z;
         memset(&z, 0, sizeof(z));
         return z;
     }
 };
 
-static inline bool operator==(const m256i& a, const m256i& b) {
+static inline bool operator==(const m256i& a, const m256i& b)
+{
     return memcmp(&a, &b, 32) == 0;
 }
 
@@ -47,8 +49,14 @@ namespace QPI {
     struct Array {
         T _data[capacity];
         const T& get(unsigned long long idx) const { return _data[idx]; }
-        T& get(unsigned long long idx) { return _data[idx]; }
-        void set(unsigned long long idx, const T& val) { _data[idx] = val; }
+        T& get(unsigned long long idx)
+        {
+            return _data[idx];
+        }
+        void set(unsigned long long idx, const T& val)
+        {
+            _data[idx] = val;
+        }
     };
 
     typedef signed int sint32;
@@ -58,30 +66,49 @@ namespace QPI {
     struct HashMap {
         struct Entry { K key; V value; bool occupied; };
         Entry _entries[capacity];
-        HashMap() { for (unsigned long long i = 0; i < capacity; i++) _entries[i].occupied = false; }
-        void set(const K& key, const V& value) {
-            for (unsigned long long i = 0; i < capacity; i++) {
-                if (_entries[i].occupied && _entries[i].key == key) { _entries[i].value = value; return; }
+        HashMap()
+        {
+            for (unsigned long long i = 0; i < capacity; i++) _entries[i].occupied = false;
+        }
+        void set(const K& key, const V& value)
+        {
+            for (unsigned long long i = 0; i < capacity; i++)
+            {
+                if (_entries[i].occupied && _entries[i].key == key)
+                {
+                    _entries[i].value = value; return;
+                }
             }
-            for (unsigned long long i = 0; i < capacity; i++) {
-                if (!_entries[i].occupied) { _entries[i].key = key; _entries[i].value = value; _entries[i].occupied = true; return; }
+            for (unsigned long long i = 0; i < capacity; i++)
+            {
+                if (!_entries[i].occupied)
+                {
+                    _entries[i].key = key; _entries[i].value = value; _entries[i].occupied = true; return;
+                }
             }
         }
         V get(const K& key) const {
-            for (unsigned long long i = 0; i < capacity; i++) {
+            for (unsigned long long i = 0; i < capacity; i++)
+            {
                 if (_entries[i].occupied && _entries[i].key == key) return _entries[i].value;
             }
             return V{};
         }
         bool has(const K& key) const {
-            for (unsigned long long i = 0; i < capacity; i++) {
+            for (unsigned long long i = 0; i < capacity; i++)
+            {
                 if (_entries[i].occupied && _entries[i].key == key) return true;
             }
             return false;
         }
-        void remove(const K& key) {
-            for (unsigned long long i = 0; i < capacity; i++) {
-                if (_entries[i].occupied && _entries[i].key == key) { _entries[i].occupied = false; return; }
+        void remove(const K& key)
+        {
+            for (unsigned long long i = 0; i < capacity; i++)
+            {
+                if (_entries[i].occupied && _entries[i].key == key)
+                {
+                    _entries[i].occupied = false; return;
+                }
             }
         }
     };
@@ -93,11 +120,20 @@ namespace QPI {
     struct TestContractState {
         T _data;
         const T& get() const { return _data; }
-        T& mut() { return _data; }
+        T& mut()
+        {
+            return _data;
+        }
     };
 
-    inline uint64 div(uint64 a, uint64 b) { return b ? a / b : 0; }
-    inline uint64 mod(uint64 a, uint64 b) { return b ? a % b : 0; }
+    inline uint64 div(uint64 a, uint64 b)
+    {
+        return b ? a / b : 0;
+    }
+    inline uint64 mod(uint64 a, uint64 b)
+    {
+        return b ? a % b : 0;
+    }
 }
 
 using namespace QPI;
@@ -119,7 +155,8 @@ struct TestQpiContext {
 
     sint64 totalBurned;
 
-    TestQpiContext() : _reward(0), _epoch(100), _tick(12345), transferCount(0), totalBurned(0) {
+    TestQpiContext() : _reward(0), _epoch(100), _tick(12345), transferCount(0), totalBurned(0)
+    {
         memset(&_invocator, 0, sizeof(_invocator));
         memset(transfers, 0, sizeof(transfers));
     }
@@ -129,19 +166,23 @@ struct TestQpiContext {
     uint16 epoch() const { return _epoch; }
     uint64 tick() const { return _tick; }
 
-    void transfer(const id& to, sint64 amount) {
-        if (transferCount < MAX_TRANSFERS) {
+    void transfer(const id& to, sint64 amount)
+    {
+        if (transferCount < MAX_TRANSFERS)
+        {
             transfers[transferCount].to = to;
             transfers[transferCount].amount = amount;
             transferCount++;
         }
     }
 
-    void burn(sint64 amount) {
+    void burn(sint64 amount)
+    {
         totalBurned += amount;
     }
 
-    void reset() {
+    void reset()
+    {
         transferCount = 0;
         totalBurned = 0;
         _reward = 0;
@@ -149,7 +190,8 @@ struct TestQpiContext {
 
     sint64 totalTransferredTo(const id& addr) const {
         sint64 total = 0;
-        for (int i = 0; i < transferCount; i++) {
+        for (int i = 0; i < transferCount; i++)
+        {
             if (transfers[i].to == addr) total += transfers[i].amount;
         }
         return total;
@@ -367,7 +409,8 @@ public:
     QPI::TestContractState<QuGateState>& state;
     TestQpiContext qpi;
 
-    QuGateTest() : stateWrapperPtr(new QPI::TestContractState<QuGateState>()), state(*stateWrapperPtr) {
+    QuGateTest() : stateWrapperPtr(new QPI::TestContractState<QuGateState>()), state(*stateWrapperPtr)
+    {
         memset(&state.mut(), 0, sizeof(QuGateState));
         // INITIALIZE
         state.mut()._gateCount = 0;
@@ -379,9 +422,13 @@ public:
         state.mut()._expiryEpochs = QUGATE_DEFAULT_EXPIRY_EPOCHS;
     }
 
-    ~QuGateTest() { delete stateWrapperPtr; }
+    ~QuGateTest()
+    {
+        delete stateWrapperPtr;
+    }
 
-    static id makeId(unsigned char val) {
+    static id makeId(unsigned char val)
+    {
         id result = m256i::zero();
         result.m256i_u8[0] = val;
         return result;
@@ -393,7 +440,8 @@ public:
     }
 
     // ---- createGate (matches QuGate.h logic exactly) ----
-    createGate_output createGate(const id& creator, sint64 fee, const createGate_input& input) {
+    createGate_output createGate(const id& creator, sint64 fee, const createGate_input& input)
+    {
         qpi.reset();
         qpi._invocator = creator;
         qpi._reward = fee;
@@ -405,58 +453,70 @@ public:
 
         uint64 currentFee = state.get()._creationFee * (1 + QPI::div(state.get()._activeGates, QUGATE_FEE_ESCALATION_STEP));
 
-        if (fee < (sint64)currentFee) {
+        if (fee < (sint64)currentFee)
+        {
             if (fee > 0) qpi.transfer(creator, fee);
             output.status = QUGATE_INSUFFICIENT_FEE;
             return output;
         }
-        if (input.mode > MODE_ORACLE) {
+        if (input.mode > MODE_ORACLE)
+        {
             qpi.transfer(creator, fee);
             output.status = QUGATE_INVALID_MODE;
             return output;
         }
-        if (input.recipientCount == 0 || input.recipientCount > QUGATE_MAX_RECIPIENTS) {
+        if (input.recipientCount == 0 || input.recipientCount > QUGATE_MAX_RECIPIENTS)
+        {
             qpi.transfer(creator, fee);
             output.status = QUGATE_INVALID_RECIPIENT_COUNT;
             return output;
         }
-        if (state.get()._freeCount == 0 && state.get()._gateCount >= QUGATE_MAX_GATES) {
+        if (state.get()._freeCount == 0 && state.get()._gateCount >= QUGATE_MAX_GATES)
+        {
             qpi.transfer(creator, fee);
             output.status = QUGATE_NO_FREE_SLOTS;
             return output;
         }
-        if (input.mode == MODE_SPLIT) {
+        if (input.mode == MODE_SPLIT)
+        {
             uint64 totalRatio = 0;
             for (uint64 i = 0; i < input.recipientCount; i++)
                 totalRatio += input.ratios.get(i);
-            if (totalRatio == 0) {
+            if (totalRatio == 0)
+            {
                 qpi.transfer(creator, fee);
                 output.status = QUGATE_INVALID_RATIO;
                 return output;
             }
-            for (uint64 i = 0; i < input.recipientCount; i++) {
-                if (input.ratios.get(i) > QUGATE_MAX_RATIO) {
+            for (uint64 i = 0; i < input.recipientCount; i++)
+            {
+                if (input.ratios.get(i) > QUGATE_MAX_RATIO)
+                {
                     qpi.transfer(creator, fee);
                     output.status = QUGATE_INVALID_RATIO;
                     return output;
                 }
             }
         }
-        if (input.mode == MODE_THRESHOLD && input.threshold == 0) {
+        if (input.mode == MODE_THRESHOLD && input.threshold == 0)
+        {
             qpi.transfer(creator, fee);
             output.status = QUGATE_INVALID_THRESHOLD;
             return output;
         }
-        if (input.allowedSenderCount > QUGATE_MAX_RECIPIENTS) {
+        if (input.allowedSenderCount > QUGATE_MAX_RECIPIENTS)
+        {
             qpi.transfer(creator, fee);
             output.status = QUGATE_INVALID_SENDER_COUNT;
             return output;
         }
         // Validate ORACLE mode
-        if (input.mode == MODE_ORACLE) {
+        if (input.mode == MODE_ORACLE)
+        {
             if (input.oracleCondition > QUGATE_ORACLE_COND_TIME_AFTER
                 || input.oracleThreshold <= 0
-                || input.oracleTriggerMode > QUGATE_ORACLE_TRIGGER_RECURRING) {
+                || input.oracleTriggerMode > QUGATE_ORACLE_TRIGGER_RECURRING)
+                {
                 qpi.transfer(creator, fee);
                 output.status = QUGATE_INVALID_ORACLE_CONFIG;
                 return output;
@@ -480,7 +540,8 @@ public:
         g.chainDepth = 0;
 
         // Oracle fields
-        if (input.mode == MODE_ORACLE) {
+        if (input.mode == MODE_ORACLE)
+        {
             g.oracleId = input.oracleId;
             g.oracleCurrency1 = input.oracleCurrency1;
             g.oracleCurrency2 = input.oracleCurrency2;
@@ -491,21 +552,25 @@ public:
         }
 
         // Chain validation (chainNextGateId > 0 means chained; 0 or -1 = no chain)
-        if (input.chainNextGateId > 0) {
-            if ((uint64)input.chainNextGateId > state.get()._gateCount) {
+        if (input.chainNextGateId > 0)
+        {
+            if ((uint64)input.chainNextGateId > state.get()._gateCount)
+            {
                 qpi.transfer(creator, fee);
                 output.status = QUGATE_INVALID_CHAIN;
                 return output;
             }
             uint64 targetIdx = (uint64)input.chainNextGateId - 1;
             GateConfig target = state.get()._gates.get(targetIdx);
-            if (target.active == 0) {
+            if (target.active == 0)
+            {
                 qpi.transfer(creator, fee);
                 output.status = QUGATE_INVALID_CHAIN;
                 return output;
             }
             uint8 newDepth = target.chainDepth + 1;
-            if (newDepth >= QUGATE_MAX_CHAIN_DEPTH) {
+            if (newDepth >= QUGATE_MAX_CHAIN_DEPTH)
+            {
                 qpi.transfer(creator, fee);
                 output.status = QUGATE_INVALID_CHAIN;
                 return output;
@@ -514,16 +579,20 @@ public:
             g.chainDepth = newDepth;
         }
 
-        for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++) {
-            if (i < input.recipientCount) {
+        for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++)
+        {
+            if (i < input.recipientCount)
+            {
                 g.recipients.set(i, input.recipients.get(i));
                 g.ratios.set(i, input.ratios.get(i));
-            } else {
+            }
+            else {
                 g.recipients.set(i, id::zero());
                 g.ratios.set(i, 0);
             }
         }
-        for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++) {
+        for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++)
+        {
             if (i < input.allowedSenderCount)
                 g.allowedSenders.set(i, input.allowedSenders.get(i));
             else
@@ -531,10 +600,12 @@ public:
         }
 
         uint64 slotIdx;
-        if (state.get()._freeCount > 0) {
+        if (state.get()._freeCount > 0)
+        {
             state.mut()._freeCount -= 1;
             slotIdx = state.get()._freeSlots.get(state.get()._freeCount);
-        } else {
+        }
+        else {
             slotIdx = state.get()._gateCount;
             state.mut()._gateCount += 1;
         }
@@ -548,11 +619,14 @@ public:
         output.feePaid = currentFee;
 
         // Handle excess: ORACLE mode stores in oracleReserve, others get refund
-        if (fee > (sint64)currentFee) {
-            if (input.mode == MODE_ORACLE) {
+        if (fee > (sint64)currentFee)
+        {
+            if (input.mode == MODE_ORACLE)
+            {
                 g.oracleReserve = fee - (sint64)currentFee;
                 state.mut()._gates.set(slotIdx, g);
-            } else {
+            }
+            else {
                 qpi.transfer(creator, fee - (sint64)currentFee);
             }
         }
@@ -565,7 +639,8 @@ public:
     createGate_output createGateSimple(const id& creator, sint64 fee, uint8 mode,
                                         uint8 recipientCount, id* recipients, uint64* ratios,
                                         uint64 threshold = 0, id* allowedSenders = nullptr,
-                                        uint8 allowedSenderCount = 0) {
+                                        uint8 allowedSenderCount = 0)
+                                        {
         createGate_input in;
         memset(&in, 0, sizeof(in));
         in.chainNextGateId = -1;
@@ -573,11 +648,13 @@ public:
         in.recipientCount = recipientCount;
         in.threshold = threshold;
         in.allowedSenderCount = allowedSenderCount;
-        for (uint8 i = 0; i < recipientCount && i < 8; i++) {
+        for (uint8 i = 0; i < recipientCount && i < 8; i++)
+        {
             in.recipients.set(i, recipients[i]);
             in.ratios.set(i, ratios ? ratios[i] : 0);
         }
-        if (allowedSenders) {
+        if (allowedSenders)
+        {
             for (uint8 i = 0; i < allowedSenderCount && i < 8; i++)
                 in.allowedSenders.set(i, allowedSenders[i]);
         }
@@ -585,7 +662,8 @@ public:
     }
 
     // ---- sendToGate ----
-    sendToGate_output sendToGate(const id& sender, uint64 gateId, sint64 amount) {
+    sendToGate_output sendToGate(const id& sender, uint64 gateId, sint64 amount)
+    {
         qpi.reset();
         qpi._invocator = sender;
         qpi._reward = amount;
@@ -593,7 +671,8 @@ public:
         sendToGate_output output;
         output.status = QUGATE_SUCCESS;
 
-        if (gateId == 0 || gateId > state.get()._gateCount) {
+        if (gateId == 0 || gateId > state.get()._gateCount)
+        {
             if (amount > 0) qpi.transfer(sender, amount);
             output.status = QUGATE_INVALID_GATE_ID;
             return output;
@@ -602,19 +681,22 @@ public:
         uint64 idx = gateId - 1;
         GateConfig gate = state.get()._gates.get(idx);
 
-        if (gate.active == 0) {
+        if (gate.active == 0)
+        {
             if (amount > 0) qpi.transfer(sender, amount);
             output.status = QUGATE_GATE_NOT_ACTIVE;
             return output;
         }
 
-        if (amount == 0) {
+        if (amount == 0)
+        {
             output.status = QUGATE_DUST_AMOUNT;
             return output;
         }
 
         // Dust burn
-        if ((uint64)amount < state.get()._minSendAmount) {
+        if ((uint64)amount < state.get()._minSendAmount)
+        {
             qpi.burn(amount);
             state.mut()._totalBurned += amount;
             output.status = QUGATE_DUST_AMOUNT;
@@ -625,56 +707,71 @@ public:
         gate.lastActivityEpoch = qpi.epoch();
         gate.totalReceived += amount;
 
-        if (gate.mode == MODE_SPLIT) {
+        if (gate.mode == MODE_SPLIT)
+        {
             uint64 totalRatio = 0;
             for (uint64 i = 0; i < gate.recipientCount; i++)
                 totalRatio += gate.ratios.get(i);
             uint64 distributed = 0;
-            for (uint64 i = 0; i < gate.recipientCount; i++) {
+            for (uint64 i = 0; i < gate.recipientCount; i++)
+            {
                 uint64 share;
                 if (i == (uint64)(gate.recipientCount - 1))
                     share = amount - distributed;
                 else
                     share = QPI::div((uint64)amount * gate.ratios.get(i), totalRatio);
-                if (share > 0) {
+                if (share > 0)
+                {
                     qpi.transfer(gate.recipients.get(i), share);
                     distributed += share;
                 }
             }
             gate.totalForwarded += distributed;
         }
-        else if (gate.mode == MODE_ROUND_ROBIN) {
+        else if (gate.mode == MODE_ROUND_ROBIN)
+        {
             qpi.transfer(gate.recipients.get(gate.roundRobinIndex), amount);
             gate.totalForwarded += amount;
             gate.roundRobinIndex = QPI::mod(gate.roundRobinIndex + 1, (uint64)gate.recipientCount);
         }
-        else if (gate.mode == MODE_THRESHOLD) {
+        else if (gate.mode == MODE_THRESHOLD)
+        {
             gate.currentBalance += amount;
-            if (gate.currentBalance >= gate.threshold) {
+            if (gate.currentBalance >= gate.threshold)
+            {
                 qpi.transfer(gate.recipients.get(0), gate.currentBalance);
                 gate.totalForwarded += gate.currentBalance;
                 gate.currentBalance = 0;
             }
         }
-        else if (gate.mode == MODE_RANDOM) {
+        else if (gate.mode == MODE_RANDOM)
+        {
             uint64 ridx = QPI::mod(gate.totalReceived + qpi.tick(), (uint64)gate.recipientCount);
             qpi.transfer(gate.recipients.get(ridx), amount);
             gate.totalForwarded += amount;
         }
-        else if (gate.mode == MODE_CONDITIONAL) {
+        else if (gate.mode == MODE_CONDITIONAL)
+        {
             uint8 senderAllowed = 0;
-            for (uint64 i = 0; i < gate.allowedSenderCount; i++) {
-                if (gate.allowedSenders.get(i) == sender) { senderAllowed = 1; break; }
+            for (uint64 i = 0; i < gate.allowedSenderCount; i++)
+            {
+                if (gate.allowedSenders.get(i) == sender)
+                {
+                    senderAllowed = 1; break;
+                }
             }
-            if (senderAllowed) {
+            if (senderAllowed)
+            {
                 qpi.transfer(gate.recipients.get(0), amount);
                 gate.totalForwarded += amount;
-            } else {
+            }
+            else {
                 qpi.transfer(sender, amount);
                 output.status = QUGATE_CONDITIONAL_REJECTED;
             }
         }
-        else if (gate.mode == MODE_ORACLE) {
+        else if (gate.mode == MODE_ORACLE)
+        {
             // ORACLE mode: accumulate into currentBalance
             gate.currentBalance += amount;
         }
@@ -684,7 +781,8 @@ public:
     }
 
     // ---- closeGate ----
-    closeGate_output closeGate(const id& caller, uint64 gateId, sint64 reward = 0) {
+    closeGate_output closeGate(const id& caller, uint64 gateId, sint64 reward = 0)
+    {
         qpi.reset();
         qpi._invocator = caller;
         qpi._reward = reward;
@@ -692,35 +790,41 @@ public:
         closeGate_output output;
         output.status = QUGATE_SUCCESS;
 
-        if (gateId == 0 || gateId > state.get()._gateCount) {
+        if (gateId == 0 || gateId > state.get()._gateCount)
+        {
             output.status = QUGATE_INVALID_GATE_ID;
             return output;
         }
 
         GateConfig gate = state.get()._gates.get(gateId - 1);
 
-        if (!(gate.owner == caller)) {
+        if (!(gate.owner == caller))
+        {
             output.status = QUGATE_UNAUTHORIZED;
             return output;
         }
-        if (gate.active == 0) {
+        if (gate.active == 0)
+        {
             output.status = QUGATE_GATE_NOT_ACTIVE;
             return output;
         }
 
-        if (gate.currentBalance > 0) {
+        if (gate.currentBalance > 0)
+        {
             qpi.transfer(gate.owner, gate.currentBalance);
             gate.currentBalance = 0;
         }
 
         // Refund oracle reserve
-        if (gate.mode == MODE_ORACLE && gate.oracleReserve > 0) {
+        if (gate.mode == MODE_ORACLE && gate.oracleReserve > 0)
+        {
             qpi.transfer(gate.owner, gate.oracleReserve);
             gate.oracleReserve = 0;
         }
 
         // Refund chain reserve
-        if (gate.chainReserve > 0) {
+        if (gate.chainReserve > 0)
+        {
             qpi.transfer(gate.owner, gate.chainReserve);
             gate.chainReserve = 0;
         }
@@ -738,7 +842,8 @@ public:
     }
 
     // ---- updateGate ----
-    updateGate_output updateGate(const id& caller, sint64 reward, const updateGate_input& input) {
+    updateGate_output updateGate(const id& caller, sint64 reward, const updateGate_input& input)
+    {
         qpi.reset();
         qpi._invocator = caller;
         qpi._reward = reward;
@@ -746,7 +851,8 @@ public:
         updateGate_output output;
         output.status = QUGATE_SUCCESS;
 
-        if (input.gateId == 0 || input.gateId > state.get()._gateCount) {
+        if (input.gateId == 0 || input.gateId > state.get()._gateCount)
+        {
             if (reward > 0) qpi.transfer(caller, reward);
             output.status = QUGATE_INVALID_GATE_ID;
             return output;
@@ -754,44 +860,53 @@ public:
 
         GateConfig gate = state.get()._gates.get(input.gateId - 1);
 
-        if (!(gate.owner == caller)) {
+        if (!(gate.owner == caller))
+        {
             if (reward > 0) qpi.transfer(caller, reward);
             output.status = QUGATE_UNAUTHORIZED;
             return output;
         }
-        if (gate.active == 0) {
+        if (gate.active == 0)
+        {
             if (reward > 0) qpi.transfer(caller, reward);
             output.status = QUGATE_GATE_NOT_ACTIVE;
             return output;
         }
-        if (input.recipientCount == 0 || input.recipientCount > QUGATE_MAX_RECIPIENTS) {
+        if (input.recipientCount == 0 || input.recipientCount > QUGATE_MAX_RECIPIENTS)
+        {
             if (reward > 0) qpi.transfer(caller, reward);
             output.status = QUGATE_INVALID_RECIPIENT_COUNT;
             return output;
         }
-        if (input.allowedSenderCount > QUGATE_MAX_RECIPIENTS) {
+        if (input.allowedSenderCount > QUGATE_MAX_RECIPIENTS)
+        {
             if (reward > 0) qpi.transfer(caller, reward);
             output.status = QUGATE_INVALID_SENDER_COUNT;
             return output;
         }
 
-        if (gate.mode == MODE_SPLIT) {
+        if (gate.mode == MODE_SPLIT)
+        {
             uint64 totalRatio = 0;
-            for (uint64 i = 0; i < input.recipientCount; i++) {
-                if (input.ratios.get(i) > QUGATE_MAX_RATIO) {
+            for (uint64 i = 0; i < input.recipientCount; i++)
+            {
+                if (input.ratios.get(i) > QUGATE_MAX_RATIO)
+                {
                     if (reward > 0) qpi.transfer(caller, reward);
                     output.status = QUGATE_INVALID_RATIO;
                     return output;
                 }
                 totalRatio += input.ratios.get(i);
             }
-            if (totalRatio == 0) {
+            if (totalRatio == 0)
+            {
                 if (reward > 0) qpi.transfer(caller, reward);
                 output.status = QUGATE_INVALID_RATIO;
                 return output;
             }
         }
-        if (gate.mode == MODE_THRESHOLD && input.threshold == 0) {
+        if (gate.mode == MODE_THRESHOLD && input.threshold == 0)
+        {
             if (reward > 0) qpi.transfer(caller, reward);
             output.status = QUGATE_INVALID_THRESHOLD;
             return output;
@@ -802,11 +917,14 @@ public:
         gate.threshold = input.threshold;
         gate.allowedSenderCount = input.allowedSenderCount;
 
-        for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++) {
-            if (i < input.recipientCount) {
+        for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++)
+        {
+            if (i < input.recipientCount)
+            {
                 gate.recipients.set(i, input.recipients.get(i));
                 gate.ratios.set(i, input.ratios.get(i));
-            } else {
+            }
+            else {
                 gate.recipients.set(i, id::zero());
                 gate.ratios.set(i, 0);
             }
@@ -823,20 +941,27 @@ public:
     }
 
     // ---- endEpoch (gate expiry) ----
-    void endEpoch() {
-        for (uint64 i = 0; i < state.get()._gateCount; i++) {
+    void endEpoch()
+    {
+        for (uint64 i = 0; i < state.get()._gateCount; i++)
+        {
             GateConfig gate = state.get()._gates.get(i);
-            if (gate.active == 1 && state.get()._expiryEpochs > 0) {
-                if ((uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs) {
-                    if (gate.currentBalance > 0) {
+            if (gate.active == 1 && state.get()._expiryEpochs > 0)
+            {
+                if ((uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs)
+                {
+                    if (gate.currentBalance > 0)
+                    {
                         qpi.transfer(gate.owner, gate.currentBalance);
                         gate.currentBalance = 0;
                     }
-                    if (gate.mode == MODE_ORACLE && gate.oracleReserve > 0) {
+                    if (gate.mode == MODE_ORACLE && gate.oracleReserve > 0)
+                    {
                         qpi.transfer(gate.owner, gate.oracleReserve);
                         gate.oracleReserve = 0;
                     }
-                    if (gate.chainReserve > 0) {
+                    if (gate.chainReserve > 0)
+                    {
                         qpi.transfer(gate.owner, gate.chainReserve);
                         gate.chainReserve = 0;
                     }
@@ -853,10 +978,14 @@ public:
     }
 
     // ---- getGate ----
-    getGate_output getGate(uint64 gateId) {
+    getGate_output getGate(uint64 gateId)
+    {
         getGate_output out;
         memset(&out, 0, sizeof(out));
-        if (gateId == 0 || gateId > state.get()._gateCount) { out.active = 0; return out; }
+        if (gateId == 0 || gateId > state.get()._gateCount)
+        {
+            out.active = 0; return out;
+        }
         GateConfig g = state.get()._gates.get(gateId - 1);
         out.mode = g.mode;
         out.recipientCount = g.recipientCount;
@@ -873,7 +1002,8 @@ public:
         out.chainNextGateId = g.chainNextGateId;
         out.chainReserve = g.chainReserve;
         out.chainDepth = g.chainDepth;
-        for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++) {
+        for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++)
+        {
             out.recipients.set(i, g.recipients.get(i));
             out.ratios.set(i, g.ratios.get(i));
         }
@@ -881,7 +1011,8 @@ public:
     }
 
     // ---- getGateCount ----
-    getGateCount_output getGateCount() {
+    getGateCount_output getGateCount()
+    {
         getGateCount_output out;
         out.totalGates = state.get()._gateCount;
         out.activeGates = state.get()._activeGates;
@@ -890,7 +1021,8 @@ public:
     }
 
     // ---- getFees ----
-    getFees_output getFees() {
+    getFees_output getFees()
+    {
         getFees_output out;
         out.creationFee = state.get()._creationFee;
         out.currentCreationFee = state.get()._creationFee * (1 + QPI::div(state.get()._activeGates, QUGATE_FEE_ESCALATION_STEP));
@@ -900,7 +1032,8 @@ public:
     }
 
     // ---- fundGate ----
-    fundGate_output fundGate(const id& caller, sint64 gateId, sint64 amount, uint8 reserveTarget = 0) {
+    fundGate_output fundGate(const id& caller, sint64 gateId, sint64 amount, uint8 reserveTarget = 0)
+    {
         qpi.reset();
         qpi._invocator = caller;
         qpi._reward = amount;
@@ -908,38 +1041,47 @@ public:
         fundGate_output output;
         output.result = QUGATE_SUCCESS;
 
-        if (gateId <= 0 || gateId > (sint64)state.get()._gateCount) {
+        if (gateId <= 0 || gateId > (sint64)state.get()._gateCount)
+        {
             if (amount > 0) qpi.transfer(caller, amount);
             output.result = QUGATE_INVALID_GATE_ID;
             return output;
         }
 
         GateConfig gate = state.get()._gates.get(gateId - 1);
-        if (gate.active == 0) {
+        if (gate.active == 0)
+        {
             if (amount > 0) qpi.transfer(caller, amount);
             output.result = QUGATE_GATE_NOT_ACTIVE;
             return output;
         }
-        if (amount <= 0) {
+        if (amount <= 0)
+        {
             output.result = QUGATE_DUST_AMOUNT;
             return output;
         }
 
-        if (reserveTarget == 0) {
-            if (gate.mode != MODE_ORACLE) {
+        if (reserveTarget == 0)
+        {
+            if (gate.mode != MODE_ORACLE)
+            {
                 if (amount > 0) qpi.transfer(caller, amount);
                 output.result = QUGATE_INVALID_ORACLE_CONFIG;
                 return output;
             }
             gate.oracleReserve += amount;
-        } else if (reserveTarget == 1) {
-            if (gate.chainNextGateId == -1) {
+        }
+        else if (reserveTarget == 1)
+        {
+            if (gate.chainNextGateId == -1)
+            {
                 if (amount > 0) qpi.transfer(caller, amount);
                 output.result = QUGATE_INVALID_CHAIN;
                 return output;
             }
             gate.chainReserve += amount;
-        } else {
+        }
+        else {
             if (amount > 0) qpi.transfer(caller, amount);
             output.result = QUGATE_INVALID_CHAIN;
             return output;
@@ -956,7 +1098,8 @@ public:
         sint64 distributed;
     };
 
-    OracleEvalResult evaluateOracleCondition(uint64 gateId, sint64 numerator, sint64 denominator) {
+    OracleEvalResult evaluateOracleCondition(uint64 gateId, sint64 numerator, sint64 denominator)
+    {
         OracleEvalResult result;
         result.conditionMet = 0;
         result.distributed = 0;
@@ -967,32 +1110,44 @@ public:
         if (gate.active == 0 || gate.mode != MODE_ORACLE) return result;
 
         // Evaluate condition
-        if (gate.oracleCondition == QUGATE_ORACLE_COND_PRICE_ABOVE) {
-            if (denominator > 0) {
+        if (gate.oracleCondition == QUGATE_ORACLE_COND_PRICE_ABOVE)
+        {
+            if (denominator > 0)
+            {
                 sint64 priceScaled = numerator * 1000000 / denominator;
                 if (priceScaled > gate.oracleThreshold) result.conditionMet = 1;
             }
-        } else if (gate.oracleCondition == QUGATE_ORACLE_COND_PRICE_BELOW) {
-            if (denominator > 0) {
+        }
+        else if (gate.oracleCondition == QUGATE_ORACLE_COND_PRICE_BELOW)
+        {
+            if (denominator > 0)
+            {
                 sint64 priceScaled = numerator * 1000000 / denominator;
                 if (priceScaled < gate.oracleThreshold) result.conditionMet = 1;
             }
-        } else if (gate.oracleCondition == QUGATE_ORACLE_COND_TIME_AFTER) {
+        }
+        else if (gate.oracleCondition == QUGATE_ORACLE_COND_TIME_AFTER)
+        {
             if ((sint64)qpi.tick() > gate.oracleThreshold) result.conditionMet = 1;
         }
 
-        if (result.conditionMet && gate.currentBalance > 0) {
+        if (result.conditionMet && gate.currentBalance > 0)
+        {
             qpi.reset();
             // SPLIT-style equal payout
             uint64 distributed = 0;
-            for (uint64 j = 0; j < gate.recipientCount; j++) {
+            for (uint64 j = 0; j < gate.recipientCount; j++)
+            {
                 uint64 share;
-                if (j == (uint64)(gate.recipientCount - 1)) {
+                if (j == (uint64)(gate.recipientCount - 1))
+                {
                     share = gate.currentBalance - distributed;
-                } else {
+                }
+                else {
                     share = gate.currentBalance / gate.recipientCount;
                 }
-                if (share > 0) {
+                if (share > 0)
+                {
                     qpi.transfer(gate.recipients.get(j), share);
                     distributed += share;
                 }
@@ -1002,8 +1157,10 @@ public:
             result.distributed = distributed;
 
             // If ONCE mode, close gate
-            if (gate.oracleTriggerMode == QUGATE_ORACLE_TRIGGER_ONCE) {
-                if (gate.oracleReserve > 0) {
+            if (gate.oracleTriggerMode == QUGATE_ORACLE_TRIGGER_ONCE)
+            {
+                if (gate.oracleReserve > 0)
+                {
                     qpi.transfer(gate.owner, gate.oracleReserve);
                     gate.oracleReserve = 0;
                 }
@@ -1021,7 +1178,8 @@ public:
     }
 
     // ---- setChain ----
-    setChain_output setChain(const id& caller, sint64 gateId, sint64 nextGateId, sint64 fee) {
+    setChain_output setChain(const id& caller, sint64 gateId, sint64 nextGateId, sint64 fee)
+    {
         qpi.reset();
         qpi._invocator = caller;
         qpi._reward = fee;
@@ -1029,30 +1187,35 @@ public:
         setChain_output output;
         output.result = QUGATE_SUCCESS;
 
-        if (gateId <= 0 || gateId > (sint64)state.get()._gateCount) {
+        if (gateId <= 0 || gateId > (sint64)state.get()._gateCount)
+        {
             if (fee > 0) qpi.transfer(caller, fee);
             output.result = QUGATE_INVALID_GATE_ID;
             return output;
         }
 
         GateConfig gate = state.get()._gates.get(gateId - 1);
-        if (!(gate.owner == caller)) {
+        if (!(gate.owner == caller))
+        {
             if (fee > 0) qpi.transfer(caller, fee);
             output.result = QUGATE_UNAUTHORIZED;
             return output;
         }
-        if (gate.active == 0) {
+        if (gate.active == 0)
+        {
             if (fee > 0) qpi.transfer(caller, fee);
             output.result = QUGATE_GATE_NOT_ACTIVE;
             return output;
         }
-        if (fee < QUGATE_CHAIN_HOP_FEE) {
+        if (fee < QUGATE_CHAIN_HOP_FEE)
+        {
             if (fee > 0) qpi.transfer(caller, fee);
             output.result = QUGATE_INSUFFICIENT_FEE;
             return output;
         }
 
-        if (nextGateId == -1) {
+        if (nextGateId == -1)
+        {
             gate.chainNextGateId = -1;
             gate.chainDepth = 0;
             state.mut()._gates.set(gateId - 1, gate);
@@ -1061,21 +1224,24 @@ public:
             return output;
         }
 
-        if (nextGateId <= 0 || nextGateId > (sint64)state.get()._gateCount) {
+        if (nextGateId <= 0 || nextGateId > (sint64)state.get()._gateCount)
+        {
             if (fee > 0) qpi.transfer(caller, fee);
             output.result = QUGATE_INVALID_CHAIN;
             return output;
         }
 
         GateConfig target = state.get()._gates.get(nextGateId - 1);
-        if (target.active == 0) {
+        if (target.active == 0)
+        {
             if (fee > 0) qpi.transfer(caller, fee);
             output.result = QUGATE_INVALID_CHAIN;
             return output;
         }
 
         uint8 newDepth = target.chainDepth + 1;
-        if (newDepth >= QUGATE_MAX_CHAIN_DEPTH) {
+        if (newDepth >= QUGATE_MAX_CHAIN_DEPTH)
+        {
             if (fee > 0) qpi.transfer(caller, fee);
             output.result = QUGATE_INVALID_CHAIN;
             return output;
@@ -1083,8 +1249,10 @@ public:
 
         // Cycle detection
         uint64 walkIdx = nextGateId - 1;
-        for (uint8 step = 0; step < QUGATE_MAX_CHAIN_DEPTH; step++) {
-            if (walkIdx == (uint64)(gateId - 1)) {
+        for (uint8 step = 0; step < QUGATE_MAX_CHAIN_DEPTH; step++)
+        {
+            if (walkIdx == (uint64)(gateId - 1))
+            {
                 if (fee > 0) qpi.transfer(caller, fee);
                 output.result = QUGATE_INVALID_CHAIN;
                 return output;
@@ -1095,7 +1263,8 @@ public:
             if (nextWalk >= state.get()._gateCount) break;
             walkIdx = nextWalk;
         }
-        if (walkIdx == (uint64)(gateId - 1)) {
+        if (walkIdx == (uint64)(gateId - 1))
+        {
             if (fee > 0) qpi.transfer(caller, fee);
             output.result = QUGATE_INVALID_CHAIN;
             return output;
@@ -1112,7 +1281,8 @@ public:
     // ---- routeToGate (single hop) ----
     struct RouteResult { sint64 forwarded; };
 
-    RouteResult routeToGate(uint64 slotIdx, sint64 amount, uint8 hopCount) {
+    RouteResult routeToGate(uint64 slotIdx, sint64 amount, uint8 hopCount)
+    {
         RouteResult result;
         result.forwarded = 0;
 
@@ -1122,34 +1292,41 @@ public:
         if (gate.active == 0) return result;
 
         sint64 amountAfterFee = amount;
-        if (amount <= QUGATE_CHAIN_HOP_FEE) {
-            if (gate.chainReserve >= QUGATE_CHAIN_HOP_FEE) {
+        if (amount <= QUGATE_CHAIN_HOP_FEE)
+        {
+            if (gate.chainReserve >= QUGATE_CHAIN_HOP_FEE)
+            {
                 gate.chainReserve -= QUGATE_CHAIN_HOP_FEE;
                 state.mut()._gates.set(slotIdx, gate);
                 qpi.burn(QUGATE_CHAIN_HOP_FEE);
-            } else {
+            }
+            else {
                 gate.currentBalance += amount;
                 state.mut()._gates.set(slotIdx, gate);
                 return result; // stranded
             }
-        } else {
+        }
+        else {
             qpi.burn(QUGATE_CHAIN_HOP_FEE);
             amountAfterFee = amount - QUGATE_CHAIN_HOP_FEE;
         }
 
         // Dispatch through mode (simplified for test)
-        if (gate.mode == MODE_SPLIT) {
+        if (gate.mode == MODE_SPLIT)
+        {
             uint64 totalRatio = 0;
             for (uint64 i = 0; i < gate.recipientCount; i++)
                 totalRatio += gate.ratios.get(i);
             uint64 distributed = 0;
-            for (uint64 i = 0; i < gate.recipientCount; i++) {
+            for (uint64 i = 0; i < gate.recipientCount; i++)
+            {
                 uint64 share;
                 if (i == (uint64)(gate.recipientCount - 1))
                     share = amountAfterFee - distributed;
                 else
                     share = QPI::div((uint64)amountAfterFee * gate.ratios.get(i), totalRatio);
-                if (share > 0) {
+                if (share > 0)
+                {
                     qpi.transfer(gate.recipients.get(i), share);
                     distributed += share;
                 }
@@ -1158,22 +1335,29 @@ public:
             gate.totalForwarded += distributed;
             state.mut()._gates.set(slotIdx, gate);
             result.forwarded = distributed;
-        } else if (gate.mode == MODE_ROUND_ROBIN) {
+        }
+        else if (gate.mode == MODE_ROUND_ROBIN)
+        {
             qpi.transfer(gate.recipients.get(gate.roundRobinIndex), amountAfterFee);
             gate.totalForwarded += amountAfterFee;
             gate.roundRobinIndex = QPI::mod(gate.roundRobinIndex + 1, (uint64)gate.recipientCount);
             state.mut()._gates.set(slotIdx, gate);
             result.forwarded = amountAfterFee;
-        } else if (gate.mode == MODE_THRESHOLD) {
+        }
+        else if (gate.mode == MODE_THRESHOLD)
+        {
             gate.currentBalance += amountAfterFee;
-            if (gate.currentBalance >= gate.threshold) {
+            if (gate.currentBalance >= gate.threshold)
+            {
                 qpi.transfer(gate.recipients.get(0), gate.currentBalance);
                 gate.totalForwarded += gate.currentBalance;
                 gate.currentBalance = 0;
             }
             state.mut()._gates.set(slotIdx, gate);
             result.forwarded = amountAfterFee;
-        } else if (gate.mode == MODE_ORACLE) {
+        }
+        else if (gate.mode == MODE_ORACLE)
+        {
             gate.currentBalance += amountAfterFee;
             state.mut()._gates.set(slotIdx, gate);
             result.forwarded = amountAfterFee;
@@ -1183,11 +1367,13 @@ public:
     }
 
     // ---- routeChain — iterative multi-hop chain routing ----
-    sint64 routeChain(uint64 startGateId, sint64 amount) {
+    sint64 routeChain(uint64 startGateId, sint64 amount)
+    {
         sint64 chainAmount = amount;
         sint64 currentChainGateId = startGateId;
         uint8 hop = 0;
-        while (hop < QUGATE_MAX_CHAIN_DEPTH && currentChainGateId > 0 && chainAmount > 0) {
+        while (hop < QUGATE_MAX_CHAIN_DEPTH && currentChainGateId > 0 && chainAmount > 0)
+        {
             uint64 nextIdx = (uint64)currentChainGateId - 1;
             if (nextIdx >= state.get()._gateCount) break;
             auto res = routeToGate(nextIdx, chainAmount, hop);
@@ -1216,7 +1402,8 @@ static createGate_output makeSimpleGate(QuGateTest& env, const id& owner, sint64
                                          uint8 mode, uint8 recipientCount,
                                          id* recips, uint64* ratios,
                                          uint64 threshold = 0,
-                                         id* allowed = nullptr, uint8 allowedCount = 0) {
+                                         id* allowed = nullptr, uint8 allowedCount = 0)
+                                         {
     return env.createGateSimple(owner, fee, mode, recipientCount, recips, ratios, threshold, allowed, allowedCount);
 }
 
@@ -1224,7 +1411,8 @@ static createGate_output makeSimpleGate(QuGateTest& env, const id& owner, sint64
 // ORIGINAL TESTS (updated for V3 harness)
 // =============================================
 
-TEST(QuGate, SplitEvenTwo) {
+TEST(QuGate, SplitEvenTwo)
+{
     QuGateTest env;
     id recips[] = { BOB, CHARLIE };
     uint64 ratios[] = { 50, 50 };
@@ -1237,7 +1425,8 @@ TEST(QuGate, SplitEvenTwo) {
     EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 500);
 }
 
-TEST(QuGate, SplitUnevenThree) {
+TEST(QuGate, SplitUnevenThree)
+{
     QuGateTest env;
     id recips[] = { BOB, CHARLIE, DAVE };
     uint64 ratios[] = { 50, 30, 20 };
@@ -1250,7 +1439,8 @@ TEST(QuGate, SplitUnevenThree) {
     EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 2000);
 }
 
-TEST(QuGate, SplitHandlesRoundingDust) {
+TEST(QuGate, SplitHandlesRoundingDust)
+{
     QuGateTest env;
     id recips[] = { BOB, CHARLIE, DAVE };
     uint64 ratios[] = { 33, 33, 34 };
@@ -1262,7 +1452,8 @@ TEST(QuGate, SplitHandlesRoundingDust) {
     EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 34);
 }
 
-TEST(QuGate, RoundRobinCycles) {
+TEST(QuGate, RoundRobinCycles)
+{
     QuGateTest env;
     id recips[] = { BOB, CHARLIE, DAVE };
     uint64 ratios[] = { 0, 0, 0 };
@@ -1282,7 +1473,8 @@ TEST(QuGate, RoundRobinCycles) {
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 400);
 }
 
-TEST(QuGate, ThresholdAccumulatesAndReleases) {
+TEST(QuGate, ThresholdAccumulatesAndReleases)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 0 };
@@ -1299,7 +1491,8 @@ TEST(QuGate, ThresholdAccumulatesAndReleases) {
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 600);
 }
 
-TEST(QuGate, ConditionalAllowsWhitelisted) {
+TEST(QuGate, ConditionalAllowsWhitelisted)
+{
     QuGateTest env;
     id recips[] = { DAVE };
     uint64 ratios[] = { 0 };
@@ -1311,7 +1504,8 @@ TEST(QuGate, ConditionalAllowsWhitelisted) {
     EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 500);
 }
 
-TEST(QuGate, ConditionalBouncesUnauthorised) {
+TEST(QuGate, ConditionalBouncesUnauthorised)
+{
     QuGateTest env;
     id recips[] = { DAVE };
     uint64 ratios[] = { 0 };
@@ -1324,14 +1518,16 @@ TEST(QuGate, ConditionalBouncesUnauthorised) {
     EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 500);
 }
 
-TEST(QuGate, InvalidGateIdBounces) {
+TEST(QuGate, InvalidGateIdBounces)
+{
     QuGateTest env;
     auto out = env.sendToGate(ALICE, 999, 1000);
     EXPECT_EQ(out.status, QUGATE_INVALID_GATE_ID);
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 1000);
 }
 
-TEST(QuGate, CreationFailsWithInsufficientFee) {
+TEST(QuGate, CreationFailsWithInsufficientFee)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1340,7 +1536,8 @@ TEST(QuGate, CreationFailsWithInsufficientFee) {
     EXPECT_EQ(out.gateId, 0ULL);
 }
 
-TEST(QuGate, ZeroAmountDoesNothing) {
+TEST(QuGate, ZeroAmountDoesNothing)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1351,7 +1548,8 @@ TEST(QuGate, ZeroAmountDoesNothing) {
     EXPECT_EQ(env.qpi.transferCount, 0);
 }
 
-TEST(QuGate, GateCountTracking) {
+TEST(QuGate, GateCountTracking)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1370,7 +1568,8 @@ TEST(QuGate, GateCountTracking) {
 
 // ---- Escalating fee ----
 
-TEST(QuGateV3, EscalatingFeeAtZeroGates) {
+TEST(QuGateV3, EscalatingFeeAtZeroGates)
+{
     QuGateTest env;
     // 0 active gates → fee = 1000 * (1 + 0/1024) = 1000
     auto fees = env.getFees();
@@ -1383,7 +1582,8 @@ TEST(QuGateV3, EscalatingFeeAtZeroGates) {
     EXPECT_EQ(out.feePaid, 1000ULL);
 }
 
-TEST(QuGateV3, EscalatingFeeAt1024Gates) {
+TEST(QuGateV3, EscalatingFeeAt1024Gates)
+{
     QuGateTest env;
     // Simulate 1024 active gates
     state_hack: env.state.mut()._activeGates = 1024;
@@ -1404,7 +1604,8 @@ TEST(QuGateV3, EscalatingFeeAt1024Gates) {
     EXPECT_EQ(out2.status, QUGATE_INSUFFICIENT_FEE);
 }
 
-TEST(QuGateV3, EscalatingFeeAt2048Gates) {
+TEST(QuGateV3, EscalatingFeeAt2048Gates)
+{
     QuGateTest env;
     env.state.mut()._activeGates = 2048;
     // fee = 1000 * (1 + 2048/1024) = 3000
@@ -1420,7 +1621,8 @@ TEST(QuGateV3, EscalatingFeeAt2048Gates) {
 
 // ---- Fee overpayment refund ----
 
-TEST(QuGateV3, FeeOverpaymentRefund) {
+TEST(QuGateV3, FeeOverpaymentRefund)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1434,7 +1636,8 @@ TEST(QuGateV3, FeeOverpaymentRefund) {
 
 // ---- Dust burn ----
 
-TEST(QuGateV3, DustBurnBelowMinSend) {
+TEST(QuGateV3, DustBurnBelowMinSend)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1448,7 +1651,8 @@ TEST(QuGateV3, DustBurnBelowMinSend) {
     EXPECT_EQ(env.state.get()._totalBurned, 1000 + 5); // creation fee + dust
 }
 
-TEST(QuGateV3, ExactMinSendNotDust) {
+TEST(QuGateV3, ExactMinSendNotDust)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1462,7 +1666,8 @@ TEST(QuGateV3, ExactMinSendNotDust) {
 
 // ---- Status codes on all procedures ----
 
-TEST(QuGateV3, StatusCodeCreateInvalidMode) {
+TEST(QuGateV3, StatusCodeCreateInvalidMode)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1470,7 +1675,8 @@ TEST(QuGateV3, StatusCodeCreateInvalidMode) {
     EXPECT_EQ(out.status, QUGATE_INVALID_MODE);
 }
 
-TEST(QuGateV3, StatusCodeCreateInvalidRecipientCount) {
+TEST(QuGateV3, StatusCodeCreateInvalidRecipientCount)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1478,7 +1684,8 @@ TEST(QuGateV3, StatusCodeCreateInvalidRecipientCount) {
     EXPECT_EQ(out.status, QUGATE_INVALID_RECIPIENT_COUNT);
 }
 
-TEST(QuGateV3, StatusCodeCreateInvalidRatio) {
+TEST(QuGateV3, StatusCodeCreateInvalidRatio)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 0 }; // zero total ratio
@@ -1486,7 +1693,8 @@ TEST(QuGateV3, StatusCodeCreateInvalidRatio) {
     EXPECT_EQ(out.status, QUGATE_INVALID_RATIO);
 }
 
-TEST(QuGateV3, StatusCodeCreateInvalidThreshold) {
+TEST(QuGateV3, StatusCodeCreateInvalidThreshold)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1494,7 +1702,8 @@ TEST(QuGateV3, StatusCodeCreateInvalidThreshold) {
     EXPECT_EQ(out.status, QUGATE_INVALID_THRESHOLD);
 }
 
-TEST(QuGateV3, StatusCodeSendToInactiveGate) {
+TEST(QuGateV3, StatusCodeSendToInactiveGate)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1505,7 +1714,8 @@ TEST(QuGateV3, StatusCodeSendToInactiveGate) {
     EXPECT_EQ(sendOut.status, QUGATE_GATE_NOT_ACTIVE);
 }
 
-TEST(QuGateV3, StatusCodeCloseUnauthorized) {
+TEST(QuGateV3, StatusCodeCloseUnauthorized)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1515,13 +1725,15 @@ TEST(QuGateV3, StatusCodeCloseUnauthorized) {
     EXPECT_EQ(closeOut.status, QUGATE_UNAUTHORIZED);
 }
 
-TEST(QuGateV3, StatusCodeCloseInvalidGateId) {
+TEST(QuGateV3, StatusCodeCloseInvalidGateId)
+{
     QuGateTest env;
     auto closeOut = env.closeGate(ALICE, 999);
     EXPECT_EQ(closeOut.status, QUGATE_INVALID_GATE_ID);
 }
 
-TEST(QuGateV3, StatusCodeUpdateInvalidGateId) {
+TEST(QuGateV3, StatusCodeUpdateInvalidGateId)
+{
     QuGateTest env;
     updateGate_input in;
     memset(&in, 0, sizeof(in));
@@ -1533,7 +1745,8 @@ TEST(QuGateV3, StatusCodeUpdateInvalidGateId) {
     EXPECT_EQ(out.status, QUGATE_INVALID_GATE_ID);
 }
 
-TEST(QuGateV3, StatusCodeUpdateUnauthorized) {
+TEST(QuGateV3, StatusCodeUpdateUnauthorized)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1551,7 +1764,8 @@ TEST(QuGateV3, StatusCodeUpdateUnauthorized) {
 
 // ---- Free-list slot reuse ----
 
-TEST(QuGateV3, FreeListSlotReuse) {
+TEST(QuGateV3, FreeListSlotReuse)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1577,7 +1791,8 @@ TEST(QuGateV3, FreeListSlotReuse) {
 
 // ---- Gate expiry ----
 
-TEST(QuGateV3, GateExpiryAutoClose) {
+TEST(QuGateV3, GateExpiryAutoClose)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1597,7 +1812,8 @@ TEST(QuGateV3, GateExpiryAutoClose) {
     EXPECT_EQ(env.state.get()._freeCount, 1ULL);
 }
 
-TEST(QuGateV3, GateExpiryRefundsBalance) {
+TEST(QuGateV3, GateExpiryRefundsBalance)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1621,7 +1837,8 @@ TEST(QuGateV3, GateExpiryRefundsBalance) {
     EXPECT_EQ(gateAfter.active, 0);
 }
 
-TEST(QuGateV3, GateNotExpiredIfActive) {
+TEST(QuGateV3, GateNotExpiredIfActive)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1644,7 +1861,8 @@ TEST(QuGateV3, GateNotExpiredIfActive) {
 
 // ---- totalBurned tracking ----
 
-TEST(QuGateV3, TotalBurnedTracking) {
+TEST(QuGateV3, TotalBurnedTracking)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1667,7 +1885,8 @@ TEST(QuGateV3, TotalBurnedTracking) {
 
 // ---- getFees returns correct values ----
 
-TEST(QuGateV3, GetFeesReturnsCorrectValues) {
+TEST(QuGateV3, GetFeesReturnsCorrectValues)
+{
     QuGateTest env;
     auto fees = env.getFees();
     EXPECT_EQ(fees.creationFee, 1000ULL);
@@ -1683,7 +1902,8 @@ TEST(QuGateV3, GetFeesReturnsCorrectValues) {
 
 // ---- lastActivityEpoch updates ----
 
-TEST(QuGateV3, LastActivityEpochUpdatesOnSend) {
+TEST(QuGateV3, LastActivityEpochUpdatesOnSend)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1701,7 +1921,8 @@ TEST(QuGateV3, LastActivityEpochUpdatesOnSend) {
     EXPECT_EQ(gate.lastActivityEpoch, 120);
 }
 
-TEST(QuGateV3, LastActivityEpochUpdatesOnUpdate) {
+TEST(QuGateV3, LastActivityEpochUpdatesOnUpdate)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1724,7 +1945,8 @@ TEST(QuGateV3, LastActivityEpochUpdatesOnUpdate) {
 
 // ---- createGate_output.feePaid matches escalated fee ----
 
-TEST(QuGateV3, FeePaidMatchesEscalatedFee) {
+TEST(QuGateV3, FeePaidMatchesEscalatedFee)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1745,7 +1967,8 @@ TEST(QuGateV3, FeePaidMatchesEscalatedFee) {
 
 // ---- Close gate refunds invocation reward ----
 
-TEST(QuGateV3, CloseGateSuccess) {
+TEST(QuGateV3, CloseGateSuccess)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1756,7 +1979,8 @@ TEST(QuGateV3, CloseGateSuccess) {
     EXPECT_EQ(env.state.get()._activeGates, 0ULL);
 }
 
-TEST(QuGateV3, CloseAlreadyClosedGate) {
+TEST(QuGateV3, CloseAlreadyClosedGate)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1769,7 +1993,8 @@ TEST(QuGateV3, CloseAlreadyClosedGate) {
 
 // ---- Ratio overflow protection ----
 
-TEST(QuGateV3, RatioOverMaxRejected) {
+TEST(QuGateV3, RatioOverMaxRejected)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { QUGATE_MAX_RATIO + 1 };
@@ -1779,7 +2004,8 @@ TEST(QuGateV3, RatioOverMaxRejected) {
 
 // ---- AllowedSenderCount > max rejected ----
 
-TEST(QuGateV3, InvalidSenderCountRejected) {
+TEST(QuGateV3, InvalidSenderCountRejected)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1790,7 +2016,8 @@ TEST(QuGateV3, InvalidSenderCountRejected) {
 
 // ---- Insufficient fee refunds ----
 
-TEST(QuGateV3, InsufficientFeeRefundsPayment) {
+TEST(QuGateV3, InsufficientFeeRefundsPayment)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1807,7 +2034,8 @@ TEST(QuGateV3, InsufficientFeeRefundsPayment) {
 static createGate_output makeOracleGate(QuGateTest& env, const id& owner, sint64 fee,
                                          uint8 recipientCount, id* recips,
                                          uint8 oracleCondition, sint64 oracleThreshold,
-                                         uint8 triggerMode = QUGATE_ORACLE_TRIGGER_ONCE) {
+                                         uint8 triggerMode = QUGATE_ORACLE_TRIGGER_ONCE)
+                                         {
     createGate_input in;
     memset(&in, 0, sizeof(in));
     in.chainNextGateId = -1;
@@ -1817,13 +2045,15 @@ static createGate_output makeOracleGate(QuGateTest& env, const id& owner, sint64
     in.oracleThreshold = oracleThreshold;
     in.oracleTriggerMode = triggerMode;
     in.oracleId = QuGateTest::makeId(99); // mock oracle id
-    for (uint8 i = 0; i < recipientCount && i < 8; i++) {
+    for (uint8 i = 0; i < recipientCount && i < 8; i++)
+    {
         in.recipients.set(i, recips[i]);
     }
     return env.createGate(owner, fee, in);
 }
 
-TEST(QuGateOracle, CreateOracleGateSuccess) {
+TEST(QuGateOracle, CreateOracleGateSuccess)
+{
     QuGateTest env;
     id recips[] = { BOB, CHARLIE };
     // Fee = 1000 (creation) + 5000 (oracle reserve) = 6000
@@ -1840,7 +2070,8 @@ TEST(QuGateOracle, CreateOracleGateSuccess) {
     EXPECT_EQ(gate.oracleSubscriptionId, -1);
 }
 
-TEST(QuGateOracle, CreateOracleGateInvalidCondition) {
+TEST(QuGateOracle, CreateOracleGateInvalidCondition)
+{
     QuGateTest env;
     id recips[] = { BOB };
     createGate_input in;
@@ -1854,7 +2085,8 @@ TEST(QuGateOracle, CreateOracleGateInvalidCondition) {
     EXPECT_EQ(out.status, QUGATE_INVALID_ORACLE_CONFIG);
 }
 
-TEST(QuGateOracle, CreateOracleGateZeroThreshold) {
+TEST(QuGateOracle, CreateOracleGateZeroThreshold)
+{
     QuGateTest env;
     id recips[] = { BOB };
     createGate_input in;
@@ -1868,7 +2100,8 @@ TEST(QuGateOracle, CreateOracleGateZeroThreshold) {
     EXPECT_EQ(out.status, QUGATE_INVALID_ORACLE_CONFIG);
 }
 
-TEST(QuGateOracle, FundGateSuccess) {
+TEST(QuGateOracle, FundGateSuccess)
+{
     QuGateTest env;
     id recips[] = { BOB };
     auto gateOut = makeOracleGate(env, ALICE, 2000, 1, recips,
@@ -1887,7 +2120,8 @@ TEST(QuGateOracle, FundGateSuccess) {
     EXPECT_EQ(gate.oracleReserve, 4000); // 1000 + 3000
 }
 
-TEST(QuGateOracle, FundGateNonOracle) {
+TEST(QuGateOracle, FundGateNonOracle)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -1901,13 +2135,15 @@ TEST(QuGateOracle, FundGateNonOracle) {
     EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 3000);
 }
 
-TEST(QuGateOracle, FundGateInvalidId) {
+TEST(QuGateOracle, FundGateInvalidId)
+{
     QuGateTest env;
     auto fundOut = env.fundGate(ALICE, 999, 1000);
     EXPECT_EQ(fundOut.result, QUGATE_INVALID_GATE_ID);
 }
 
-TEST(QuGateOracle, OracleConditionPriceAbove) {
+TEST(QuGateOracle, OracleConditionPriceAbove)
+{
     QuGateTest env;
     id recips[] = { BOB, CHARLIE };
     auto gateOut = makeOracleGate(env, ALICE, 2000, 2, recips,
@@ -1934,7 +2170,8 @@ TEST(QuGateOracle, OracleConditionPriceAbove) {
     EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 500);
 }
 
-TEST(QuGateOracle, OracleConditionPriceBelow) {
+TEST(QuGateOracle, OracleConditionPriceBelow)
+{
     QuGateTest env;
     id recips[] = { BOB };
     auto gateOut = makeOracleGate(env, ALICE, 2000, 1, recips,
@@ -1954,7 +2191,8 @@ TEST(QuGateOracle, OracleConditionPriceBelow) {
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 500);
 }
 
-TEST(QuGateOracle, OracleConditionTimeAfter) {
+TEST(QuGateOracle, OracleConditionTimeAfter)
+{
     QuGateTest env;
     id recips[] = { BOB };
     auto gateOut = makeOracleGate(env, ALICE, 2000, 1, recips,
@@ -1969,7 +2207,8 @@ TEST(QuGateOracle, OracleConditionTimeAfter) {
     EXPECT_EQ(result.distributed, 500);
 }
 
-TEST(QuGateOracle, OracleOnceClosesAfterTrigger) {
+TEST(QuGateOracle, OracleOnceClosesAfterTrigger)
+{
     QuGateTest env;
     id recips[] = { BOB };
     auto gateOut = makeOracleGate(env, ALICE, 2000, 1, recips,
@@ -1992,7 +2231,8 @@ TEST(QuGateOracle, OracleOnceClosesAfterTrigger) {
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 1000); // oracleReserve = 2000-1000 = 1000
 }
 
-TEST(QuGateOracle, OracleRecurringStaysOpen) {
+TEST(QuGateOracle, OracleRecurringStaysOpen)
+{
     QuGateTest env;
     id recips[] = { BOB };
     auto gateOut = makeOracleGate(env, ALICE, 2000, 1, recips,
@@ -2019,7 +2259,8 @@ TEST(QuGateOracle, OracleRecurringStaysOpen) {
     EXPECT_EQ(result.distributed, 500);
 }
 
-TEST(QuGateOracle, OracleReserveExhaustion) {
+TEST(QuGateOracle, OracleReserveExhaustion)
+{
     QuGateTest env;
     id recips[] = { BOB };
     // Only pay creation fee, no extra for reserve
@@ -2031,7 +2272,8 @@ TEST(QuGateOracle, OracleReserveExhaustion) {
     EXPECT_EQ(gate.oracleReserve, 0); // no reserve
 }
 
-TEST(QuGateOracle, CloseOracleGateRefundsReserve) {
+TEST(QuGateOracle, CloseOracleGateRefundsReserve)
+{
     QuGateTest env;
     id recips[] = { BOB };
     auto gateOut = makeOracleGate(env, ALICE, 6000, 1, recips,
@@ -2051,7 +2293,8 @@ TEST(QuGateOracle, CloseOracleGateRefundsReserve) {
     EXPECT_EQ(gate.active, 0);
 }
 
-TEST(QuGateOracle, OracleNoDistributionIfNoBalance) {
+TEST(QuGateOracle, OracleNoDistributionIfNoBalance)
+{
     QuGateTest env;
     id recips[] = { BOB };
     auto gateOut = makeOracleGate(env, ALICE, 2000, 1, recips,
@@ -2073,7 +2316,8 @@ TEST(QuGateOracle, OracleNoDistributionIfNoBalance) {
 // CHAIN GATE TESTS
 // =============================================
 
-TEST(QuGateChain, CreateGateWithChain) {
+TEST(QuGateChain, CreateGateWithChain)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2098,7 +2342,8 @@ TEST(QuGateChain, CreateGateWithChain) {
     EXPECT_EQ(gate.chainDepth, 1);
 }
 
-TEST(QuGateChain, CreateGateChainInvalidTarget) {
+TEST(QuGateChain, CreateGateChainInvalidTarget)
+{
     QuGateTest env;
     createGate_input in;
     memset(&in, 0, sizeof(in));
@@ -2111,7 +2356,8 @@ TEST(QuGateChain, CreateGateChainInvalidTarget) {
     EXPECT_EQ(out.status, QUGATE_INVALID_CHAIN);
 }
 
-TEST(QuGateChain, CreateGateChainDepthLimit) {
+TEST(QuGateChain, CreateGateChainDepthLimit)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2141,7 +2387,8 @@ TEST(QuGateChain, CreateGateChainDepthLimit) {
     EXPECT_EQ(g4.status, QUGATE_INVALID_CHAIN);
 }
 
-TEST(QuGateChain, SetChainSuccess) {
+TEST(QuGateChain, SetChainSuccess)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2158,7 +2405,8 @@ TEST(QuGateChain, SetChainSuccess) {
     EXPECT_EQ(gate.chainDepth, 1);
 }
 
-TEST(QuGateChain, SetChainClearChain) {
+TEST(QuGateChain, SetChainClearChain)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2176,7 +2424,8 @@ TEST(QuGateChain, SetChainClearChain) {
     EXPECT_EQ(env.getGate(g2.gateId).chainDepth, 0);
 }
 
-TEST(QuGateChain, SetChainUnauthorized) {
+TEST(QuGateChain, SetChainUnauthorized)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2189,7 +2438,8 @@ TEST(QuGateChain, SetChainUnauthorized) {
     EXPECT_EQ(out.result, QUGATE_UNAUTHORIZED);
 }
 
-TEST(QuGateChain, SetChainInsufficientFee) {
+TEST(QuGateChain, SetChainInsufficientFee)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2201,7 +2451,8 @@ TEST(QuGateChain, SetChainInsufficientFee) {
     EXPECT_EQ(out.result, QUGATE_INSUFFICIENT_FEE);
 }
 
-TEST(QuGateChain, RouteToGateSingleHop) {
+TEST(QuGateChain, RouteToGateSingleHop)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2215,7 +2466,8 @@ TEST(QuGateChain, RouteToGateSingleHop) {
     EXPECT_EQ(env.qpi.totalBurned, 1000); // hop fee burned
 }
 
-TEST(QuGateChain, RouteToGateTwoHopChain) {
+TEST(QuGateChain, RouteToGateTwoHopChain)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2239,7 +2491,8 @@ TEST(QuGateChain, RouteToGateTwoHopChain) {
     EXPECT_EQ(env.qpi.totalBurned, 2000);
 }
 
-TEST(QuGateChain, InsufficientFundsStrand) {
+TEST(QuGateChain, InsufficientFundsStrand)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2256,7 +2509,8 @@ TEST(QuGateChain, InsufficientFundsStrand) {
     EXPECT_EQ(gate.currentBalance, 500ULL); // accumulated in currentBalance
 }
 
-TEST(QuGateChain, ChainReserveCoversHopFee) {
+TEST(QuGateChain, ChainReserveCoversHopFee)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2278,7 +2532,8 @@ TEST(QuGateChain, ChainReserveCoversHopFee) {
     EXPECT_EQ(env.getGate(g2.gateId).chainReserve, 4000); // 5000 - 1000
 }
 
-TEST(QuGateChain, FundGateChainReserve) {
+TEST(QuGateChain, FundGateChainReserve)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2297,7 +2552,8 @@ TEST(QuGateChain, FundGateChainReserve) {
     EXPECT_EQ(fundOut2.result, QUGATE_INVALID_CHAIN);
 }
 
-TEST(QuGateChain, DeadLinkChainedGateClosed) {
+TEST(QuGateChain, DeadLinkChainedGateClosed)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2318,7 +2574,8 @@ TEST(QuGateChain, DeadLinkChainedGateClosed) {
     // routeChain would handle this — just verify routeToGate doesn't crash
 }
 
-TEST(QuGateChain, GetGateReturnsChainFields) {
+TEST(QuGateChain, GetGateReturnsChainFields)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2340,7 +2597,8 @@ TEST(QuGateChain, GetGateReturnsChainFields) {
     EXPECT_EQ(gate1.chainReserve, 0);
 }
 
-TEST(QuGateChain, CloseGateRefundsChainReserve) {
+TEST(QuGateChain, CloseGateRefundsChainReserve)
+{
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -2358,7 +2616,8 @@ TEST(QuGateChain, CloseGateRefundsChainReserve) {
 
 // ---- END_EPOCH comprehensive expiry test (cyber-pc review request) ----
 
-TEST(QuGateV3, EndEpochExpiryFullLifecycle) {
+TEST(QuGateV3, EndEpochExpiryFullLifecycle)
+{
     // Verifies all END_EPOCH expiry side-effects:
     //   1. Gate marked inactive
     //   2. currentBalance refunded to owner
