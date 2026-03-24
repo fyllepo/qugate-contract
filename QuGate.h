@@ -1985,10 +1985,11 @@ public:
                         }
                     }
                 }
-                else
+                else if (locals.gate.chainNextGateId != -1)
                 {
                     transferred = 1; // No recipient, chain will handle
                 }
+                // else: no recipients AND no chain — funds stay in currentBalance
                 if (transferred)
                 {
                     locals.gate.totalForwarded += (uint64)releaseAmount;
@@ -5988,10 +5989,11 @@ public:
                             }
                         }
                     }
-                    else
+                    else if (locals.gate.chainNextGateId != -1)
                     {
-                        tlTransferred = 1;
+                        tlTransferred = 1; // No recipient, chain will handle
                     }
+                    // else: no recipients AND no chain — funds stay in currentBalance
                     if (tlTransferred)
                     {
                         locals.gate.totalForwarded += (uint64)locals.tlReleaseAmount;
