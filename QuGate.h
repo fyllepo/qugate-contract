@@ -847,7 +847,7 @@ public:
     };
 
     struct processMultisigVote_input { uint64 slotIdx; uint64 gateId; sint64 amount; };
-    struct processMultisigVote_output { sint64 status; uint8 deferredToGate; uint64 deferredGateSlot; sint64 deferredGateAmount; };
+    struct processMultisigVote_output { sint64 status; uint8 deferredToGate; uint64 deferredGateSlot; sint64 deferredGateAmount; uint8 chainForward; sint64 chainForwardAmount; };
     struct processMultisigVote_locals { GateConfig gate; QUGATE_MultisigConfig msigCfg; uint8 foundGuardian; uint8 guardianIdx; QuGateLogger logger; };
 
     struct fundGate_locals
@@ -1988,6 +1988,8 @@ public:
                 else if (locals.gate.chainNextGateId != -1)
                 {
                     transferred = 1; // No recipient, chain will handle
+                    output.chainForward = 1;
+                    output.chainForwardAmount = releaseAmount;
                 }
                 // else: no recipients AND no chain — funds stay in currentBalance
                 if (transferred)
@@ -2482,6 +2484,25 @@ public:
                     routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
                 }
             }
+            // Chain forwarding on MULTISIG release (recipientCount==0 with chain target)
+            if (locals.msigOut.chainForward == 1)
+            {
+                locals.gate = state.get()._gates.get(locals.slotIdx);
+                sint64 currentChainGateId = locals.gate.chainNextGateId;
+                if (currentChainGateId != -1)
+                {
+                    uint64 nextSlot = (uint64)currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
+                    uint64 nextGen = (uint64)currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
+                    if (nextSlot < state.get()._gateCount && nextGen > 0
+                        && state.get()._gateGenerations.get(nextSlot) == (uint16)(nextGen - 1))
+                    {
+                        locals.chainIn.slotIdx = nextSlot;
+                        locals.chainIn.amount = locals.msigOut.chainForwardAmount;
+                        locals.chainIn.hopCount = 0;
+                        routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    }
+                }
+            }
         }
 
         else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
@@ -2893,6 +2914,25 @@ public:
                     locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
                     locals.chainIn.hopCount = locals.savedDeferredHopCount;
                     routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                }
+            }
+            // Chain forwarding on MULTISIG release (recipientCount==0 with chain target)
+            if (locals.msigOut.chainForward == 1)
+            {
+                locals.gate = state.get()._gates.get(locals.slotIdx);
+                sint64 currentChainGateId = locals.gate.chainNextGateId;
+                if (currentChainGateId != -1)
+                {
+                    uint64 nextSlot = (uint64)currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
+                    uint64 nextGen = (uint64)currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
+                    if (nextSlot < state.get()._gateCount && nextGen > 0
+                        && state.get()._gateGenerations.get(nextSlot) == (uint16)(nextGen - 1))
+                    {
+                        locals.chainIn.slotIdx = nextSlot;
+                        locals.chainIn.amount = locals.msigOut.chainForwardAmount;
+                        locals.chainIn.hopCount = 0;
+                        routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    }
                 }
             }
         }
