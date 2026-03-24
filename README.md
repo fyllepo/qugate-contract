@@ -13,7 +13,8 @@ QuGate is a **network primitive** — shared, permissionless payment routing inf
 1. [Overview](#overview)
 2. [Gate Modes](#gate-modes)
 3. [Chain Gates](#chain-gates)
-4. [Gate ID Format](#gate-id-format)
+4. [Gate-as-Recipient](#gate-as-recipient-internal-routing)
+5. [Gate ID Format](#gate-id-format)
 5. [Contract Interface](#contract-interface)
 6. [Wire Format](#wire-format)
 7. [State Architecture](#state-architecture)
@@ -485,6 +486,45 @@ Fund a gate's chain reserve via `fundGate` with `reserveTarget = 1`. The chain r
 
 ---
 
+## Gate-as-Recipient (Internal Routing)
+
+Recipients can be other gates, not just wallets. When a gate distributes funds (SPLIT, ROUND_ROBIN, RANDOM, CONDITIONAL, THRESHOLD), each share can route internally to another gate via `routeToGate()` instead of `qpi.transfer()`.
+
+### How it works
+
+Each gate has a parallel array `recipientGateIds[8]` alongside `recipients[8]`:
+- `recipientGateIds[i] == -1` → wallet recipient (use `recipients[i]` address, existing behaviour)
+- `recipientGateIds[i] >= 0` → gate recipient (route share to that versioned gate ID)
+
+### Example: Lottery with house rake
+
+```
+Jackpot Pool (THRESHOLD 10M QU)
+  → chains to → House Rake (SPLIT: 5% wallet, 95% gate)
+                  → 5% → House wallet (qpi.transfer)
+                  → 95% → Winner Selection (RANDOM: 6 players, via routeToGate)
+```
+
+### Validation
+
+- Gate recipient IDs are validated at create/update time (must be active, correct generation)
+- Invalid/closed gate recipients at send time silently retain funds in the contract
+- Returns `QUGATE_INVALID_GATE_RECIPIENT` (-28) on invalid IDs at creation
+
+### Deferred routing pattern
+
+Mode processors (processSplit, etc.) cannot call `routeToGate` directly (circular struct dependency). Instead, they populate deferred output fields. The caller (`sendToGate`, `sendToGateVerified`, `OraclePriceNotification`) dispatches the deferred routing after the mode processor returns.
+
+### Interaction with chain forwarding
+
+Gate-as-recipient and chain forwarding are independent:
+- **Chain forwarding** (`chainNextGateId`): forwards *remaining balance* after distribution
+- **Gate-as-recipient** (`recipientGateIds`): routes *individual shares* during distribution
+
+Both can be used on the same gate. A SPLIT gate can send 5% to a wallet, 95% to a gate-recipient, and chain its remaining balance to another gate.
+
+---
+
 ## Gate ID Format
 
 Gate IDs use a versioned encoding to prevent slot-reuse squatting attacks:
@@ -938,23 +978,29 @@ Read-only query for admin gate configuration on a gate.
 
 All data is little-endian. Public keys (`id`) are 32 bytes. `Array<T, N>` is serialized as N contiguous elements with no length prefix.
 
-### createGate_input Layout (~600 bytes)
+### createGate_input Layout (784 bytes)
 
 ```
 Offset  Size   Field
 ------  -----  -----
 0       1      mode (uint8)
 1       1      recipientCount (uint8)
-+pad    ...    (compiler alignment padding to Array boundary)
-        256    recipients[8] (8 x 32-byte pubkeys)
-        64     ratios[8] (8 x uint64)
-        8      threshold (uint64)
-        256    allowedSenders[8] (8 x 32-byte pubkeys)
-        1      allowedSenderCount (uint8)
-+pad    ...    (trailing padding)
+8       256    recipients[8] (8 x 32-byte pubkeys)
+264     64     ratios[8] (8 x uint64)
+328     8      threshold (uint64)
+336     256    allowedSenders[8] (8 x 32-byte pubkeys)
+592     1      allowedSenderCount (uint8)
+600     32     oracleId (id)
+632     32     oracleCurrency1 (id)
+664     32     oracleCurrency2 (id)
+696     1      oracleCondition (uint8)
+697     1      oracleTriggerMode (uint8)
+704     8      oracleThreshold (sint64)
+712     8      chainNextGateId (sint64, -1 = no chain)
+720     64     recipientGateIds[8] (8 x sint64, -1 = wallet)
 ```
 
-### updateGate_input Layout (~608 bytes)
+### updateGate_input Layout (672 bytes)
 
 ```
 Offset  Size   Field
@@ -1175,6 +1221,14 @@ The `TIME_AFTER` condition type (oracle condition 2) interprets the oracle reply
 
 The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_EPOCH`, and oracle ONCE-mode auto-close prevents underflow from double-close scenarios.
 
+### Transfer-First State Updates [QG-01..QG-17]
+
+All `qpi.transfer()` calls that move funds (to recipients, owners, beneficiaries) check the return value (`>= 0`) before updating state. If a transfer fails, state remains unchanged — no funds are lost or double-counted. Error-path refunds (returning `invocationReward` on validation failure) don't need this pattern since no state mutation precedes them.
+
+### Single invocationReward Capture
+
+Every public procedure captures `qpi.invocationReward()` into `locals.invReward` at entry. All subsequent references use the cached value. This prevents inconsistencies if the value were to change between calls and simplifies audit of refund paths.
+
 ---
 
 ## Edge Cases and Safety
@@ -1254,6 +1308,7 @@ No QU can be permanently locked in the contract (assuming the owner retains acce
 | -25 | `QUGATE_TIME_LOCK_EPOCH_PAST` | unlockEpoch is in the past at configuration time |
 | -26 | `QUGATE_ADMIN_GATE_REQUIRED` | Config change needs admin gate approval |
 | -27 | `QUGATE_INVALID_ADMIN_GATE` | adminGateId doesn't exist or isn't MULTISIG mode |
+| -28 | `QUGATE_INVALID_GATE_RECIPIENT` | recipientGateIds entry is invalid (bad slot/gen/inactive) |
 
 ---
 
@@ -1425,24 +1480,27 @@ See `TESTNET_RESULTS.md` for detailed results.
 
 9. **No refund mechanism for THRESHOLD below target.** If a THRESHOLD gate never reaches its target, funds are held until the owner closes the gate or the gate expires. There is no "cancel and refund senders" mechanism — held balance goes to the gate owner.
 
+10. **Gate-as-recipient routing through chain hops.** When a gate-recipient target is accessed through chain forwarding (depth 2+), deferred dispatch is bounded to one level of nesting. Deeply nested gate-recipient chains (gate A → chain to gate B → gate-recipient gate C → gate-recipient gate D) may not fully propagate beyond 2 hops. Direct sends to gates with gate-recipients work correctly at any depth up to `MAX_CHAIN_DEPTH`.
+
 ---
 
 ## File Listing
 
 | File | Description |
 |------|-------------|
-| `QuGate.h` | Contract source code (QPI-compliant) |
-| `contract_qugate.cpp` | Test suite (50+ unit tests, Google Test) |
+| `QuGate.h` | Contract source code (QPI-compliant, ~5500 lines) |
+| `contract_qugate.cpp` | Unit test suite (70 tests, Google Test, Allman brace style) |
 | `README.md` | Technical reference (this file) |
 | `TESTNET_RESULTS.md` | Testnet verification results |
-| `tests/` | Python testnet test scripts (17 scripts incl. test_heartbeat.py, test_multisig.py) |
-| `.github/workflows/` | CI: contract verification |
+| `tests/` | Python integration test scripts (17 scripts, require live testnet node) |
+| `tests/conftest.py` | Pytest config — skips integration tests when no node available |
+| `.github/workflows/` | CI: contract verification, style lint, integration tests |
 
 ---
 
 ## QPI Compliance
 
-QuGate is written to pass `qubic-contract-verify` with one known exception (the preprocessor guard).
+QuGate is written to pass `qubic-contract-verify`. The `#ifndef CONTRACT_INDEX` preprocessor guard was removed; testnet builds pass the index via cmake flags (`-DCONTRACT_INDEX=26`). The oracle template syntax (`OracleNotificationInput<OI::Price>`) is flagged by the verifier (v0.3.0-beta limitation — does not support templates).
 
 | Requirement | Status |
 |-------------|--------|
