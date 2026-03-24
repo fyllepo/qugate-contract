@@ -1135,6 +1135,12 @@ public:
         routeToGate_output chainOut;
         routeToGate_locals chainLocals;
         GateConfig nextChainGate;
+        // Gate-as-recipient deferred dispatch temps
+        uint8 savedDeferredCount;
+        uint8 savedDeferredHopCount;
+        uint8 deferredDispatchIdx;
+        Array<uint64, 8> savedDeferredSlots;
+        Array<sint64, 8> savedDeferredAmounts;
     };
 
     struct BEGIN_EPOCH_locals
