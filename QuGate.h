@@ -5897,10 +5897,36 @@ public:
                     locals.gate = state.get()._gates.get(locals.i);
                     if ((sint64)locals.gate.currentBalance <= locals.inhCfg.minimumBalance)
                     {
-                        // Refund any remaining dust to owner rather than lose it
-                        if (locals.gate.currentBalance > 0)
+                        // Distribute remaining balance to beneficiaries (owner may be deceased in inheritance use case)
+                        if (locals.gate.currentBalance > 0 && locals.inhCfg.beneficiaryCount > 0)
                         {
-                            if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-16]
+                            sint64 dustTotal = (sint64)locals.gate.currentBalance;
+                            locals.inhPriorSum = 0;
+                            for (locals.inhJ = 0; locals.inhJ < locals.inhCfg.beneficiaryCount; locals.inhJ++)
+                            {
+                                if (locals.inhJ == locals.inhCfg.beneficiaryCount - 1)
+                                {
+                                    locals.inhShare = dustTotal - locals.inhPriorSum;
+                                }
+                                else
+                                {
+                                    locals.inhShare = (sint64)QPI::div((uint64)(dustTotal * (sint64)locals.inhCfg.beneficiaryShares.get(locals.inhJ)), (uint64)100);
+                                    locals.inhPriorSum += locals.inhShare;
+                                }
+                                if (locals.inhShare > 0)
+                                {
+                                    if (qpi.transfer(locals.inhCfg.beneficiaryAddresses.get(locals.inhJ), locals.inhShare) >= 0) // [QG-16]
+                                    {
+                                        locals.gate.totalForwarded += (uint64)locals.inhShare;
+                                        locals.gate.currentBalance -= (uint64)locals.inhShare;
+                                    }
+                                }
+                            }
+                        }
+                        else if (locals.gate.currentBalance > 0)
+                        {
+                            // No beneficiaries configured — refund to owner as fallback
+                            if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0)
                             {
                                 locals.gate.currentBalance = 0;
                             }
