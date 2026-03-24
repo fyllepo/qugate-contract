@@ -46,12 +46,9 @@
 
 using namespace QPI;
 
-// Contract index — Pulse took index 24, QuGate uses 25
-// NOTE: The preprocessor guard below must be removed before mainnet submission.
-// qubic-contract-verify will flag it. It is only here for testnet flexibility.
-#ifndef CONTRACT_INDEX
-#define CONTRACT_INDEX 26
-#endif
+// Contract index — assigned by core after proposal approval.
+// When building testnet locally, pass -DCONTRACT_INDEX=26 via cmake flags
+// instead of modifying this file (qubic-contract-verify rejects preprocessor directives).
 
 // Capacity scales with network via X_MULTIPLIER
 constexpr uint64 QUGATE_INITIAL_MAX_GATES = 256;  // testnet size; scale up for mainnet
