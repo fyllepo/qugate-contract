@@ -555,6 +555,48 @@ public:
         uint64 count;
     };
 
+    // Query gate by raw slot index (no generation validation).
+    // Returns gate data regardless of active/closed/recycled state.
+    // Useful for listing all gates including closed ones.
+    struct getGateBySlot_input
+    {
+        uint64 slotIndex;
+    };
+    struct getGateBySlot_output
+    {
+        uint8 valid;            // 1 if slot is within gateCount range
+        uint64 gateId;          // current versioned gate ID for this slot
+        uint16 generation;      // current generation counter
+        // Same fields as getGate_output:
+        uint8 mode;
+        uint8 recipientCount;
+        uint8 active;
+        id owner;
+        uint64 totalReceived;
+        uint64 totalForwarded;
+        uint64 currentBalance;
+        uint64 threshold;
+        uint16 createdEpoch;
+        uint16 lastActivityEpoch;
+        Array<id, 8> recipients;
+        Array<uint64, 8> ratios;
+        Array<id, 8> allowedSenders;
+        uint8 allowedSenderCount;
+        sint64 oracleReserve;
+        sint32 oracleSubscriptionId;
+        sint64 chainNextGateId;
+        sint64 chainReserve;
+        uint8  chainDepth;
+        sint64 adminGateId;
+        uint8  hasAdminGate;
+        Array<sint64, 8> recipientGateIds;
+    };
+    struct getGateBySlot_locals
+    {
+        GateConfig gate;
+        uint64 i;
+    };
+
     // Query TIME_LOCK state for a gate.
     struct getTimeLockState_input
     {
@@ -5560,13 +5602,55 @@ public:
         }
     }
 
+    // getGateBySlot — read gate data by raw slot index, no generation check
+    PUBLIC_FUNCTION_WITH_LOCALS(getGateBySlot)
+    {
+        output.valid = 0;
+        if (input.slotIndex >= state.get()._gateCount)
+        {
+            return;
+        }
+
+        output.valid = 1;
+        output.generation = state.get()._gateGenerations.get(input.slotIndex);
+        output.gateId = ((uint64)(output.generation + 1) << QUGATE_GATE_ID_SLOT_BITS) | input.slotIndex;
+
+        locals.gate = state.get()._gates.get(input.slotIndex);
+        output.mode = locals.gate.mode;
+        output.recipientCount = locals.gate.recipientCount;
+        output.active = locals.gate.active;
+        output.owner = locals.gate.owner;
+        output.totalReceived = locals.gate.totalReceived;
+        output.totalForwarded = locals.gate.totalForwarded;
+        output.currentBalance = locals.gate.currentBalance;
+        output.threshold = locals.gate.threshold;
+        output.createdEpoch = locals.gate.createdEpoch;
+        output.lastActivityEpoch = locals.gate.lastActivityEpoch;
+        output.allowedSenderCount = locals.gate.allowedSenderCount;
+        output.oracleReserve = locals.gate.oracleReserve;
+        output.oracleSubscriptionId = locals.gate.oracleSubscriptionId;
+        output.chainNextGateId = locals.gate.chainNextGateId;
+        output.chainReserve = locals.gate.chainReserve;
+        output.chainDepth = locals.gate.chainDepth;
+        output.adminGateId = locals.gate.adminGateId;
+        output.hasAdminGate = locals.gate.hasAdminGate;
+
+        for (locals.i = 0; locals.i < 8; locals.i++)
+        {
+            output.recipients.set(locals.i, locals.gate.recipients.get(locals.i));
+            output.ratios.set(locals.i, locals.gate.ratios.get(locals.i));
+            output.allowedSenders.set(locals.i, locals.gate.allowedSenders.get(locals.i));
+            output.recipientGateIds.set(locals.i, locals.gate.recipientGateIds.get(locals.i));
+        }
+    }
+
     // =============================================
     // Registration
     // =============================================
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
     {
-        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState 18=configureTimeLock 19=cancelTimeLock 20=getTimeLockState 21=setAdminGate 22=getAdminGate 23=withdrawReserve 24=getGatesByMode
+        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState 18=configureTimeLock 19=cancelTimeLock 20=getTimeLockState 21=setAdminGate 22=getAdminGate 23=withdrawReserve 24=getGatesByMode 25=getGateBySlot
         REGISTER_USER_PROCEDURE(createGate, 1);
         REGISTER_USER_PROCEDURE(sendToGate, 2);
         REGISTER_USER_PROCEDURE(closeGate, 3);
@@ -5591,6 +5675,7 @@ public:
         REGISTER_USER_FUNCTION(getAdminGate, 22);
         REGISTER_USER_PROCEDURE(withdrawReserve, 23);
         REGISTER_USER_FUNCTION(getGatesByMode, 24);
+        REGISTER_USER_FUNCTION(getGateBySlot, 25);
         REGISTER_USER_PROCEDURE_NOTIFICATION(OraclePriceNotification);
     }
 
