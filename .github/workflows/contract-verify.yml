@@ -9,6 +9,15 @@ on:
   pull_request:
 
 jobs:
+  contract-guard:
+    runs-on: ubuntu-latest
+    name: Contract guard rails
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Run guard checks
+        run: python3 scripts/contract_guard.py
+
   # ── Contract verification ──────────────────────────────────────────────
   contract-verify:
     runs-on: ubuntu-latest

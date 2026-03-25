@@ -55,6 +55,12 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 - `contract_qugate.cpp` — 70 unit tests (Google Test, Allman style)
 - `tests/` — 17 Python integration tests (require live testnet node at 127.0.0.1:41841)
 - CI: style lint ✅, integration tests skip in CI ✅, contract-verify allows oracle template failure
+- Guard rails: `scripts/contract_guard.py` checks harness constant drift, public-function/private-procedure misuse, and warns on large locals hotspots
+
+## Refactor Guard Rails
+- Run `python3 scripts/contract_guard.py` before pushing structural changes to `QuGate.h`
+- Dedupe is secondary to locals-size safety; avoid embedding large `*_locals` trees inside public `*_locals`
+- Any refactor that touches routing/auth helpers should be validated against core-lite before it is treated as safe
 
 ## Files
 | File | Purpose |
