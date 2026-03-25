@@ -2624,6 +2624,21 @@ public:
                     locals.chainIn.amount = chainAmount;
                     locals.chainIn.hopCount = hop;
                     routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    // Dispatch deferred gate-as-recipient routing from chain hop
+                    locals.savedDeferredCount = locals.chainOut.deferredCount;
+                    locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                    {
+                        locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                        locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
+                    }
+                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                    {
+                        locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                        locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                        locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                        routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    }
                     chainAmount = locals.chainOut.forwarded;
                     locals.nextChainGate = state.get()._gates.get(nextSlot);
                     currentChainGateId = locals.nextChainGate.chainNextGateId;
@@ -3055,6 +3070,21 @@ public:
                     locals.chainIn.amount = chainAmount;
                     locals.chainIn.hopCount = hop;
                     routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    // Dispatch deferred gate-as-recipient routing from chain hop
+                    locals.savedDeferredCount = locals.chainOut.deferredCount;
+                    locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                    {
+                        locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                        locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
+                    }
+                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                    {
+                        locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                        locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                        locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                        routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    }
                     chainAmount = locals.chainOut.forwarded;
                     locals.nextChainGate = state.get()._gates.get(nextSlot);
                     currentChainGateId = locals.nextChainGate.chainNextGateId;
@@ -3863,6 +3893,21 @@ public:
                     locals.chainIn.amount = chainAmount;
                     locals.chainIn.hopCount = hop;
                     routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    // Dispatch deferred gate-as-recipient routing from chain hop
+                    locals.savedDeferredCount = locals.chainOut.deferredCount;
+                    locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                    {
+                        locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                        locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
+                    }
+                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                    {
+                        locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                        locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                        locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                        routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    }
                     chainAmount = locals.chainOut.forwarded;
                     // Read updated gate to get its chainNextGateId
                     locals.nextChainGate = state.get()._gates.get(nextSlot);
