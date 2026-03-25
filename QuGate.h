@@ -740,6 +740,37 @@ public:
     // Locals — all variables declared here, not inline
     // =============================================
 
+    struct resolveGateId_input
+    {
+        uint64 gateId;
+    };
+    struct resolveGateId_output
+    {
+        uint8 valid;
+        uint64 slotIdx;
+    };
+    struct resolveGateId_locals
+    {
+        uint64 encodedGen;
+    };
+
+    struct resolveActiveGateId_input
+    {
+        sint64 gateId;
+    };
+    struct resolveActiveGateId_output
+    {
+        uint8 valid;
+        uint64 slotIdx;
+    };
+    struct resolveActiveGateId_locals
+    {
+        resolveGateId_input gateIdIn;
+        resolveGateId_output gateIdOut;
+        resolveGateId_locals gateIdLocals;
+        GateConfig gate;
+    };
+
     struct createGate_locals
     {
         sint64 invReward;
@@ -907,37 +938,6 @@ public:
         resolveAdminGate_input adminIn;
         resolveAdminGate_output adminOut;
         resolveAdminGate_locals adminLocals;
-    };
-
-    struct resolveGateId_input
-    {
-        uint64 gateId;
-    };
-    struct resolveGateId_output
-    {
-        uint8 valid;
-        uint64 slotIdx;
-    };
-    struct resolveGateId_locals
-    {
-        uint64 encodedGen;
-    };
-
-    struct resolveActiveGateId_input
-    {
-        sint64 gateId;
-    };
-    struct resolveActiveGateId_output
-    {
-        uint8 valid;
-        uint64 slotIdx;
-    };
-    struct resolveActiveGateId_locals
-    {
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
-        GateConfig gate;
     };
 
     struct clearGateModeState_input
