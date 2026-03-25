@@ -218,13 +218,13 @@ struct TestQpiContext {
 // the contract exactly.
 
 // Pull in constants and structures from QuGate.h
-constexpr uint64 QUGATE_INITIAL_MAX_GATES = 4096;
+constexpr uint64 QUGATE_INITIAL_MAX_GATES = 256;
 constexpr uint64 QUGATE_MAX_GATES = QUGATE_INITIAL_MAX_GATES * 1; // X_MULTIPLIER=1
 constexpr uint64 QUGATE_MAX_RECIPIENTS = 8;
 constexpr uint64 QUGATE_MAX_RATIO = 10000;
 
-constexpr uint64 QUGATE_DEFAULT_CREATION_FEE = 1000;
-constexpr uint64 QUGATE_DEFAULT_MIN_SEND = 10;
+constexpr uint64 QUGATE_DEFAULT_CREATION_FEE = 100000;
+constexpr uint64 QUGATE_DEFAULT_MIN_SEND = 1000;
 constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
 constexpr uint64 QUGATE_DEFAULT_EXPIRY_EPOCHS = 50;
 
