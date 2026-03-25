@@ -740,37 +740,6 @@ public:
     // Locals — all variables declared here, not inline
     // =============================================
 
-    struct resolveGateId_input
-    {
-        uint64 gateId;
-    };
-    struct resolveGateId_output
-    {
-        uint8 valid;
-        uint64 slotIdx;
-    };
-    struct resolveGateId_locals
-    {
-        uint64 encodedGen;
-    };
-
-    struct resolveActiveGateId_input
-    {
-        sint64 gateId;
-    };
-    struct resolveActiveGateId_output
-    {
-        uint8 valid;
-        uint64 slotIdx;
-    };
-    struct resolveActiveGateId_locals
-    {
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
-        GateConfig gate;
-    };
-
     struct createGate_locals
     {
         sint64 invReward;
@@ -780,12 +749,6 @@ public:
         uint64 i;
         uint64 slotIdx;
         uint64 currentFee;     // escalated fee
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
-        resolveActiveGateId_input activeGateIn;
-        resolveActiveGateId_output activeGateOut;
-        resolveActiveGateId_locals activeGateLocals;
     };
 
     struct processSplit_input
@@ -808,9 +771,6 @@ public:
         uint64 share;
         uint64 distributed;
         uint64 i;
-        resolveActiveGateId_input activeGateIn;
-        resolveActiveGateId_output activeGateOut;
-        resolveActiveGateId_locals activeGateLocals;
     };
 
     struct processRoundRobin_input
@@ -829,9 +789,6 @@ public:
     struct processRoundRobin_locals
     {
         GateConfig gate;
-        resolveActiveGateId_input activeGateIn;
-        resolveActiveGateId_output activeGateOut;
-        resolveActiveGateId_locals activeGateLocals;
     };
 
     struct processThreshold_input
@@ -850,9 +807,6 @@ public:
     struct processThreshold_locals
     {
         GateConfig gate;
-        resolveActiveGateId_input activeGateIn;
-        resolveActiveGateId_output activeGateOut;
-        resolveActiveGateId_locals activeGateLocals;
     };
 
     struct processRandom_input
@@ -872,9 +826,6 @@ public:
     {
         GateConfig gate;
         uint64 recipientIdx;
-        resolveActiveGateId_input activeGateIn;
-        resolveActiveGateId_output activeGateOut;
-        resolveActiveGateId_locals activeGateLocals;
     };
 
     struct processConditional_input
@@ -896,100 +847,6 @@ public:
         GateConfig gate;
         uint64 i;
         uint8 senderAllowed;
-        resolveActiveGateId_input activeGateIn;
-        resolveActiveGateId_output activeGateOut;
-        resolveActiveGateId_locals activeGateLocals;
-    };
-
-    struct resolveAdminGate_input
-    {
-        sint64 adminGateId;
-        uint8 requireApproval;
-    };
-    struct resolveAdminGate_output
-    {
-        uint8 valid;
-        uint8 approved;
-        uint64 adminSlot;
-    };
-    struct resolveAdminGate_locals
-    {
-        uint64 encodedGen;
-        GateConfig gate;
-        QUGATE_MultisigConfig msCfg;
-    };
-
-    struct requireOwnerOrAdmin_input
-    {
-        id owner;
-        uint8 hasAdminGate;
-        sint64 adminGateId;
-        sint64 missingAdminStatus;
-        sint64 deniedStatus;
-    };
-    struct requireOwnerOrAdmin_output
-    {
-        uint8 authorized;
-        uint8 usedAdminApproval;
-        sint64 status;
-    };
-    struct requireOwnerOrAdmin_locals
-    {
-        resolveAdminGate_input adminIn;
-        resolveAdminGate_output adminOut;
-        resolveAdminGate_locals adminLocals;
-    };
-
-    struct clearGateModeState_input
-    {
-        uint64 slotIdx;
-        uint8 mode;
-    };
-    struct clearGateModeState_output
-    {
-    };
-    struct clearGateModeState_locals
-    {
-        uint8 i;
-        QUGATE_HeartbeatConfig hbZeroCfg;
-        QUGATE_MultisigConfig msigZeroCfg;
-        QUGATE_TimeLockConfig tlZeroCfg;
-    };
-
-    struct retireGateSlot_input
-    {
-        uint64 slotIdx;
-        uint8 refundCurrentBalance;
-        uint8 refundOracleReserve;
-        uint8 unsubscribeOracle;
-        uint8 refundChainReserve;
-        uint8 clearModeState;
-    };
-    struct retireGateSlot_output
-    {
-    };
-    struct retireGateSlot_locals
-    {
-        GateConfig gate;
-        clearGateModeState_input clearIn;
-        clearGateModeState_output clearOut;
-        clearGateModeState_locals clearLocals;
-    };
-
-    struct expireInactiveGate_input
-    {
-        uint64 slotIdx;
-    };
-    struct expireInactiveGate_output
-    {
-        uint8 expired;
-    };
-    struct expireInactiveGate_locals
-    {
-        GateConfig gate;
-        retireGateSlot_input retireIn;
-        retireGateSlot_output retireOut;
-        retireGateSlot_locals retireLocals;
     };
 
 
@@ -1031,51 +888,9 @@ public:
         processConditional_locals condLocals;
     };
 
-    struct dispatchDeferredGateRecipients_input
-    {
-        uint8 deferredCount;
-        Array<uint64, 8> deferredGateSlots;
-        Array<sint64, 8> deferredGateAmounts;
-        uint8 deferredHopCount;
-    };
-    struct dispatchDeferredGateRecipients_output
-    {
-    };
-    struct dispatchDeferredGateRecipients_locals
-    {
-        uint8 deferredDispatchIdx;
-        routeToGate_input chainIn;
-        routeToGate_output chainOut;
-        routeToGate_locals chainLocals;
-    };
-
-    struct forwardChainAmount_input
-    {
-        sint64 chainNextGateId;
-        sint64 amount;
-    };
-    struct forwardChainAmount_output
-    {
-        sint64 remainingAmount;
-    };
-    struct forwardChainAmount_locals
-    {
-        sint64 currentChainGateId;
-        uint8 hop;
-        uint64 nextSlot;
-        uint64 nextGen;
-        GateConfig nextChainGate;
-        routeToGate_input chainIn;
-        routeToGate_output chainOut;
-        routeToGate_locals chainLocals;
-        dispatchDeferredGateRecipients_input deferredIn;
-        dispatchDeferredGateRecipients_output deferredOut;
-        dispatchDeferredGateRecipients_locals deferredLocals;
-    };
-
     struct processMultisigVote_input { uint64 slotIdx; uint64 gateId; sint64 amount; };
     struct processMultisigVote_output { sint64 status; uint8 deferredToGate; uint64 deferredGateSlot; sint64 deferredGateAmount; uint8 chainForward; sint64 chainForwardAmount; };
-    struct processMultisigVote_locals { GateConfig gate; QUGATE_MultisigConfig msigCfg; uint8 foundGuardian; uint8 guardianIdx; QuGateLogger logger; resolveActiveGateId_input activeGateIn; resolveActiveGateId_output activeGateOut; resolveActiveGateId_locals activeGateLocals; };
+    struct processMultisigVote_locals { GateConfig gate; QUGATE_MultisigConfig msigCfg; uint8 foundGuardian; uint8 guardianIdx; QuGateLogger logger; };
 
     struct fundGate_locals
     {
@@ -1084,12 +899,6 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
-        expireInactiveGate_input expireIn;
-        expireInactiveGate_output expireOut;
-        expireInactiveGate_locals expireLocals;
     };
 
     struct setChain_locals
@@ -1100,24 +909,15 @@ public:
         GateConfig targetGate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         uint64 targetSlot;
         uint64 targetEncodedGen;
         uint8 newDepth;
         uint64 walkSlot;
         uint8 walkStep;
         GateConfig walkGate;
-        resolveAdminGate_input adminIn;
-        resolveAdminGate_output adminOut;
-        resolveAdminGate_locals adminLocals;
-        requireOwnerOrAdmin_input authIn;
-        requireOwnerOrAdmin_output authOut;
-        requireOwnerOrAdmin_locals authLocals;
-        expireInactiveGate_input expireIn;
-        expireInactiveGate_output expireOut;
-        expireInactiveGate_locals expireLocals;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct sendToGateVerified_locals
@@ -1128,9 +928,6 @@ public:
         sint64 amount;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         processSplit_input splitIn;
         processSplit_output splitOut;
         processSplit_locals splitLocals;
@@ -1149,21 +946,20 @@ public:
         routeToGate_input chainIn;
         routeToGate_output chainOut;
         routeToGate_locals chainLocals;
-        dispatchDeferredGateRecipients_input deferredIn;
-        dispatchDeferredGateRecipients_output deferredOut;
-        dispatchDeferredGateRecipients_locals deferredLocals;
-        forwardChainAmount_input forwardIn;
-        forwardChainAmount_output forwardOut;
-        forwardChainAmount_locals forwardLocals;
+        // Chain forwarding
+        GateConfig nextChainGate;
+        // Saved deferred gate-recipients from chain hops (snapshot before dispatch)
+        uint8 savedDeferredCount;
+        Array<uint64, 8> savedDeferredSlots;
+        Array<sint64, 8> savedDeferredAmounts;
+        uint8 savedDeferredHopCount;
+        uint8 deferredDispatchIdx;
         // Multisig processing
         processMultisigVote_input msigIn;
         processMultisigVote_output msigOut;
         processMultisigVote_locals msigLocals;
         // TIME_LOCK processing
         QUGATE_TimeLockConfig tlCfg;
-        expireInactiveGate_input expireIn;
-        expireInactiveGate_output expireOut;
-        expireInactiveGate_locals expireLocals;
     };
 
     struct sendToGate_locals
@@ -1174,9 +970,6 @@ public:
         sint64 amount;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         processSplit_input splitIn;
         processSplit_output splitOut;
         processSplit_locals splitLocals;
@@ -1196,21 +989,19 @@ public:
         routeToGate_input chainIn;
         routeToGate_output chainOut;
         routeToGate_locals chainLocals;
-        dispatchDeferredGateRecipients_input deferredIn;
-        dispatchDeferredGateRecipients_output deferredOut;
-        dispatchDeferredGateRecipients_locals deferredLocals;
-        forwardChainAmount_input forwardIn;
-        forwardChainAmount_output forwardOut;
-        forwardChainAmount_locals forwardLocals;
+        GateConfig nextChainGate;
+        // Saved deferred gate-recipients from chain hops (snapshot before dispatch)
+        uint8 savedDeferredCount;
+        Array<uint64, 8> savedDeferredSlots;
+        Array<sint64, 8> savedDeferredAmounts;
+        uint8 savedDeferredHopCount;
+        uint8 deferredDispatchIdx;
         // Multisig processing
         processMultisigVote_input msigIn;
         processMultisigVote_output msigOut;
         processMultisigVote_locals msigLocals;
         // TIME_LOCK processing
         QUGATE_TimeLockConfig tlCfg;
-        expireInactiveGate_input expireIn;
-        expireInactiveGate_output expireOut;
-        expireInactiveGate_locals expireLocals;
     };
 
     struct closeGate_locals
@@ -1220,18 +1011,12 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
-        expireInactiveGate_input expireIn;
-        expireInactiveGate_output expireOut;
-        expireInactiveGate_locals expireLocals;
-        requireOwnerOrAdmin_input authIn;
-        requireOwnerOrAdmin_output authOut;
-        requireOwnerOrAdmin_locals authLocals;
-        retireGateSlot_input retireIn;
-        retireGateSlot_output retireOut;
-        retireGateSlot_locals retireLocals;
+        QUGATE_HeartbeatConfig hbZeroCfg;
+        QUGATE_MultisigConfig msigZeroCfg;
+        QUGATE_TimeLockConfig tlZeroCfg;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct updateGate_locals
@@ -1243,21 +1028,9 @@ public:
         uint64 i;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
-        resolveAdminGate_input adminIn;
-        resolveAdminGate_output adminOut;
-        resolveAdminGate_locals adminLocals;
-        requireOwnerOrAdmin_input authIn;
-        requireOwnerOrAdmin_output authOut;
-        requireOwnerOrAdmin_locals authLocals;
-        resolveActiveGateId_input activeGateIn;
-        resolveActiveGateId_output activeGateOut;
-        resolveActiveGateId_locals activeGateLocals;
-        expireInactiveGate_input expireIn;
-        expireInactiveGate_output expireOut;
-        expireInactiveGate_locals expireLocals;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct getGate_locals
@@ -1266,9 +1039,6 @@ public:
         uint64 i;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
     };
 
     struct getGateBatch_locals                           //
@@ -1279,9 +1049,6 @@ public:
         getGate_output entry;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
     };
 
     struct getGatesByOwner_locals
@@ -1308,20 +1075,11 @@ public:
         routeToGate_input rtIn;
         routeToGate_output rtOut;
         routeToGate_locals rtLocals;
-        forwardChainAmount_input forwardIn;
-        forwardChainAmount_output forwardOut;
-        forwardChainAmount_locals forwardLocals;
         // Multisig processing
         QUGATE_MultisigConfig msigCfg;
         // TIME_LOCK processing
         QUGATE_TimeLockConfig tlCfg;
         sint64 tlReleaseAmount;
-        resolveActiveGateId_input activeGateIn;
-        resolveActiveGateId_output activeGateOut;
-        resolveActiveGateId_locals activeGateLocals;
-        retireGateSlot_input retireIn;
-        retireGateSlot_output retireOut;
-        retireGateSlot_locals retireLocals;
     };
 
     struct configureTimeLock_locals
@@ -1331,16 +1089,10 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         QUGATE_TimeLockConfig cfg;
-        resolveAdminGate_input adminIn;
-        resolveAdminGate_output adminOut;
-        resolveAdminGate_locals adminLocals;
-        requireOwnerOrAdmin_input authIn;
-        requireOwnerOrAdmin_output authOut;
-        requireOwnerOrAdmin_locals authLocals;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct cancelTimeLock_locals
@@ -1350,20 +1102,11 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         QUGATE_TimeLockConfig cfg;
         QUGATE_TimeLockConfig zeroCfg;
-        resolveAdminGate_input adminIn;
-        resolveAdminGate_output adminOut;
-        resolveAdminGate_locals adminLocals;
-        requireOwnerOrAdmin_input authIn;
-        requireOwnerOrAdmin_output authOut;
-        requireOwnerOrAdmin_locals authLocals;
-        retireGateSlot_input retireIn;
-        retireGateSlot_output retireOut;
-        retireGateSlot_locals retireLocals;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct getTimeLockState_locals
@@ -1371,9 +1114,6 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         QUGATE_TimeLockConfig cfg;
     };
 
@@ -1385,20 +1125,14 @@ public:
         GateConfig adminGate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         uint64 adminSlot;
+        uint64 adminEncodedGen;
+        QUGATE_MultisigConfig msCfg;
+        uint8 adminApproved;
         // Cycle detection
         uint64 walkSlot;
         GateConfig walkGate;
         uint8 walkStep;
-        resolveAdminGate_input adminIn;
-        resolveAdminGate_output adminOut;
-        resolveAdminGate_locals adminLocals;
-        requireOwnerOrAdmin_input authIn;
-        requireOwnerOrAdmin_output authOut;
-        requireOwnerOrAdmin_locals authLocals;
     };
 
     struct getAdminGate_locals
@@ -1407,15 +1141,9 @@ public:
         GateConfig adminGate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         uint64 adminSlot;
         QUGATE_MultisigConfig adminCfg;
         uint8 i;
-        resolveAdminGate_input adminIn;
-        resolveAdminGate_output adminOut;
-        resolveAdminGate_locals adminLocals;
     };
 
     struct withdrawReserve_locals
@@ -1425,15 +1153,9 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
-        resolveAdminGate_input adminIn;
-        resolveAdminGate_output adminOut;
-        resolveAdminGate_locals adminLocals;
-        requireOwnerOrAdmin_input authIn;
-        requireOwnerOrAdmin_output authOut;
-        requireOwnerOrAdmin_locals authLocals;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct getGatesByMode_locals
@@ -1456,18 +1178,17 @@ public:
         processSplit_input splitIn;
         processSplit_output splitOut;
         processSplit_locals splitLocals;
+        // Chain forwarding locals
         routeToGate_input chainIn;
         routeToGate_output chainOut;
         routeToGate_locals chainLocals;
-        dispatchDeferredGateRecipients_input deferredIn;
-        dispatchDeferredGateRecipients_output deferredOut;
-        dispatchDeferredGateRecipients_locals deferredLocals;
-        forwardChainAmount_input forwardIn;
-        forwardChainAmount_output forwardOut;
-        forwardChainAmount_locals forwardLocals;
-        retireGateSlot_input retireIn;
-        retireGateSlot_output retireOut;
-        retireGateSlot_locals retireLocals;
+        GateConfig nextChainGate;
+        // Gate-as-recipient deferred dispatch temps
+        uint8 savedDeferredCount;
+        uint8 savedDeferredHopCount;
+        uint8 deferredDispatchIdx;
+        Array<uint64, 8> savedDeferredSlots;
+        Array<sint64, 8> savedDeferredAmounts;
     };
 
     struct BEGIN_EPOCH_locals
@@ -1485,18 +1206,12 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         uint8  i;
         uint16 shareSum;
         QUGATE_HeartbeatConfig cfg;
-        resolveAdminGate_input adminIn;
-        resolveAdminGate_output adminOut;
-        resolveAdminGate_locals adminLocals;
-        requireOwnerOrAdmin_input authIn;
-        requireOwnerOrAdmin_output authOut;
-        requireOwnerOrAdmin_locals authLocals;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct heartbeat_locals
@@ -1506,9 +1221,6 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         QUGATE_HeartbeatConfig cfg;
     };
 
@@ -1517,9 +1229,6 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         QUGATE_HeartbeatConfig cfg;
         uint8 i;
     };
@@ -1531,18 +1240,12 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         QUGATE_MultisigConfig cfg;
         uint8 i;
         uint8 j;
-        resolveAdminGate_input adminIn;
-        resolveAdminGate_output adminOut;
-        resolveAdminGate_locals adminLocals;
-        requireOwnerOrAdmin_input authIn;
-        requireOwnerOrAdmin_output authOut;
-        requireOwnerOrAdmin_locals authLocals;
+        // Admin gate check
+        GateConfig adminCheckGate;
+        QUGATE_MultisigConfig adminCheckMs;
     };
 
     struct getMultisigState_locals
@@ -1550,9 +1253,6 @@ public:
         GateConfig gate;
         uint64 slotIdx;
         uint64 encodedGen;
-        resolveGateId_input gateIdIn;
-        resolveGateId_output gateIdOut;
-        resolveGateId_locals gateIdLocals;
         QUGATE_MultisigConfig cfg;
         uint8 i;
     };
@@ -1784,9 +1484,12 @@ public:
         {
             if (input.recipientGateIds.get(locals.i) >= 0)
             {
-                locals.activeGateIn.gateId = input.recipientGateIds.get(locals.i);
-                resolveActiveGateId(qpi, state, locals.activeGateIn, locals.activeGateOut, locals.activeGateLocals);
-                if (locals.activeGateOut.valid == 0)
+                uint64 rgSlot = (uint64)(input.recipientGateIds.get(locals.i)) & QUGATE_GATE_ID_SLOT_MASK;
+                uint64 rgGen = (uint64)(input.recipientGateIds.get(locals.i)) >> QUGATE_GATE_ID_SLOT_BITS;
+                if (rgSlot >= state.get()._gateCount
+                    || rgGen == 0
+                    || state.get()._gateGenerations.get(rgSlot) != (uint16)(rgGen - 1)
+                    || state.get()._gates.get(rgSlot).active == 0)
                 {
                     qpi.transfer(qpi.invocator(), locals.invReward);
                     output.status = QUGATE_INVALID_GATE_RECIPIENT;
@@ -1812,9 +1515,14 @@ public:
         // Validate chain if specified
         if (input.chainNextGateId != -1)
         {
-            locals.gateIdIn.gateId = (uint64)input.chainNextGateId;
-            resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-            if (input.chainNextGateId <= 0 || locals.gateIdOut.valid == 0)
+            // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
+            // Decode target slot from versioned gate ID
+            uint64 chainTargetSlot = (uint64)(input.chainNextGateId) & QUGATE_GATE_ID_SLOT_MASK;
+            uint64 chainTargetGen = (uint64)(input.chainNextGateId) >> QUGATE_GATE_ID_SLOT_BITS;
+            if (input.chainNextGateId <= 0
+                || chainTargetSlot >= state.get()._gateCount
+                || chainTargetGen == 0
+                || state.get()._gateGenerations.get(chainTargetSlot) != (uint16)(chainTargetGen - 1))
             {
                 // Rollback: fresh slot decrements _gateCount; recycled slot returns to free-list.
                 // Undo slot allocation — return slot to free-list or decrement gateCount
@@ -1835,7 +1543,6 @@ public:
                 return;
             }
 
-            uint64 chainTargetSlot = locals.gateIdOut.slotIdx;
             GateConfig chainTarget = state.get()._gates.get(chainTargetSlot);
             if (chainTarget.active == 0)
             {
@@ -2006,11 +1713,13 @@ public:
                 if (locals.gate.recipientGateIds.get(locals.i) >= 0)
                 {
                     // Gate-as-recipient: defer routing to caller
-                    locals.activeGateIn.gateId = locals.gate.recipientGateIds.get(locals.i);
-                    resolveActiveGateId(qpi, state, locals.activeGateIn, locals.activeGateOut, locals.activeGateLocals);
-                    if (locals.activeGateOut.valid == 1)
+                    uint64 targetSlot = (uint64)(locals.gate.recipientGateIds.get(locals.i)) & QUGATE_GATE_ID_SLOT_MASK;
+                    uint64 targetGen = (uint64)(locals.gate.recipientGateIds.get(locals.i)) >> QUGATE_GATE_ID_SLOT_BITS;
+                    if (targetSlot < state.get()._gateCount && targetGen > 0
+                        && state.get()._gateGenerations.get(targetSlot) == (uint16)(targetGen - 1)
+                        && state.get()._gates.get(targetSlot).active == 1)
                     {
-                        output.deferredGateSlots.set(output.deferredCount, locals.activeGateOut.slotIdx);
+                        output.deferredGateSlots.set(output.deferredCount, targetSlot);
                         output.deferredGateAmounts.set(output.deferredCount, (sint64)locals.share);
                         output.deferredCount++;
                         locals.distributed += locals.share;
@@ -2047,12 +1756,14 @@ public:
         if (locals.gate.recipientGateIds.get(locals.gate.roundRobinIndex) >= 0)
         {
             // Gate-as-recipient: defer routing to caller
-            locals.activeGateIn.gateId = locals.gate.recipientGateIds.get(locals.gate.roundRobinIndex);
-            resolveActiveGateId(qpi, state, locals.activeGateIn, locals.activeGateOut, locals.activeGateLocals);
-            if (locals.activeGateOut.valid == 1)
+            uint64 targetSlot = (uint64)(locals.gate.recipientGateIds.get(locals.gate.roundRobinIndex)) & QUGATE_GATE_ID_SLOT_MASK;
+            uint64 targetGen = (uint64)(locals.gate.recipientGateIds.get(locals.gate.roundRobinIndex)) >> QUGATE_GATE_ID_SLOT_BITS;
+            if (targetSlot < state.get()._gateCount && targetGen > 0
+                && state.get()._gateGenerations.get(targetSlot) == (uint16)(targetGen - 1)
+                && state.get()._gates.get(targetSlot).active == 1)
             {
                 output.deferredToGate = 1;
-                output.deferredGateSlot = locals.activeGateOut.slotIdx;
+                output.deferredGateSlot = targetSlot;
                 output.deferredGateAmount = input.amount;
                 locals.gate.totalForwarded += input.amount;
                 locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
@@ -2087,12 +1798,14 @@ public:
                 if (locals.gate.recipientGateIds.get(0) >= 0)
                 {
                     // Gate-as-recipient: defer routing to caller
-                    locals.activeGateIn.gateId = locals.gate.recipientGateIds.get(0);
-                    resolveActiveGateId(qpi, state, locals.activeGateIn, locals.activeGateOut, locals.activeGateLocals);
-                    if (locals.activeGateOut.valid == 1)
+                    uint64 targetSlot = (uint64)(locals.gate.recipientGateIds.get(0)) & QUGATE_GATE_ID_SLOT_MASK;
+                    uint64 targetGen = (uint64)(locals.gate.recipientGateIds.get(0)) >> QUGATE_GATE_ID_SLOT_BITS;
+                    if (targetSlot < state.get()._gateCount && targetGen > 0
+                        && state.get()._gateGenerations.get(targetSlot) == (uint16)(targetGen - 1)
+                        && state.get()._gates.get(targetSlot).active == 1)
                     {
                         output.deferredToGate = 1;
-                        output.deferredGateSlot = locals.activeGateOut.slotIdx;
+                        output.deferredGateSlot = targetSlot;
                         output.deferredGateAmount = (sint64)locals.gate.currentBalance;
                         output.forwarded = locals.gate.currentBalance;
                         locals.gate.totalForwarded += locals.gate.currentBalance;
@@ -2138,12 +1851,14 @@ public:
         if (locals.gate.recipientGateIds.get(locals.recipientIdx) >= 0)
         {
             // Gate-as-recipient: defer routing to caller
-            locals.activeGateIn.gateId = locals.gate.recipientGateIds.get(locals.recipientIdx);
-            resolveActiveGateId(qpi, state, locals.activeGateIn, locals.activeGateOut, locals.activeGateLocals);
-            if (locals.activeGateOut.valid == 1)
+            uint64 targetSlot = (uint64)(locals.gate.recipientGateIds.get(locals.recipientIdx)) & QUGATE_GATE_ID_SLOT_MASK;
+            uint64 targetGen = (uint64)(locals.gate.recipientGateIds.get(locals.recipientIdx)) >> QUGATE_GATE_ID_SLOT_BITS;
+            if (targetSlot < state.get()._gateCount && targetGen > 0
+                && state.get()._gateGenerations.get(targetSlot) == (uint16)(targetGen - 1)
+                && state.get()._gates.get(targetSlot).active == 1)
             {
                 output.deferredToGate = 1;
-                output.deferredGateSlot = locals.activeGateOut.slotIdx;
+                output.deferredGateSlot = targetSlot;
                 output.deferredGateAmount = input.amount;
                 locals.gate.totalForwarded += input.amount;
                 output.forwarded = input.amount;
@@ -2189,12 +1904,14 @@ public:
                 if (locals.gate.recipientGateIds.get(0) >= 0)
                 {
                     // Gate-as-recipient: defer routing to caller
-                    locals.activeGateIn.gateId = locals.gate.recipientGateIds.get(0);
-                    resolveActiveGateId(qpi, state, locals.activeGateIn, locals.activeGateOut, locals.activeGateLocals);
-                    if (locals.activeGateOut.valid == 1)
+                    uint64 targetSlot = (uint64)(locals.gate.recipientGateIds.get(0)) & QUGATE_GATE_ID_SLOT_MASK;
+                    uint64 targetGen = (uint64)(locals.gate.recipientGateIds.get(0)) >> QUGATE_GATE_ID_SLOT_BITS;
+                    if (targetSlot < state.get()._gateCount && targetGen > 0
+                        && state.get()._gateGenerations.get(targetSlot) == (uint16)(targetGen - 1)
+                        && state.get()._gates.get(targetSlot).active == 1)
                     {
                         output.deferredToGate = 1;
-                        output.deferredGateSlot = locals.activeGateOut.slotIdx;
+                        output.deferredGateSlot = targetSlot;
                         output.deferredGateAmount = input.amount;
                         locals.gate.totalForwarded += input.amount;
                         output.forwarded = input.amount;
@@ -2217,219 +1934,6 @@ public:
         }
 
         state.mut()._gates.set(input.gateIdx, locals.gate);
-    }
-
-    PRIVATE_PROCEDURE_WITH_LOCALS(resolveAdminGate)
-    {
-        output.valid = 0;
-        output.approved = 0;
-        output.adminSlot = 0;
-
-        if (input.adminGateId <= 0)
-        {
-            return;
-        }
-
-        output.adminSlot = (uint64)(input.adminGateId) & QUGATE_GATE_ID_SLOT_MASK;
-        locals.encodedGen = (uint64)(input.adminGateId) >> QUGATE_GATE_ID_SLOT_BITS;
-        if (output.adminSlot >= state.get()._gateCount
-            || locals.encodedGen == 0
-            || state.get()._gateGenerations.get(output.adminSlot) != (uint16)(locals.encodedGen - 1))
-        {
-            return;
-        }
-
-        locals.gate = state.get()._gates.get(output.adminSlot);
-        if (locals.gate.active == 0 || locals.gate.mode != QUGATE_MODE_MULTISIG)
-        {
-            return;
-        }
-
-        output.valid = 1;
-        if (input.requireApproval == 1)
-        {
-            locals.msCfg = state.get()._multisigConfigs.get(output.adminSlot);
-            if (locals.msCfg.approvalCount >= locals.msCfg.required
-                && locals.msCfg.proposalEpoch == (uint32)qpi.epoch())
-            {
-                output.approved = 1;
-            }
-        }
-    }
-
-    PRIVATE_PROCEDURE_WITH_LOCALS(requireOwnerOrAdmin)
-    {
-        output.authorized = 0;
-        output.usedAdminApproval = 0;
-        output.status = input.deniedStatus;
-
-        if (qpi.invocator() == input.owner)
-        {
-            output.authorized = 1;
-            output.status = QUGATE_SUCCESS;
-            return;
-        }
-
-        if (input.hasAdminGate == 0)
-        {
-            output.status = input.missingAdminStatus;
-            return;
-        }
-
-        locals.adminIn.adminGateId = input.adminGateId;
-        locals.adminIn.requireApproval = 1;
-        resolveAdminGate(qpi, state, locals.adminIn, locals.adminOut, locals.adminLocals);
-        if (locals.adminOut.approved == 0)
-        {
-            return;
-        }
-
-        output.authorized = 1;
-        output.usedAdminApproval = 1;
-        output.status = QUGATE_SUCCESS;
-    }
-
-    PRIVATE_PROCEDURE_WITH_LOCALS(resolveGateId)
-    {
-        output.valid = 0;
-        output.slotIdx = 0;
-
-        if (input.gateId == 0)
-        {
-            return;
-        }
-
-        output.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
-        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
-        if (output.slotIdx >= state.get()._gateCount
-            || locals.encodedGen == 0
-            || state.get()._gateGenerations.get(output.slotIdx) != (uint16)(locals.encodedGen - 1))
-        {
-            return;
-        }
-
-        output.valid = 1;
-    }
-
-    PRIVATE_PROCEDURE_WITH_LOCALS(resolveActiveGateId)
-    {
-        output.valid = 0;
-        output.slotIdx = 0;
-
-        if (input.gateId < 0)
-        {
-            return;
-        }
-
-        locals.gateIdIn.gateId = (uint64)input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
-        {
-            return;
-        }
-
-        locals.gate = state.get()._gates.get(locals.gateIdOut.slotIdx);
-        if (locals.gate.active == 0)
-        {
-            return;
-        }
-
-        output.valid = 1;
-        output.slotIdx = locals.gateIdOut.slotIdx;
-    }
-
-    PRIVATE_PROCEDURE_WITH_LOCALS(clearGateModeState)
-    {
-        if (input.mode == QUGATE_MODE_HEARTBEAT)
-        {
-            locals.hbZeroCfg.thresholdEpochs = 0;
-            locals.hbZeroCfg.lastHeartbeatEpoch = 0;
-            locals.hbZeroCfg.payoutPercentPerEpoch = 0;
-            locals.hbZeroCfg.minimumBalance = 0;
-            locals.hbZeroCfg.active = 0;
-            locals.hbZeroCfg.triggered = 0;
-            locals.hbZeroCfg.triggerEpoch = 0;
-            locals.hbZeroCfg.beneficiaryCount = 0;
-            for (locals.i = 0; locals.i < 8; locals.i++)
-            {
-                locals.hbZeroCfg.beneficiaryAddresses.set(locals.i, id::zero());
-                locals.hbZeroCfg.beneficiaryShares.set(locals.i, 0);
-            }
-            state.mut()._heartbeatConfigs.set(input.slotIdx, locals.hbZeroCfg);
-        }
-        else if (input.mode == QUGATE_MODE_MULTISIG)
-        {
-            for (locals.i = 0; locals.i < 8; locals.i++)
-            {
-                locals.msigZeroCfg.guardians.set(locals.i, id::zero());
-            }
-            locals.msigZeroCfg.guardianCount = 0;
-            locals.msigZeroCfg.required = 0;
-            locals.msigZeroCfg.proposalExpiryEpochs = 0;
-            locals.msigZeroCfg.approvalBitmap = 0;
-            locals.msigZeroCfg.approvalCount = 0;
-            locals.msigZeroCfg.proposalEpoch = 0;
-            locals.msigZeroCfg.proposalActive = 0;
-            state.mut()._multisigConfigs.set(input.slotIdx, locals.msigZeroCfg);
-        }
-        else if (input.mode == QUGATE_MODE_TIME_LOCK)
-        {
-            locals.tlZeroCfg.unlockEpoch = 0;
-            locals.tlZeroCfg.cancellable = 0;
-            locals.tlZeroCfg.fired = 0;
-            locals.tlZeroCfg.cancelled = 0;
-            locals.tlZeroCfg.active = 0;
-            state.mut()._timeLockConfigs.set(input.slotIdx, locals.tlZeroCfg);
-        }
-    }
-
-    PRIVATE_PROCEDURE_WITH_LOCALS(retireGateSlot)
-    {
-        locals.gate = state.get()._gates.get(input.slotIdx);
-
-        if (input.refundCurrentBalance == 1 && locals.gate.currentBalance > 0)
-        {
-            if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0)
-            {
-                locals.gate.currentBalance = 0;
-            }
-        }
-        if (input.refundOracleReserve == 1 && locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
-        {
-            if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0)
-            {
-                locals.gate.oracleReserve = 0;
-            }
-        }
-        if (input.unsubscribeOracle == 1 && locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleSubscriptionId >= 0)
-        {
-            state.mut()._subscriptionToSlot.removeByKey(locals.gate.oracleSubscriptionId);
-            qpi.unsubscribeOracle(locals.gate.oracleSubscriptionId);
-            locals.gate.oracleSubscriptionId = -1;
-        }
-        if (input.refundChainReserve == 1 && locals.gate.chainReserve > 0)
-        {
-            if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0)
-            {
-                locals.gate.chainReserve = 0;
-            }
-        }
-        if (input.clearModeState == 1)
-        {
-            locals.clearIn.slotIdx = input.slotIdx;
-            locals.clearIn.mode = locals.gate.mode;
-            clearGateModeState(qpi, state, locals.clearIn, locals.clearOut, locals.clearLocals);
-        }
-
-        if (locals.gate.active == 1)
-        {
-            locals.gate.active = 0;
-            state.mut()._gates.set(input.slotIdx, locals.gate);
-            state.mut()._activeGates -= 1;
-            state.mut()._freeSlots.set(state.get()._freeCount, input.slotIdx);
-            state.mut()._freeCount += 1;
-            state.mut()._gateGenerations.set(input.slotIdx, state.get()._gateGenerations.get(input.slotIdx) + 1);
-        }
     }
 
     // =============================================
@@ -2513,12 +2017,14 @@ public:
                     if (locals.gate.recipientGateIds.get(0) >= 0)
                     {
                         // Gate-as-recipient: defer routing to caller
-                        locals.activeGateIn.gateId = locals.gate.recipientGateIds.get(0);
-                        resolveActiveGateId(qpi, state, locals.activeGateIn, locals.activeGateOut, locals.activeGateLocals);
-                        if (locals.activeGateOut.valid == 1)
+                        uint64 targetSlot = (uint64)(locals.gate.recipientGateIds.get(0)) & QUGATE_GATE_ID_SLOT_MASK;
+                        uint64 targetGen = (uint64)(locals.gate.recipientGateIds.get(0)) >> QUGATE_GATE_ID_SLOT_BITS;
+                        if (targetSlot < state.get()._gateCount && targetGen > 0
+                            && state.get()._gateGenerations.get(targetSlot) == (uint16)(targetGen - 1)
+                            && state.get()._gates.get(targetSlot).active == 1)
                         {
                             output.deferredToGate = 1;
-                            output.deferredGateSlot = locals.activeGateOut.slotIdx;
+                            output.deferredGateSlot = targetSlot;
                             output.deferredGateAmount = releaseAmount;
                             transferred = 1;
                         }
@@ -2714,76 +2220,6 @@ public:
         LOG_INFO(locals.logger);
     }
 
-    PRIVATE_PROCEDURE_WITH_LOCALS(expireInactiveGate)
-    {
-        output.expired = 0;
-        locals.gate = state.get()._gates.get(input.slotIdx);
-
-        if (state.get()._expiryEpochs == 0
-            || locals.gate.active == 0
-            || qpi.epoch() - locals.gate.lastActivityEpoch < state.get()._expiryEpochs)
-        {
-            return;
-        }
-
-        locals.retireIn.slotIdx = input.slotIdx;
-        locals.retireIn.refundCurrentBalance = 1;
-        locals.retireIn.refundOracleReserve = 1;
-        locals.retireIn.unsubscribeOracle = 0;
-        locals.retireIn.refundChainReserve = 1;
-        locals.retireIn.clearModeState = 1;
-        retireGateSlot(qpi, state, locals.retireIn, locals.retireOut, locals.retireLocals);
-        output.expired = 1;
-    }
-
-    PRIVATE_PROCEDURE_WITH_LOCALS(dispatchDeferredGateRecipients)
-    {
-        for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < input.deferredCount; locals.deferredDispatchIdx++)
-        {
-            locals.chainIn.slotIdx = input.deferredGateSlots.get(locals.deferredDispatchIdx);
-            locals.chainIn.amount = input.deferredGateAmounts.get(locals.deferredDispatchIdx);
-            locals.chainIn.hopCount = input.deferredHopCount;
-            routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-        }
-    }
-
-    PRIVATE_PROCEDURE_WITH_LOCALS(forwardChainAmount)
-    {
-        output.remainingAmount = input.amount;
-        locals.currentChainGateId = input.chainNextGateId;
-        locals.hop = 0;
-
-        while (locals.hop < QUGATE_MAX_CHAIN_DEPTH && locals.currentChainGateId != -1 && output.remainingAmount > 0)
-        {
-            locals.nextSlot = (uint64)locals.currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
-            locals.nextGen = (uint64)locals.currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
-            if (locals.nextSlot >= state.get()._gateCount || locals.nextGen == 0
-                || state.get()._gateGenerations.get(locals.nextSlot) != (uint16)(locals.nextGen - 1))
-            {
-                break;
-            }
-
-            locals.chainIn.slotIdx = locals.nextSlot;
-            locals.chainIn.amount = output.remainingAmount;
-            locals.chainIn.hopCount = locals.hop;
-            routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-
-            locals.deferredIn.deferredCount = locals.chainOut.deferredCount;
-            locals.deferredIn.deferredHopCount = locals.chainOut.deferredHopCount;
-            for (uint8 _dg = 0; _dg < locals.chainOut.deferredCount; _dg++)
-            {
-                locals.deferredIn.deferredGateSlots.set(_dg, locals.chainOut.deferredGateSlots.get(_dg));
-                locals.deferredIn.deferredGateAmounts.set(_dg, locals.chainOut.deferredGateAmounts.get(_dg));
-            }
-            dispatchDeferredGateRecipients(qpi, state, locals.deferredIn, locals.deferredOut, locals.deferredLocals);
-
-            output.remainingAmount = locals.chainOut.forwarded;
-            locals.nextChainGate = state.get()._gates.get(locals.nextSlot);
-            locals.currentChainGateId = locals.nextChainGate.chainNextGateId;
-            locals.hop += 1;
-        }
-    }
-
     // =============================================
     // Procedures
     // =============================================
@@ -2798,9 +2234,13 @@ public:
         locals.logger.amount = locals.invReward;
         locals.logger.gateId = input.gateId;
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             if (locals.invReward > 0)
             {
@@ -2811,7 +2251,6 @@ public:
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
@@ -2827,10 +2266,38 @@ public:
             return;
         }
 
-        locals.expireIn.slotIdx = locals.slotIdx;
-        expireInactiveGate(qpi, state, locals.expireIn, locals.expireOut, locals.expireLocals);
-        if (locals.expireOut.expired == 1)
+        // Lazy expiry check: expire gate if inactive too long
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+            && locals.gate.active == 1)
         {
+            if (locals.gate.currentBalance > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-01]
+                {
+                    locals.gate.currentBalance = 0;
+                }
+            }
+            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-01]
+                {
+                    locals.gate.oracleReserve = 0;
+                }
+            }
+            if (locals.gate.chainReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-01]
+                {
+                    locals.gate.chainReserve = 0;
+                }
+            }
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
             if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
@@ -2875,14 +2342,21 @@ public:
                 locals.chainIn.amount = locals.splitOut.deferredGateAmounts.get(_dg);
                 locals.chainIn.hopCount = 0;
                 routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                locals.deferredIn.deferredCount = locals.chainOut.deferredCount;
-                locals.deferredIn.deferredHopCount = locals.chainOut.deferredHopCount;
-                for (uint8 _dg2 = 0; _dg2 < locals.chainOut.deferredCount; _dg2++)
+                // Dispatch deferred gate-as-recipient routing from chain hop
+                locals.savedDeferredCount = locals.chainOut.deferredCount;
+                locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
                 {
-                    locals.deferredIn.deferredGateSlots.set(_dg2, locals.chainOut.deferredGateSlots.get(_dg2));
-                    locals.deferredIn.deferredGateAmounts.set(_dg2, locals.chainOut.deferredGateAmounts.get(_dg2));
+                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
                 }
-                dispatchDeferredGateRecipients(qpi, state, locals.deferredIn, locals.deferredOut, locals.deferredLocals);
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                {
+                    locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                    locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                    locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                }
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_ROUND_ROBIN)
@@ -2898,14 +2372,21 @@ public:
                 locals.chainIn.amount = locals.rrOut.deferredGateAmount;
                 locals.chainIn.hopCount = 0;
                 routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                locals.deferredIn.deferredCount = locals.chainOut.deferredCount;
-                locals.deferredIn.deferredHopCount = locals.chainOut.deferredHopCount;
-                for (uint8 _dg2 = 0; _dg2 < locals.chainOut.deferredCount; _dg2++)
+                // Dispatch deferred gate-as-recipient routing from chain hop
+                locals.savedDeferredCount = locals.chainOut.deferredCount;
+                locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
                 {
-                    locals.deferredIn.deferredGateSlots.set(_dg2, locals.chainOut.deferredGateSlots.get(_dg2));
-                    locals.deferredIn.deferredGateAmounts.set(_dg2, locals.chainOut.deferredGateAmounts.get(_dg2));
+                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
                 }
-                dispatchDeferredGateRecipients(qpi, state, locals.deferredIn, locals.deferredOut, locals.deferredLocals);
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                {
+                    locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                    locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                    locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                }
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_THRESHOLD)
@@ -2924,14 +2405,21 @@ public:
                 locals.chainIn.amount = locals.threshOut.deferredGateAmount;
                 locals.chainIn.hopCount = 0;
                 routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                locals.deferredIn.deferredCount = locals.chainOut.deferredCount;
-                locals.deferredIn.deferredHopCount = locals.chainOut.deferredHopCount;
-                for (uint8 _dg2 = 0; _dg2 < locals.chainOut.deferredCount; _dg2++)
+                // Dispatch deferred gate-as-recipient routing from chain hop
+                locals.savedDeferredCount = locals.chainOut.deferredCount;
+                locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
                 {
-                    locals.deferredIn.deferredGateSlots.set(_dg2, locals.chainOut.deferredGateSlots.get(_dg2));
-                    locals.deferredIn.deferredGateAmounts.set(_dg2, locals.chainOut.deferredGateAmounts.get(_dg2));
+                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
                 }
-                dispatchDeferredGateRecipients(qpi, state, locals.deferredIn, locals.deferredOut, locals.deferredLocals);
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                {
+                    locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                    locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                    locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                }
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_RANDOM)
@@ -2947,14 +2435,21 @@ public:
                 locals.chainIn.amount = locals.randOut.deferredGateAmount;
                 locals.chainIn.hopCount = 0;
                 routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                locals.deferredIn.deferredCount = locals.chainOut.deferredCount;
-                locals.deferredIn.deferredHopCount = locals.chainOut.deferredHopCount;
-                for (uint8 _dg2 = 0; _dg2 < locals.chainOut.deferredCount; _dg2++)
+                // Dispatch deferred gate-as-recipient routing from chain hop
+                locals.savedDeferredCount = locals.chainOut.deferredCount;
+                locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
                 {
-                    locals.deferredIn.deferredGateSlots.set(_dg2, locals.chainOut.deferredGateSlots.get(_dg2));
-                    locals.deferredIn.deferredGateAmounts.set(_dg2, locals.chainOut.deferredGateAmounts.get(_dg2));
+                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
                 }
-                dispatchDeferredGateRecipients(qpi, state, locals.deferredIn, locals.deferredOut, locals.deferredLocals);
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                {
+                    locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                    locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                    locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                }
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_CONDITIONAL)
@@ -3023,14 +2518,21 @@ public:
                 locals.chainIn.amount = locals.msigOut.deferredGateAmount;
                 locals.chainIn.hopCount = 0;
                 routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                locals.deferredIn.deferredCount = locals.chainOut.deferredCount;
-                locals.deferredIn.deferredHopCount = locals.chainOut.deferredHopCount;
-                for (uint8 _dg2 = 0; _dg2 < locals.chainOut.deferredCount; _dg2++)
+                // Dispatch deferred gate-as-recipient routing from chain hop
+                locals.savedDeferredCount = locals.chainOut.deferredCount;
+                locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
                 {
-                    locals.deferredIn.deferredGateSlots.set(_dg2, locals.chainOut.deferredGateSlots.get(_dg2));
-                    locals.deferredIn.deferredGateAmounts.set(_dg2, locals.chainOut.deferredGateAmounts.get(_dg2));
+                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
                 }
-                dispatchDeferredGateRecipients(qpi, state, locals.deferredIn, locals.deferredOut, locals.deferredLocals);
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                {
+                    locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                    locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                    locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                }
             }
             // Chain forwarding on MULTISIG release (recipientCount==0 with chain target)
             if (locals.msigOut.chainForward == 1)
@@ -3105,10 +2607,41 @@ public:
 
             if (chainAmount > 0)
             {
-                locals.forwardIn.chainNextGateId = locals.gate.chainNextGateId;
-                locals.forwardIn.amount = chainAmount;
-                forwardChainAmount(qpi, state, locals.forwardIn, locals.forwardOut, locals.forwardLocals);
-                chainAmount = locals.forwardOut.remainingAmount;
+                sint64 currentChainGateId = locals.gate.chainNextGateId;
+                uint8 hop = 0;
+                while (hop < QUGATE_MAX_CHAIN_DEPTH && currentChainGateId != -1 && chainAmount > 0)
+                {
+                    uint64 nextSlot = (uint64)currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
+                    uint64 nextGen = (uint64)currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
+                    if (nextSlot >= state.get()._gateCount || nextGen == 0
+                        || state.get()._gateGenerations.get(nextSlot) != (uint16)(nextGen - 1))
+                    {
+                        break; // dead link
+                    }
+                    locals.chainIn.slotIdx = nextSlot;
+                    locals.chainIn.amount = chainAmount;
+                    locals.chainIn.hopCount = hop;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    // Dispatch deferred gate-as-recipient routing from chain hop
+                    locals.savedDeferredCount = locals.chainOut.deferredCount;
+                    locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                    {
+                        locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                        locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
+                    }
+                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                    {
+                        locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                        locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                        locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                        routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    }
+                    chainAmount = locals.chainOut.forwarded;
+                    locals.nextChainGate = state.get()._gates.get(nextSlot);
+                    currentChainGateId = locals.nextChainGate.chainNextGateId;
+                    hop += 1;
+                }
                 // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance
                 if (chainAmount > 0)
                 {
@@ -3135,9 +2668,13 @@ public:
         locals.logger.amount = locals.invReward;
         locals.logger.gateId = input.gateId;
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             if (locals.invReward > 0)
             {
@@ -3148,7 +2685,6 @@ public:
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
@@ -3164,10 +2700,38 @@ public:
             return;
         }
 
-        locals.expireIn.slotIdx = locals.slotIdx;
-        expireInactiveGate(qpi, state, locals.expireIn, locals.expireOut, locals.expireLocals);
-        if (locals.expireOut.expired == 1)
+        // Lazy expiry check: expire gate if inactive too long
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+            && locals.gate.active == 1)
         {
+            if (locals.gate.currentBalance > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-02]
+                {
+                    locals.gate.currentBalance = 0;
+                }
+            }
+            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-02]
+                {
+                    locals.gate.oracleReserve = 0;
+                }
+            }
+            if (locals.gate.chainReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-02]
+                {
+                    locals.gate.chainReserve = 0;
+                }
+            }
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
             if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
@@ -3225,14 +2789,21 @@ public:
                 locals.chainIn.amount = locals.splitOut.deferredGateAmounts.get(_dg);
                 locals.chainIn.hopCount = 0;
                 routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                locals.deferredIn.deferredCount = locals.chainOut.deferredCount;
-                locals.deferredIn.deferredHopCount = locals.chainOut.deferredHopCount;
-                for (uint8 _dg2 = 0; _dg2 < locals.chainOut.deferredCount; _dg2++)
+                // Dispatch deferred gate-as-recipient routing from chain hop
+                locals.savedDeferredCount = locals.chainOut.deferredCount;
+                locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
                 {
-                    locals.deferredIn.deferredGateSlots.set(_dg2, locals.chainOut.deferredGateSlots.get(_dg2));
-                    locals.deferredIn.deferredGateAmounts.set(_dg2, locals.chainOut.deferredGateAmounts.get(_dg2));
+                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
                 }
-                dispatchDeferredGateRecipients(qpi, state, locals.deferredIn, locals.deferredOut, locals.deferredLocals);
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                {
+                    locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                    locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                    locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                }
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_ROUND_ROBIN)
@@ -3248,14 +2819,21 @@ public:
                 locals.chainIn.amount = locals.rrOut.deferredGateAmount;
                 locals.chainIn.hopCount = 0;
                 routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                locals.deferredIn.deferredCount = locals.chainOut.deferredCount;
-                locals.deferredIn.deferredHopCount = locals.chainOut.deferredHopCount;
-                for (uint8 _dg2 = 0; _dg2 < locals.chainOut.deferredCount; _dg2++)
+                // Dispatch deferred gate-as-recipient routing from chain hop
+                locals.savedDeferredCount = locals.chainOut.deferredCount;
+                locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
                 {
-                    locals.deferredIn.deferredGateSlots.set(_dg2, locals.chainOut.deferredGateSlots.get(_dg2));
-                    locals.deferredIn.deferredGateAmounts.set(_dg2, locals.chainOut.deferredGateAmounts.get(_dg2));
+                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
                 }
-                dispatchDeferredGateRecipients(qpi, state, locals.deferredIn, locals.deferredOut, locals.deferredLocals);
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                {
+                    locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                    locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                    locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                }
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_THRESHOLD)
@@ -3274,14 +2852,21 @@ public:
                 locals.chainIn.amount = locals.threshOut.deferredGateAmount;
                 locals.chainIn.hopCount = 0;
                 routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                locals.deferredIn.deferredCount = locals.chainOut.deferredCount;
-                locals.deferredIn.deferredHopCount = locals.chainOut.deferredHopCount;
-                for (uint8 _dg2 = 0; _dg2 < locals.chainOut.deferredCount; _dg2++)
+                // Dispatch deferred gate-as-recipient routing from chain hop
+                locals.savedDeferredCount = locals.chainOut.deferredCount;
+                locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
                 {
-                    locals.deferredIn.deferredGateSlots.set(_dg2, locals.chainOut.deferredGateSlots.get(_dg2));
-                    locals.deferredIn.deferredGateAmounts.set(_dg2, locals.chainOut.deferredGateAmounts.get(_dg2));
+                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
                 }
-                dispatchDeferredGateRecipients(qpi, state, locals.deferredIn, locals.deferredOut, locals.deferredLocals);
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                {
+                    locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                    locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                    locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                }
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_RANDOM)
@@ -3297,14 +2882,21 @@ public:
                 locals.chainIn.amount = locals.randOut.deferredGateAmount;
                 locals.chainIn.hopCount = 0;
                 routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                locals.deferredIn.deferredCount = locals.chainOut.deferredCount;
-                locals.deferredIn.deferredHopCount = locals.chainOut.deferredHopCount;
-                for (uint8 _dg2 = 0; _dg2 < locals.chainOut.deferredCount; _dg2++)
+                // Dispatch deferred gate-as-recipient routing from chain hop
+                locals.savedDeferredCount = locals.chainOut.deferredCount;
+                locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
                 {
-                    locals.deferredIn.deferredGateSlots.set(_dg2, locals.chainOut.deferredGateSlots.get(_dg2));
-                    locals.deferredIn.deferredGateAmounts.set(_dg2, locals.chainOut.deferredGateAmounts.get(_dg2));
+                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
                 }
-                dispatchDeferredGateRecipients(qpi, state, locals.deferredIn, locals.deferredOut, locals.deferredLocals);
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                {
+                    locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                    locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                    locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                }
             }
         }
         else if (locals.gate.mode == QUGATE_MODE_CONDITIONAL)
@@ -3373,14 +2965,21 @@ public:
                 locals.chainIn.amount = locals.msigOut.deferredGateAmount;
                 locals.chainIn.hopCount = 0;
                 routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                locals.deferredIn.deferredCount = locals.chainOut.deferredCount;
-                locals.deferredIn.deferredHopCount = locals.chainOut.deferredHopCount;
-                for (uint8 _dg2 = 0; _dg2 < locals.chainOut.deferredCount; _dg2++)
+                // Dispatch deferred gate-as-recipient routing from chain hop
+                locals.savedDeferredCount = locals.chainOut.deferredCount;
+                locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
                 {
-                    locals.deferredIn.deferredGateSlots.set(_dg2, locals.chainOut.deferredGateSlots.get(_dg2));
-                    locals.deferredIn.deferredGateAmounts.set(_dg2, locals.chainOut.deferredGateAmounts.get(_dg2));
+                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
                 }
-                dispatchDeferredGateRecipients(qpi, state, locals.deferredIn, locals.deferredOut, locals.deferredLocals);
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                {
+                    locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                    locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                    locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                }
             }
             // Chain forwarding on MULTISIG release (recipientCount==0 with chain target)
             if (locals.msigOut.chainForward == 1)
@@ -3454,10 +3053,41 @@ public:
 
             if (chainAmount > 0)
             {
-                locals.forwardIn.chainNextGateId = locals.gate.chainNextGateId;
-                locals.forwardIn.amount = chainAmount;
-                forwardChainAmount(qpi, state, locals.forwardIn, locals.forwardOut, locals.forwardLocals);
-                chainAmount = locals.forwardOut.remainingAmount;
+                sint64 currentChainGateId = locals.gate.chainNextGateId;
+                uint8 hop = 0;
+                while (hop < QUGATE_MAX_CHAIN_DEPTH && currentChainGateId != -1 && chainAmount > 0)
+                {
+                    uint64 nextSlot = (uint64)currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
+                    uint64 nextGen = (uint64)currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
+                    if (nextSlot >= state.get()._gateCount || nextGen == 0
+                        || state.get()._gateGenerations.get(nextSlot) != (uint16)(nextGen - 1))
+                    {
+                        break; // dead link
+                    }
+                    locals.chainIn.slotIdx = nextSlot;
+                    locals.chainIn.amount = chainAmount;
+                    locals.chainIn.hopCount = hop;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    // Dispatch deferred gate-as-recipient routing from chain hop
+                    locals.savedDeferredCount = locals.chainOut.deferredCount;
+                    locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                    {
+                        locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                        locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
+                    }
+                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                    {
+                        locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                        locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                        locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                        routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    }
+                    chainAmount = locals.chainOut.forwarded;
+                    locals.nextChainGate = state.get()._gates.get(nextSlot);
+                    currentChainGateId = locals.nextChainGate.chainNextGateId;
+                    hop += 1;
+                }
                 // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance
                 if (chainAmount > 0)
                 {
@@ -3485,9 +3115,13 @@ public:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             if (locals.invReward > 0)
             {
@@ -3498,32 +3132,47 @@ public:
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        locals.authIn.owner = locals.gate.owner;
-        locals.authIn.hasAdminGate = locals.gate.hasAdminGate;
-        locals.authIn.adminGateId = locals.gate.adminGateId;
-        locals.authIn.missingAdminStatus = QUGATE_UNAUTHORIZED;
-        locals.authIn.deniedStatus = QUGATE_UNAUTHORIZED;
-        requireOwnerOrAdmin(qpi, state, locals.authIn, locals.authOut, locals.authLocals);
-        if (locals.authOut.authorized == 0)
+        // Authorization: owner OR admin gate approval
+        if (locals.gate.owner != qpi.invocator())
         {
-            if (locals.invReward > 0)
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
             {
-                qpi.transfer(qpi.invocator(), locals.invReward);
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
             }
-            output.status = locals.authOut.status;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
-        }
-        if (locals.authOut.usedAdminApproval == 1)
-        {
-            locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
-            locals.logger.amount = locals.gate.adminGateId;
-            LOG_INFO(locals.logger);
+            if (adminAuth == 0)
+            {
+                if (locals.invReward > 0)
+                {
+                    qpi.transfer(qpi.invocator(), locals.invReward);
+                }
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         if (locals.gate.active == 0)
@@ -3538,10 +3187,38 @@ public:
             return;
         }
 
-        locals.expireIn.slotIdx = locals.slotIdx;
-        expireInactiveGate(qpi, state, locals.expireIn, locals.expireOut, locals.expireLocals);
-        if (locals.expireOut.expired == 1)
+        // Lazy expiry check: expire gate if inactive too long
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+            && locals.gate.active == 1)
         {
+            if (locals.gate.currentBalance > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-03]
+                {
+                    locals.gate.currentBalance = 0;
+                }
+            }
+            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-03]
+                {
+                    locals.gate.oracleReserve = 0;
+                }
+            }
+            if (locals.gate.chainReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-03]
+                {
+                    locals.gate.chainReserve = 0;
+                }
+            }
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
             if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
@@ -3549,13 +3226,103 @@ public:
             return;
         }
 
-        locals.retireIn.slotIdx = locals.slotIdx;
-        locals.retireIn.refundCurrentBalance = 1;
-        locals.retireIn.refundOracleReserve = 1;
-        locals.retireIn.unsubscribeOracle = 1;
-        locals.retireIn.refundChainReserve = 1;
-        locals.retireIn.clearModeState = 1;
-        retireGateSlot(qpi, state, locals.retireIn, locals.retireOut, locals.retireLocals);
+        // Refund any held balance (THRESHOLD / ORACLE mode)
+        if (locals.gate.currentBalance > 0)
+        {
+            if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-06]
+            {
+                locals.gate.currentBalance = 0;
+            }
+        }
+
+        // Refund oracle reserve and unsubscribe
+        if (locals.gate.mode == QUGATE_MODE_ORACLE)
+        {
+            if (locals.gate.oracleReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-06]
+                {
+                    locals.gate.oracleReserve = 0;
+                }
+            }
+            if (locals.gate.oracleSubscriptionId >= 0)
+            {
+                state.mut()._subscriptionToSlot.removeByKey(locals.gate.oracleSubscriptionId);
+                qpi.unsubscribeOracle(locals.gate.oracleSubscriptionId);
+                locals.gate.oracleSubscriptionId = -1;
+            }
+        }
+
+        // Refund chain reserve
+        if (locals.gate.chainReserve > 0)
+        {
+            if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-06]
+            {
+                locals.gate.chainReserve = 0;
+            }
+        }
+
+        // Clear heartbeat config on close
+        if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
+        {
+            locals.hbZeroCfg.thresholdEpochs = 0;
+            locals.hbZeroCfg.lastHeartbeatEpoch = 0;
+            locals.hbZeroCfg.payoutPercentPerEpoch = 0;
+            locals.hbZeroCfg.minimumBalance = 0;
+            locals.hbZeroCfg.active = 0;
+            locals.hbZeroCfg.triggered = 0;
+            locals.hbZeroCfg.triggerEpoch = 0;
+            locals.hbZeroCfg.beneficiaryCount = 0;
+            for (uint8 _bi = 0; _bi < 8; _bi++)
+            {
+                locals.hbZeroCfg.beneficiaryAddresses.set(_bi, id::zero());
+                locals.hbZeroCfg.beneficiaryShares.set(_bi, 0);
+            }
+            state.mut()._heartbeatConfigs.set(locals.slotIdx, locals.hbZeroCfg);
+        }
+
+        // Clear multisig config on close
+        if (locals.gate.mode == QUGATE_MODE_MULTISIG)
+        {
+            for (uint8 _ci = 0; _ci < 8; _ci++)
+            {
+                locals.msigZeroCfg.guardians.set(_ci, id::zero());
+            }
+            locals.msigZeroCfg.guardianCount = 0;
+            locals.msigZeroCfg.required = 0;
+            locals.msigZeroCfg.proposalExpiryEpochs = 0;
+            locals.msigZeroCfg.approvalBitmap = 0;
+            locals.msigZeroCfg.approvalCount = 0;
+            locals.msigZeroCfg.proposalEpoch = 0;
+            locals.msigZeroCfg.proposalActive = 0;
+            state.mut()._multisigConfigs.set(locals.slotIdx, locals.msigZeroCfg);
+        }
+
+        // Clear time lock config on close
+        if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
+        {
+            locals.tlZeroCfg.unlockEpoch = 0;
+            locals.tlZeroCfg.cancellable = 0;
+            locals.tlZeroCfg.fired = 0;
+            locals.tlZeroCfg.cancelled = 0;
+            locals.tlZeroCfg.active = 0;
+            state.mut()._timeLockConfigs.set(locals.slotIdx, locals.tlZeroCfg);
+        }
+
+        // Guard against double-close underflow
+        if (locals.gate.active == 1)
+        {
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+
+            // Push slot onto free-list for reuse
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+
+            // Increment generation so recycled slot gets a new gateId
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
+        }
 
         // Refund invocation reward
         if (locals.invReward > 0)
@@ -3579,9 +3346,13 @@ public:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             if (locals.invReward > 0)
             {
@@ -3592,32 +3363,47 @@ public:
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        locals.authIn.owner = locals.gate.owner;
-        locals.authIn.hasAdminGate = locals.gate.hasAdminGate;
-        locals.authIn.adminGateId = locals.gate.adminGateId;
-        locals.authIn.missingAdminStatus = QUGATE_UNAUTHORIZED;
-        locals.authIn.deniedStatus = QUGATE_UNAUTHORIZED;
-        requireOwnerOrAdmin(qpi, state, locals.authIn, locals.authOut, locals.authLocals);
-        if (locals.authOut.authorized == 0)
+        // Authorization: owner OR admin gate approval
+        if (locals.gate.owner != qpi.invocator())
         {
-            if (locals.invReward > 0)
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
             {
-                qpi.transfer(qpi.invocator(), locals.invReward);
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
             }
-            output.status = locals.authOut.status;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
-        }
-        if (locals.authOut.usedAdminApproval == 1)
-        {
-            locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
-            locals.logger.amount = locals.gate.adminGateId;
-            LOG_INFO(locals.logger);
+            if (adminAuth == 0)
+            {
+                if (locals.invReward > 0)
+                {
+                    qpi.transfer(qpi.invocator(), locals.invReward);
+                }
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         if (locals.gate.active == 0)
@@ -3632,10 +3418,32 @@ public:
             return;
         }
 
-        locals.expireIn.slotIdx = locals.slotIdx;
-        expireInactiveGate(qpi, state, locals.expireIn, locals.expireOut, locals.expireLocals);
-        if (locals.expireOut.expired == 1)
+        // Lazy expiry check: expire gate if inactive too long
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+            && locals.gate.active == 1)
         {
+            if (locals.gate.currentBalance > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
+                locals.gate.currentBalance = 0;
+            }
+            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
+                locals.gate.oracleReserve = 0;
+            }
+            if (locals.gate.chainReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
+                locals.gate.chainReserve = 0;
+            }
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
             if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
@@ -3782,9 +3590,12 @@ public:
         {
             if (input.recipientGateIds.get(locals.i) >= 0)
             {
-                locals.activeGateIn.gateId = input.recipientGateIds.get(locals.i);
-                resolveActiveGateId(qpi, state, locals.activeGateIn, locals.activeGateOut, locals.activeGateLocals);
-                if (locals.activeGateOut.valid == 0)
+                uint64 rgSlot = (uint64)(input.recipientGateIds.get(locals.i)) & QUGATE_GATE_ID_SLOT_MASK;
+                uint64 rgGen = (uint64)(input.recipientGateIds.get(locals.i)) >> QUGATE_GATE_ID_SLOT_BITS;
+                if (rgSlot >= state.get()._gateCount
+                    || rgGen == 0
+                    || state.get()._gateGenerations.get(rgSlot) != (uint16)(rgGen - 1)
+                    || state.get()._gates.get(rgSlot).active == 0)
                 {
                     if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
                     output.status = QUGATE_INVALID_GATE_RECIPIENT;
@@ -3821,9 +3632,13 @@ public:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = locals.invReward;
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             if (locals.invReward > 0)
             {
@@ -3834,7 +3649,6 @@ public:
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
@@ -3850,10 +3664,38 @@ public:
             return;
         }
 
-        locals.expireIn.slotIdx = locals.slotIdx;
-        expireInactiveGate(qpi, state, locals.expireIn, locals.expireOut, locals.expireLocals);
-        if (locals.expireOut.expired == 1)
+        // Lazy expiry check: expire gate if inactive too long
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+            && locals.gate.active == 1)
         {
+            if (locals.gate.currentBalance > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-04]
+                {
+                    locals.gate.currentBalance = 0;
+                }
+            }
+            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-04]
+                {
+                    locals.gate.oracleReserve = 0;
+                }
+            }
+            if (locals.gate.chainReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-04]
+                {
+                    locals.gate.chainReserve = 0;
+                }
+            }
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
             if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
             output.result = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
@@ -4003,14 +3845,20 @@ public:
                 locals.chainIn.hopCount = 0;
                 routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
                 // Dispatch deferred gate-as-recipient routing from chain hop
-                locals.deferredIn.deferredCount = locals.chainOut.deferredCount;
-                locals.deferredIn.deferredHopCount = locals.chainOut.deferredHopCount;
-                for (uint8 _dg2 = 0; _dg2 < locals.chainOut.deferredCount; _dg2++)
+                locals.savedDeferredCount = locals.chainOut.deferredCount;
+                locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
                 {
-                    locals.deferredIn.deferredGateSlots.set(_dg2, locals.chainOut.deferredGateSlots.get(_dg2));
-                    locals.deferredIn.deferredGateAmounts.set(_dg2, locals.chainOut.deferredGateAmounts.get(_dg2));
+                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
                 }
-                dispatchDeferredGateRecipients(qpi, state, locals.deferredIn, locals.deferredOut, locals.deferredLocals);
+                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                {
+                    locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                    locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                    locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                }
             }
 
             // Re-read gate after processSplit updated totalForwarded
@@ -4028,10 +3876,42 @@ public:
             if (locals.gate.chainNextGateId != -1)
             {
                 sint64 chainAmount = locals.splitOut.forwarded;
-                locals.forwardIn.chainNextGateId = locals.gate.chainNextGateId;
-                locals.forwardIn.amount = chainAmount;
-                forwardChainAmount(qpi, state, locals.forwardIn, locals.forwardOut, locals.forwardLocals);
-                chainAmount = locals.forwardOut.remainingAmount;
+                sint64 currentChainGateId = locals.gate.chainNextGateId;
+                uint8 hop = 0;
+                while (hop < QUGATE_MAX_CHAIN_DEPTH && currentChainGateId != -1 && chainAmount > 0)
+                {
+                    uint64 nextSlot = (uint64)currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
+                    uint64 nextGen = (uint64)currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
+                    if (nextSlot >= state.get()._gateCount || nextGen == 0
+                        || state.get()._gateGenerations.get(nextSlot) != (uint16)(nextGen - 1))
+                    {
+                        break; // dead link
+                    }
+                    locals.chainIn.slotIdx = nextSlot;
+                    locals.chainIn.amount = chainAmount;
+                    locals.chainIn.hopCount = hop;
+                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    // Dispatch deferred gate-as-recipient routing from chain hop
+                    locals.savedDeferredCount = locals.chainOut.deferredCount;
+                    locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
+                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                    {
+                        locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                        locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
+                    }
+                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                    {
+                        locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                        locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                        locals.chainIn.hopCount = locals.savedDeferredHopCount;
+                        routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    }
+                    chainAmount = locals.chainOut.forwarded;
+                    // Read updated gate to get its chainNextGateId
+                    locals.nextChainGate = state.get()._gates.get(nextSlot);
+                    currentChainGateId = locals.nextChainGate.chainNextGateId;
+                    hop++;
+                }
                 // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance
                 if (chainAmount > 0)
                 {
@@ -4049,13 +3929,50 @@ public:
             // If ONCE mode, close gate after trigger (guard against double-close underflow)
             if (locals.gate.oracleTriggerMode == QUGATE_ORACLE_TRIGGER_ONCE && locals.gate.active == 1)
             {
-                locals.retireIn.slotIdx = locals.slotIdx;
-                locals.retireIn.refundCurrentBalance = 0;
-                locals.retireIn.refundOracleReserve = 1;
-                locals.retireIn.unsubscribeOracle = 1;
-                locals.retireIn.refundChainReserve = 0;
-                locals.retireIn.clearModeState = 1;
-                retireGateSlot(qpi, state, locals.retireIn, locals.retireOut, locals.retireLocals);
+                if (locals.gate.oracleReserve > 0)
+                {
+                    if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-13]
+                    {
+                        locals.gate.oracleReserve = 0;
+                    }
+                }
+                if (locals.gate.oracleSubscriptionId >= 0)
+                {
+                    state.mut()._subscriptionToSlot.removeByKey(locals.gate.oracleSubscriptionId);
+                    qpi.unsubscribeOracle(locals.gate.oracleSubscriptionId);
+                    locals.gate.oracleSubscriptionId = -1;
+                }
+                // Defensive cleanup of auxiliary configs for recycled slot
+                {
+                    QUGATE_HeartbeatConfig zeroCfg;
+                    zeroCfg.active = 0; zeroCfg.triggered = 0; zeroCfg.thresholdEpochs = 0;
+                    zeroCfg.lastHeartbeatEpoch = 0; zeroCfg.payoutPercentPerEpoch = 0;
+                    zeroCfg.minimumBalance = 0; zeroCfg.triggerEpoch = 0; zeroCfg.beneficiaryCount = 0;
+                    for (uint8 _zi = 0; _zi < 8; _zi++)
+                    {
+                        zeroCfg.beneficiaryAddresses.set(_zi, id::zero());
+                        zeroCfg.beneficiaryShares.set(_zi, 0);
+                    }
+                    state.mut()._heartbeatConfigs.set(locals.slotIdx, zeroCfg);
+                    QUGATE_MultisigConfig zeroMs;
+                    for (uint8 _zi = 0; _zi < 8; _zi++)
+                    {
+                        zeroMs.guardians.set(_zi, id::zero());
+                    }
+                    zeroMs.guardianCount = 0; zeroMs.required = 0; zeroMs.proposalExpiryEpochs = 0;
+                    zeroMs.approvalBitmap = 0; zeroMs.approvalCount = 0; zeroMs.proposalEpoch = 0; zeroMs.proposalActive = 0;
+                    state.mut()._multisigConfigs.set(locals.slotIdx, zeroMs);
+                    QUGATE_TimeLockConfig zeroTl;
+                    zeroTl.unlockEpoch = 0; zeroTl.cancellable = 0; zeroTl.fired = 0; zeroTl.cancelled = 0; zeroTl.active = 0;
+                    state.mut()._timeLockConfigs.set(locals.slotIdx, zeroTl);
+                }
+                locals.gate.active = 0;
+                state.mut()._activeGates -= 1;
+                state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+                state.mut()._freeCount += 1;
+
+                // Increment generation so recycled slot gets a new gateId
+                state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
             }
         }
 
@@ -4068,14 +3985,17 @@ public:
 
     PUBLIC_FUNCTION_WITH_LOCALS(getGate)
     {
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             output.active = 0;
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
         output.mode = locals.gate.mode;
@@ -4144,9 +4064,13 @@ public:
     {
         for (locals.i = 0; locals.i < QUGATE_MAX_BATCH_GATES; locals.i++)
         {
-            locals.gateIdIn.gateId = input.gateIds.get(locals.i);
-            resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-            if (locals.gateIdOut.valid == 0)
+            // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
+            locals.slotIdx = input.gateIds.get(locals.i) & QUGATE_GATE_ID_SLOT_MASK;
+            locals.encodedGen = (input.gateIds.get(locals.i) >> QUGATE_GATE_ID_SLOT_BITS);
+            if (input.gateIds.get(locals.i) == 0
+                || locals.slotIdx >= state.get()._gateCount
+                || locals.encodedGen == 0
+                || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
             {
                 // Zero the entry for invalid IDs — clear all fields to avoid stale data
                 locals.entry.mode = 0;
@@ -4177,7 +4101,6 @@ public:
             }
             else
             {
-                locals.slotIdx = locals.gateIdOut.slotIdx;
                 locals.gate = state.get()._gates.get(locals.slotIdx);
 
                 locals.entry.mode = locals.gate.mode;
@@ -4235,9 +4158,14 @@ public:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
+        // Decode source gate
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             if (locals.invReward > 0)
             {
@@ -4248,32 +4176,47 @@ public:
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        locals.authIn.owner = locals.gate.owner;
-        locals.authIn.hasAdminGate = locals.gate.hasAdminGate;
-        locals.authIn.adminGateId = locals.gate.adminGateId;
-        locals.authIn.missingAdminStatus = QUGATE_UNAUTHORIZED;
-        locals.authIn.deniedStatus = QUGATE_UNAUTHORIZED;
-        requireOwnerOrAdmin(qpi, state, locals.authIn, locals.authOut, locals.authLocals);
-        if (locals.authOut.authorized == 0)
+        // Authorization: owner OR admin gate approval
+        if (locals.gate.owner != qpi.invocator())
         {
-            if (locals.invReward > 0)
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
             {
-                qpi.transfer(qpi.invocator(), locals.invReward);
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
             }
-            output.result = locals.authOut.status;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
-        }
-        if (locals.authOut.usedAdminApproval == 1)
-        {
-            locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
-            locals.logger.amount = locals.gate.adminGateId;
-            LOG_INFO(locals.logger);
+            if (adminAuth == 0)
+            {
+                if (locals.invReward > 0)
+                {
+                    qpi.transfer(qpi.invocator(), locals.invReward);
+                }
+                output.result = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         if (locals.gate.active == 0)
@@ -4288,10 +4231,38 @@ public:
             return;
         }
 
-        locals.expireIn.slotIdx = locals.slotIdx;
-        expireInactiveGate(qpi, state, locals.expireIn, locals.expireOut, locals.expireLocals);
-        if (locals.expireOut.expired == 1)
+        // Lazy expiry check: expire gate if inactive too long
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+            && locals.gate.active == 1)
         {
+            if (locals.gate.currentBalance > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-05]
+                {
+                    locals.gate.currentBalance = 0;
+                }
+            }
+            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-05]
+                {
+                    locals.gate.oracleReserve = 0;
+                }
+            }
+            if (locals.gate.chainReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-05]
+                {
+                    locals.gate.chainReserve = 0;
+                }
+            }
+            locals.gate.active = 0;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
             if (locals.invReward > 0) qpi.transfer(qpi.invocator(), locals.invReward);
             output.result = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
@@ -4327,9 +4298,14 @@ public:
             return;
         }
 
-        locals.gateIdIn.gateId = (uint64)input.nextGateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (input.nextGateId <= 0 || locals.gateIdOut.valid == 0)
+        // Decode versioned gateId: lower 20 bits = slotIndex, upper bits = generation
+        // Decode target gate
+        locals.targetSlot = (uint64)(input.nextGateId) & QUGATE_GATE_ID_SLOT_MASK;
+        locals.targetEncodedGen = (uint64)(input.nextGateId) >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.nextGateId <= 0
+            || locals.targetSlot >= state.get()._gateCount
+            || locals.targetEncodedGen == 0
+            || state.get()._gateGenerations.get(locals.targetSlot) != (uint16)(locals.targetEncodedGen - 1))
         {
             if (locals.invReward > 0)
             {
@@ -4341,7 +4317,6 @@ public:
             return;
         }
 
-        locals.targetSlot = locals.gateIdOut.slotIdx;
         locals.targetGate = state.get()._gates.get(locals.targetSlot);
         if (locals.targetGate.active == 0)
         {
@@ -4444,37 +4419,56 @@ public:
             qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        locals.authIn.owner = locals.gate.owner;
-        locals.authIn.hasAdminGate = locals.gate.hasAdminGate;
-        locals.authIn.adminGateId = locals.gate.adminGateId;
-        locals.authIn.missingAdminStatus = QUGATE_UNAUTHORIZED;
-        locals.authIn.deniedStatus = QUGATE_UNAUTHORIZED;
-        requireOwnerOrAdmin(qpi, state, locals.authIn, locals.authOut, locals.authLocals);
-        if (locals.authOut.authorized == 0)
+        // Authorization: owner OR admin gate approval
+        if (locals.gate.owner != qpi.invocator())
         {
-            output.status = locals.authOut.status;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
-        }
-        if (locals.authOut.usedAdminApproval == 1)
-        {
-            locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
-            locals.logger.amount = locals.gate.adminGateId;
-            LOG_INFO(locals.logger);
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
+            {
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
+            }
+            if (adminAuth == 0)
+            {
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         // Gate must be active
@@ -4591,16 +4585,19 @@ public:
             qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
@@ -4681,13 +4678,16 @@ public:
         output.minimumBalance = 0;
         output.beneficiaryCount = 0;
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
         if (locals.gate.mode != QUGATE_MODE_HEARTBEAT)
@@ -4732,37 +4732,56 @@ public:
             qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        locals.authIn.owner = locals.gate.owner;
-        locals.authIn.hasAdminGate = locals.gate.hasAdminGate;
-        locals.authIn.adminGateId = locals.gate.adminGateId;
-        locals.authIn.missingAdminStatus = QUGATE_UNAUTHORIZED;
-        locals.authIn.deniedStatus = QUGATE_UNAUTHORIZED;
-        requireOwnerOrAdmin(qpi, state, locals.authIn, locals.authOut, locals.authLocals);
-        if (locals.authOut.authorized == 0)
+        // Authorization: owner OR admin gate approval
+        if (locals.gate.owner != qpi.invocator())
         {
-            output.status = locals.authOut.status;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
-        }
-        if (locals.authOut.usedAdminApproval == 1)
-        {
-            locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
-            locals.logger.amount = locals.gate.adminGateId;
-            LOG_INFO(locals.logger);
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
+            {
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
+            }
+            if (adminAuth == 0)
+            {
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         // Gate must be active
@@ -4887,14 +4906,17 @@ public:
         output.proposalEpoch = 0;
         output.proposalActive = 0;
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             output.status = QUGATE_INVALID_GATE_ID;
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
         if (locals.gate.mode != QUGATE_MODE_MULTISIG)
@@ -4937,37 +4959,56 @@ public:
             qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        locals.authIn.owner = locals.gate.owner;
-        locals.authIn.hasAdminGate = locals.gate.hasAdminGate;
-        locals.authIn.adminGateId = locals.gate.adminGateId;
-        locals.authIn.missingAdminStatus = QUGATE_UNAUTHORIZED;
-        locals.authIn.deniedStatus = QUGATE_UNAUTHORIZED;
-        requireOwnerOrAdmin(qpi, state, locals.authIn, locals.authOut, locals.authLocals);
-        if (locals.authOut.authorized == 0)
+        // Authorization: owner OR admin gate approval
+        if (locals.gate.owner != qpi.invocator())
         {
-            output.status = locals.authOut.status;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
-        }
-        if (locals.authOut.usedAdminApproval == 1)
-        {
-            locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
-            locals.logger.amount = locals.gate.adminGateId;
-            LOG_INFO(locals.logger);
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
+            {
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
+            }
+            if (adminAuth == 0)
+            {
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         // Gate must be active
@@ -5033,37 +5074,56 @@ public:
             qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        locals.authIn.owner = locals.gate.owner;
-        locals.authIn.hasAdminGate = locals.gate.hasAdminGate;
-        locals.authIn.adminGateId = locals.gate.adminGateId;
-        locals.authIn.missingAdminStatus = QUGATE_UNAUTHORIZED;
-        locals.authIn.deniedStatus = QUGATE_UNAUTHORIZED;
-        requireOwnerOrAdmin(qpi, state, locals.authIn, locals.authOut, locals.authLocals);
-        if (locals.authOut.authorized == 0)
+        // Authorization: owner OR admin gate approval
+        if (locals.gate.owner != qpi.invocator())
         {
-            output.status = locals.authOut.status;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
-        }
-        if (locals.authOut.usedAdminApproval == 1)
-        {
-            locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
-            locals.logger.amount = locals.gate.adminGateId;
-            LOG_INFO(locals.logger);
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
+            {
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
+            }
+            if (adminAuth == 0)
+            {
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         // Gate must be active
@@ -5135,13 +5195,14 @@ public:
         locals.cfg.cancelled = 1;
         state.mut()._timeLockConfigs.set(locals.slotIdx, locals.cfg);
 
-        locals.retireIn.slotIdx = locals.slotIdx;
-        locals.retireIn.refundCurrentBalance = 0;
-        locals.retireIn.refundOracleReserve = 0;
-        locals.retireIn.unsubscribeOracle = 0;
-        locals.retireIn.refundChainReserve = 0;
-        locals.retireIn.clearModeState = 0;
-        retireGateSlot(qpi, state, locals.retireIn, locals.retireOut, locals.retireLocals);
+        // Close the gate
+        locals.gate.active = 0;
+        state.mut()._gates.set(locals.slotIdx, locals.gate);
+        state.mut()._activeGates -= 1;
+
+        state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
+        state.mut()._freeCount += 1;
+        state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
 
         locals.logger._type = QUGATE_LOG_TIME_LOCK_CANCELLED;
         LOG_INFO(locals.logger);
@@ -5163,13 +5224,16 @@ public:
         output.currentEpoch = 0;
         output.epochsRemaining = 0;
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
         if (locals.gate.mode != QUGATE_MODE_TIME_LOCK)
@@ -5217,16 +5281,19 @@ public:
             qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
@@ -5239,25 +5306,42 @@ public:
             return;
         }
 
-        locals.authIn.owner = locals.gate.owner;
-        locals.authIn.hasAdminGate = locals.gate.hasAdminGate;
-        locals.authIn.adminGateId = locals.gate.adminGateId;
-        locals.authIn.missingAdminStatus = QUGATE_UNAUTHORIZED;
-        locals.authIn.deniedStatus = QUGATE_ADMIN_GATE_REQUIRED;
-        requireOwnerOrAdmin(qpi, state, locals.authIn, locals.authOut, locals.authLocals);
-        if (locals.authOut.authorized == 0)
+        // Authorization
+        if (qpi.invocator() != locals.gate.owner)
         {
-            output.status = locals.authOut.status;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
+            // Non-owner: always needs admin gate approval
+            if (!locals.gate.hasAdminGate)
+            {
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+            // Check admin gate approval
+            locals.adminSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+            locals.adminApproved = 0;
+            if (locals.adminSlot < state.get()._gateCount)
+            {
+                locals.adminGate = state.get()._gates.get(locals.adminSlot);
+                if (locals.adminGate.active && locals.adminGate.mode == QUGATE_MODE_MULTISIG)
+                {
+                    locals.msCfg = state.get()._multisigConfigs.get(locals.adminSlot);
+                    if (locals.msCfg.approvalCount >= locals.msCfg.required
+                        && locals.msCfg.proposalEpoch == (uint32)qpi.epoch())
+                    {
+                        locals.adminApproved = 1;
+                    }
+                }
+            }
+            if (locals.adminApproved == 0)
+            {
+                output.status = QUGATE_ADMIN_GATE_REQUIRED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
         }
-        if (locals.authOut.usedAdminApproval == 1)
-        {
-            locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
-            locals.logger.amount = locals.gate.adminGateId;
-            LOG_INFO(locals.logger);
-        }
+        // Owner always authorized (can set or clear admin gate)
 
         // Clear admin gate
         if (input.adminGateId == -1)
@@ -5271,18 +5355,28 @@ public:
             return;
         }
 
-        locals.adminIn.adminGateId = input.adminGateId;
-        locals.adminIn.requireApproval = 0;
-        resolveAdminGate(qpi, state, locals.adminIn, locals.adminOut, locals.adminLocals);
-        if (locals.adminOut.valid == 0)
+        // Validate adminGateId points to an active MULTISIG gate
+        locals.adminSlot = (uint64)input.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.adminEncodedGen = (uint64)input.adminGateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.adminGateId <= 0
+            || locals.adminSlot >= state.get()._gateCount
+            || locals.adminEncodedGen == 0
+            || state.get()._gateGenerations.get(locals.adminSlot) != (uint16)(locals.adminEncodedGen - 1))
         {
             output.status = QUGATE_INVALID_ADMIN_GATE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.adminSlot = locals.adminOut.adminSlot;
+
         locals.adminGate = state.get()._gates.get(locals.adminSlot);
+        if (locals.adminGate.active == 0 || locals.adminGate.mode != QUGATE_MODE_MULTISIG)
+        {
+            output.status = QUGATE_INVALID_ADMIN_GATE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
 
         // Prevent self-referential admin gate
         if (locals.adminSlot == locals.slotIdx)
@@ -5302,21 +5396,19 @@ public:
             {
                 break;
             }
-            locals.adminIn.adminGateId = locals.walkGate.adminGateId;
-            locals.adminIn.requireApproval = 0;
-            resolveAdminGate(qpi, state, locals.adminIn, locals.adminOut, locals.adminLocals);
-            if (locals.adminOut.valid == 0)
-            {
-                break;
-            }
-            if (locals.adminOut.adminSlot == locals.slotIdx)
+            uint64 nextAdminSlot = (uint64)(locals.walkGate.adminGateId) & QUGATE_GATE_ID_SLOT_MASK;
+            if (nextAdminSlot == locals.slotIdx)
             {
                 output.status = QUGATE_INVALID_ADMIN_CYCLE;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                 LOG_WARNING(locals.logger);
                 return;
             }
-            locals.walkSlot = locals.adminOut.adminSlot;
+            if (nextAdminSlot >= state.get()._gateCount)
+            {
+                break;
+            }
+            locals.walkSlot = nextAdminSlot;
         }
 
         // Set admin gate
@@ -5341,13 +5433,16 @@ public:
         output.guardianCount = 0;
         output.required = 0;
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
         output.hasAdminGate = locals.gate.hasAdminGate;
@@ -5356,12 +5451,9 @@ public:
         // If admin gate is set, look up its mode
         if (locals.gate.hasAdminGate)
         {
-            locals.adminIn.adminGateId = locals.gate.adminGateId;
-            locals.adminIn.requireApproval = 0;
-            resolveAdminGate(qpi, state, locals.adminIn, locals.adminOut, locals.adminLocals);
-            if (locals.adminOut.valid == 1)
+            locals.adminSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+            if (locals.adminSlot < state.get()._gateCount)
             {
-                locals.adminSlot = locals.adminOut.adminSlot;
                 locals.adminGate = state.get()._gates.get(locals.adminSlot);
                 output.adminGateMode = locals.adminGate.mode;
                 locals.adminCfg = state.get()._multisigConfigs.get(locals.adminSlot);
@@ -5396,37 +5488,56 @@ public:
             qpi.transfer(qpi.invocator(), locals.invReward);
         }
 
-        locals.gateIdIn.gateId = input.gateId;
-        resolveGateId(qpi, state, locals.gateIdIn, locals.gateIdOut, locals.gateIdLocals);
-        if (locals.gateIdOut.valid == 0)
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
             return;
         }
-        locals.slotIdx = locals.gateIdOut.slotIdx;
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        locals.authIn.owner = locals.gate.owner;
-        locals.authIn.hasAdminGate = locals.gate.hasAdminGate;
-        locals.authIn.adminGateId = locals.gate.adminGateId;
-        locals.authIn.missingAdminStatus = QUGATE_UNAUTHORIZED;
-        locals.authIn.deniedStatus = QUGATE_UNAUTHORIZED;
-        requireOwnerOrAdmin(qpi, state, locals.authIn, locals.authOut, locals.authLocals);
-        if (locals.authOut.authorized == 0)
+        // Authorization: owner OR admin gate approval
+        if (locals.gate.owner != qpi.invocator())
         {
-            output.status = locals.authOut.status;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
-            return;
-        }
-        if (locals.authOut.usedAdminApproval == 1)
-        {
-            locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
-            locals.logger.amount = locals.gate.adminGateId;
-            LOG_INFO(locals.logger);
+            uint8 adminAuth = 0;
+            if (locals.gate.hasAdminGate)
+            {
+                uint64 aSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                if (aSlot < state.get()._gateCount)
+                {
+                    locals.adminCheckGate = state.get()._gates.get(aSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckMs = state.get()._multisigConfigs.get(aSlot);
+                        if (locals.adminCheckMs.approvalCount >= locals.adminCheckMs.required
+                            && locals.adminCheckMs.proposalEpoch == (uint32)qpi.epoch())
+                        {
+                            adminAuth = 1;
+                        }
+                    }
+                }
+            }
+            if (adminAuth == 0)
+            {
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+            if (adminAuth == 1)
+            {
+                locals.logger._type = QUGATE_LOG_ADMIN_APPROVAL_USED;
+                locals.logger.amount = locals.gate.adminGateId;
+                LOG_INFO(locals.logger);
+            }
         }
 
         // Gate must be active
@@ -5714,17 +5825,87 @@ public:
 
                 if (qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs)
                 {
+                    // Refund any held balance (THRESHOLD / ORACLE mode)
+                    if (locals.gate.currentBalance > 0)
+                    {
+                        if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-14]
+                        {
+                            locals.gate.currentBalance = 0;
+                        }
+                    }
+
+                    // Refund oracle reserve on expiry
+                    if (locals.gate.mode == QUGATE_MODE_ORACLE)
+                    {
+                        if (locals.gate.oracleReserve > 0)
+                        {
+                            if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-14]
+                            {
+                                locals.gate.oracleReserve = 0;
+                            }
+                        }
+                        if (locals.gate.oracleSubscriptionId >= 0)
+                        {
+                            state.mut()._subscriptionToSlot.removeByKey(locals.gate.oracleSubscriptionId);
+                        }
+                    }
+
+                    // Refund chain reserve on expiry
+                    if (locals.gate.chainReserve > 0)
+                    {
+                        if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-14]
+                        {
+                            locals.gate.chainReserve = 0;
+                        }
+                    }
+
+                    // Clear mode-specific configs on expiry (prevents ghost state in recycled slots)
+                    if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
+                    {
+                        QUGATE_HeartbeatConfig zeroCfg;
+                        zeroCfg.active = 0; zeroCfg.triggered = 0; zeroCfg.thresholdEpochs = 0;
+                        zeroCfg.lastHeartbeatEpoch = 0; zeroCfg.payoutPercentPerEpoch = 0;
+                        zeroCfg.minimumBalance = 0; zeroCfg.triggerEpoch = 0; zeroCfg.beneficiaryCount = 0;
+                        for (uint8 _zi = 0; _zi < 8; _zi++)
+                        {
+                            zeroCfg.beneficiaryAddresses.set(_zi, id::zero());
+                            zeroCfg.beneficiaryShares.set(_zi, 0);
+                        }
+                        state.mut()._heartbeatConfigs.set(locals.i, zeroCfg);
+                    }
+                    else if (locals.gate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        QUGATE_MultisigConfig zeroCfg;
+                        for (uint8 _zi = 0; _zi < 8; _zi++)
+                        {
+                            zeroCfg.guardians.set(_zi, id::zero());
+                        }
+                        zeroCfg.guardianCount = 0; zeroCfg.required = 0; zeroCfg.proposalExpiryEpochs = 0;
+                        zeroCfg.approvalBitmap = 0; zeroCfg.approvalCount = 0; zeroCfg.proposalEpoch = 0; zeroCfg.proposalActive = 0;
+                        state.mut()._multisigConfigs.set(locals.i, zeroCfg);
+                    }
+                    else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
+                    {
+                        QUGATE_TimeLockConfig zeroCfg;
+                        zeroCfg.unlockEpoch = 0; zeroCfg.cancellable = 0; zeroCfg.fired = 0; zeroCfg.cancelled = 0; zeroCfg.active = 0;
+                        state.mut()._timeLockConfigs.set(locals.i, zeroCfg);
+                    }
+
+                    locals.gate.active = 0;
+                    state.mut()._gates.set(locals.i, locals.gate);
+                    state.mut()._activeGates -= 1;
+
+                    // Push slot onto free-list
+                    state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
+                    state.mut()._freeCount += 1;
+
                     // Log expiry (before generation increment, so we log the expired gate's ID)
                     locals.logger._contractIndex = CONTRACT_INDEX;
                     locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
                     locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
-                    locals.retireIn.slotIdx = locals.i;
-                    locals.retireIn.refundCurrentBalance = 1;
-                    locals.retireIn.refundOracleReserve = 1;
-                    locals.retireIn.unsubscribeOracle = 0;
-                    locals.retireIn.refundChainReserve = 1;
-                    locals.retireIn.clearModeState = 1;
-                    retireGateSlot(qpi, state, locals.retireIn, locals.retireOut, locals.retireLocals);
+
+                    // Increment generation so recycled slot gets a new gateId
+                    state.mut()._gateGenerations.set(locals.i, state.get()._gateGenerations.get(locals.i) + 1);
                     locals.logger.sender = locals.gate.owner;
                     locals.logger.amount = 0;
                     LOG_INFO(locals.logger);
@@ -5820,10 +6001,22 @@ public:
                     if (locals.gate.chainNextGateId != -1 && locals.inhPayoutTotal > 0)
                     {
                         sint64 chainAmount = locals.inhPayoutTotal;
-                        locals.forwardIn.chainNextGateId = locals.gate.chainNextGateId;
-                        locals.forwardIn.amount = chainAmount;
-                        forwardChainAmount(qpi, state, locals.forwardIn, locals.forwardOut, locals.forwardLocals);
-                        chainAmount = locals.forwardOut.remainingAmount;
+                        sint64 currentChainGateId = locals.gate.chainNextGateId;
+                        uint8 hop = 0;
+                        while (hop < QUGATE_MAX_CHAIN_DEPTH && currentChainGateId != -1 && chainAmount > 0)
+                        {
+                            uint64 nextSlot = (uint64)currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
+                            uint64 nextGen = (uint64)currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
+                            if (nextSlot >= state.get()._gateCount || nextGen == 0
+                                || state.get()._gateGenerations.get(nextSlot) != (uint16)(nextGen - 1))
+                                break;
+                            locals.rtIn.slotIdx = nextSlot; locals.rtIn.amount = chainAmount; locals.rtIn.hopCount = hop;
+                            routeToGate(qpi, state, locals.rtIn, locals.rtOut, locals.rtLocals);
+                            chainAmount = locals.rtOut.forwarded;
+                            GateConfig nextGate = state.get()._gates.get(nextSlot);
+                            currentChainGateId = nextGate.chainNextGateId;
+                            hop++;
+                        }
                         // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance
                         if (chainAmount > 0)
                         {
@@ -5877,13 +6070,14 @@ public:
                             }
                         }
 
-                        locals.retireIn.slotIdx = locals.i;
-                        locals.retireIn.refundCurrentBalance = 0;
-                        locals.retireIn.refundOracleReserve = 0;
-                        locals.retireIn.unsubscribeOracle = 0;
-                        locals.retireIn.refundChainReserve = 0;
-                        locals.retireIn.clearModeState = 0;
-                        retireGateSlot(qpi, state, locals.retireIn, locals.retireOut, locals.retireLocals);
+                        locals.gate.active = 0;
+                        state.mut()._gates.set(locals.i, locals.gate);
+                        state.mut()._activeGates -= 1;
+
+                        state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
+                        state.mut()._freeCount += 1;
+
+                        state.mut()._gateGenerations.set(locals.i, state.get()._gateGenerations.get(locals.i) + 1);
 
                         locals.logger._contractIndex = CONTRACT_INDEX;
                         locals.logger._type = QUGATE_LOG_GATE_CLOSED;
@@ -5978,11 +6172,13 @@ public:
                         if (locals.gate.recipientGateIds.get(0) >= 0)
                         {
                             // Gate-as-recipient: route via routeToGate
-                            locals.activeGateIn.gateId = locals.gate.recipientGateIds.get(0);
-                            resolveActiveGateId(qpi, state, locals.activeGateIn, locals.activeGateOut, locals.activeGateLocals);
-                            if (locals.activeGateOut.valid == 1)
+                            uint64 targetSlot = (uint64)(locals.gate.recipientGateIds.get(0)) & QUGATE_GATE_ID_SLOT_MASK;
+                            uint64 targetGen = (uint64)(locals.gate.recipientGateIds.get(0)) >> QUGATE_GATE_ID_SLOT_BITS;
+                            if (targetSlot < state.get()._gateCount && targetGen > 0
+                                && state.get()._gateGenerations.get(targetSlot) == (uint16)(targetGen - 1)
+                                && state.get()._gates.get(targetSlot).active == 1)
                             {
-                                locals.rtIn.slotIdx = locals.activeGateOut.slotIdx;
+                                locals.rtIn.slotIdx = targetSlot;
                                 locals.rtIn.amount = locals.tlReleaseAmount;
                                 locals.rtIn.hopCount = 0;
                                 routeToGate(qpi, state, locals.rtIn, locals.rtOut, locals.rtLocals);
@@ -6021,13 +6217,15 @@ public:
                 locals.logger.amount = (sint64)locals.gate.totalForwarded;
                 LOG_INFO(locals.logger);
 
-                locals.retireIn.slotIdx = locals.i;
-                locals.retireIn.refundCurrentBalance = 0;
-                locals.retireIn.refundOracleReserve = 0;
-                locals.retireIn.unsubscribeOracle = 0;
-                locals.retireIn.refundChainReserve = 0;
-                locals.retireIn.clearModeState = 0;
-                retireGateSlot(qpi, state, locals.retireIn, locals.retireOut, locals.retireLocals);
+                // Close the gate
+                locals.gate = state.get()._gates.get(locals.i);
+                locals.gate.active = 0;
+                state.mut()._gates.set(locals.i, locals.gate);
+                state.mut()._activeGates -= 1;
+
+                state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
+                state.mut()._freeCount += 1;
+                state.mut()._gateGenerations.set(locals.i, state.get()._gateGenerations.get(locals.i) + 1);
             }
         }
     }
@@ -6040,3 +6238,4 @@ public:
     }
 
 };
+
