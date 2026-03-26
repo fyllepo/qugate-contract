@@ -2153,6 +2153,7 @@ public:
 
             // Check threshold
             locals.gate = state.get()._gates.get(input.slotIdx);
+            sint64 releaseAmount = input.amount;
             if (locals.gate.recipientCount == 0
                 && locals.gate.chainNextGateId == -1
                 && locals.msigCfg.adminApprovalWindowEpochs > 0
@@ -2183,7 +2184,7 @@ public:
                 else if (locals.gate.currentBalance > 0)
                 {
                     // Transfer balance to target (recipients.get(0) is the target address)
-                    sint64 releaseAmount = (sint64)locals.gate.currentBalance;
+                    releaseAmount = (sint64)locals.gate.currentBalance;
                     uint8 transferred = 0;
                     if (locals.gate.recipientCount > 0)
                     {
