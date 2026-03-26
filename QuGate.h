@@ -2153,56 +2153,20 @@ public:
 
             // Check threshold
             locals.gate = state.get()._gates.get(input.slotIdx);
-            if (locals.msigCfg.approvalCount >= locals.msigCfg.required && locals.gate.currentBalance > 0)
+            if (locals.gate.recipientCount == 0
+                && locals.gate.chainNextGateId == -1
+                && locals.msigCfg.adminApprovalWindowEpochs > 0
+                && input.amount > 0
+                && locals.gate.currentBalance >= (uint64)input.amount)
             {
-                // Transfer balance to target (recipients.get(0) is the target address)
-                sint64 releaseAmount = (sint64)locals.gate.currentBalance;
-                uint8 transferred = 0;
-                if (locals.gate.recipientCount > 0)
-                {
-                    if (locals.gate.recipientGateIds.get(0) >= 0)
-                    {
-                        // Gate-as-recipient: defer routing to caller
-                        uint64 targetSlot = (uint64)(locals.gate.recipientGateIds.get(0)) & QUGATE_GATE_ID_SLOT_MASK;
-                        uint64 targetGen = (uint64)(locals.gate.recipientGateIds.get(0)) >> QUGATE_GATE_ID_SLOT_BITS;
-                        if (targetSlot < state.get()._gateCount && targetGen > 0
-                            && state.get()._gateGenerations.get(targetSlot) == (uint16)(targetGen - 1)
-                            && state.get()._gates.get(targetSlot).active == 1)
-                        {
-                            output.deferredToGate = 1;
-                            output.deferredGateSlot = targetSlot;
-                            output.deferredGateAmount = releaseAmount;
-                            transferred = 1;
-                        }
-                    }
-                    else
-                    {
-                        if (qpi.transfer(locals.gate.recipients.get(0), releaseAmount) >= 0) // [QG-12]
-                        {
-                            transferred = 1;
-                        }
-                    }
-                }
-                else if (locals.gate.chainNextGateId != -1)
-                {
-                    transferred = 1; // No recipient, chain will handle
-                    output.chainForward = 1;
-                    output.chainForwardAmount = releaseAmount;
-                }
-                // else: no recipients AND no chain — funds stay in currentBalance
-                if (transferred)
-                {
-                    locals.gate.totalForwarded += (uint64)releaseAmount;
-                    locals.gate.currentBalance = 0;
-                    state.mut()._gates.set(input.slotIdx, locals.gate);
+                // Admin-only multisig votes are burned immediately instead of accumulating.
+                locals.gate.currentBalance -= (uint64)input.amount;
+                state.mut()._gates.set(input.slotIdx, locals.gate);
+            }
 
-                    // Reset proposal
-                    locals.msigCfg.approvalBitmap = 0;
-                    locals.msigCfg.approvalCount = 0;
-                    locals.msigCfg.proposalActive = 0;
-                    state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
-                }
-                else if (locals.gate.recipientCount == 0
+            if (locals.msigCfg.approvalCount >= locals.msigCfg.required)
+            {
+                if (locals.gate.recipientCount == 0
                     && locals.gate.chainNextGateId == -1
                     && locals.msigCfg.adminApprovalWindowEpochs > 0)
                 {
@@ -2215,6 +2179,56 @@ public:
                     locals.msigCfg.approvalCount = 0;
                     locals.msigCfg.proposalActive = 0;
                     state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
+                }
+                else if (locals.gate.currentBalance > 0)
+                {
+                    // Transfer balance to target (recipients.get(0) is the target address)
+                    sint64 releaseAmount = (sint64)locals.gate.currentBalance;
+                    uint8 transferred = 0;
+                    if (locals.gate.recipientCount > 0)
+                    {
+                        if (locals.gate.recipientGateIds.get(0) >= 0)
+                        {
+                            // Gate-as-recipient: defer routing to caller
+                            uint64 targetSlot = (uint64)(locals.gate.recipientGateIds.get(0)) & QUGATE_GATE_ID_SLOT_MASK;
+                            uint64 targetGen = (uint64)(locals.gate.recipientGateIds.get(0)) >> QUGATE_GATE_ID_SLOT_BITS;
+                            if (targetSlot < state.get()._gateCount && targetGen > 0
+                                && state.get()._gateGenerations.get(targetSlot) == (uint16)(targetGen - 1)
+                                && state.get()._gates.get(targetSlot).active == 1)
+                            {
+                                output.deferredToGate = 1;
+                                output.deferredGateSlot = targetSlot;
+                                output.deferredGateAmount = releaseAmount;
+                                transferred = 1;
+                            }
+                        }
+                        else
+                        {
+                            if (qpi.transfer(locals.gate.recipients.get(0), releaseAmount) >= 0) // [QG-12]
+                            {
+                                transferred = 1;
+                            }
+                        }
+                    }
+                    else if (locals.gate.chainNextGateId != -1)
+                    {
+                        transferred = 1; // No recipient, chain will handle
+                        output.chainForward = 1;
+                        output.chainForwardAmount = releaseAmount;
+                    }
+                    // else: no recipients AND no chain — funds stay in currentBalance
+                    if (transferred)
+                    {
+                        locals.gate.totalForwarded += (uint64)releaseAmount;
+                        locals.gate.currentBalance = 0;
+                        state.mut()._gates.set(input.slotIdx, locals.gate);
+
+                        // Reset proposal
+                        locals.msigCfg.approvalBitmap = 0;
+                        locals.msigCfg.approvalCount = 0;
+                        locals.msigCfg.proposalActive = 0;
+                        state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
+                    }
                 }
 
                 locals.logger._contractIndex = CONTRACT_INDEX;
