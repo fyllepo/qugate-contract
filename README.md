@@ -1367,6 +1367,22 @@ No QU can be permanently locked in the contract (assuming the owner retains acce
 
 ## Building and Testing
 
+### Guard Rails
+
+Run this before pushing structural changes to `QuGate.h`:
+
+```bash
+python3 scripts/contract_guard.py
+```
+
+It currently checks:
+
+- contract constants vs `contract_qugate.cpp` harness constants
+- public functions accidentally calling private procedures
+- obvious locals hotspots where routing locals are embedded into other locals structs
+
+This is a fast repo-local safety net, not a replacement for a real core-lite compile.
+
 ### Prerequisites
 
 - [qubic/core](https://github.com/qubic/core) build environment

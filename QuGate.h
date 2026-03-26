@@ -85,6 +85,14 @@ constexpr uint8 QUGATE_MODE_HEARTBEAT = 6;  // Heartbeat gate — heartbeat() or
 constexpr uint8 QUGATE_MODE_MULTISIG = 7;     // M-of-N guardian approval before funds release
 constexpr uint8 QUGATE_MODE_TIME_LOCK = 8;    // Hold funds until a target epoch, then release to recipient
 
+// Minimal execution observability outcome types
+constexpr uint8 QUGATE_EXEC_NONE      = 0;
+constexpr uint8 QUGATE_EXEC_FORWARDED = 1;
+constexpr uint8 QUGATE_EXEC_HELD      = 2;
+constexpr uint8 QUGATE_EXEC_REFUNDED  = 3;
+constexpr uint8 QUGATE_EXEC_BURNED    = 4;
+constexpr uint8 QUGATE_EXEC_REJECTED  = 5;
+
 // Oracle condition types
 constexpr uint8 QUGATE_ORACLE_COND_PRICE_ABOVE = 0;
 constexpr uint8 QUGATE_ORACLE_COND_PRICE_BELOW = 1;
@@ -295,6 +303,17 @@ public:
 
         // Gate-as-recipient — allows recipients to be other gates for internal routing
         Array<sint64, 8> recipientGateIds;  // Per-recipient: -1 = wallet, >= 0 = versioned gate ID
+    };
+
+    struct QUGATE_LatestExecution
+    {
+        uint8  valid;                  // 1 if this slot has an observed latest execution
+        uint8  mode;                   // Gate mode at execution time
+        uint8  outcomeType;            // QUGATE_EXEC_*
+        uint8  selectedRecipientIndex; // 255 = none / not applicable
+        sint64 selectedDownstreamGateId; // recipientGateIds[selectedRecipientIndex] or -1
+        uint64 forwardedAmount;
+        uint64 observedTick;
     };
 
     // =============================================
@@ -597,6 +616,27 @@ public:
         uint64 i;
     };
 
+    struct getLatestExecution_input
+    {
+        uint64 gateId;
+    };
+    struct getLatestExecution_output
+    {
+        uint8  valid;
+        uint8  mode;
+        uint8  outcomeType;
+        uint8  selectedRecipientIndex;
+        sint64 selectedDownstreamGateId;
+        uint64 forwardedAmount;
+        uint64 observedTick;
+    };
+    struct getLatestExecution_locals
+    {
+        uint64 slotIdx;
+        uint64 encodedGen;
+        QUGATE_LatestExecution latestExecution;
+    };
+
     // Query TIME_LOCK state for a gate.
     struct getTimeLockState_input
     {
@@ -734,6 +774,9 @@ public:
 
         // TIME_LOCK mode state — indexed by gate slot (same index as _gates)
         Array<QUGATE_TimeLockConfig, QUGATE_MAX_GATES> _timeLockConfigs;
+
+        // Minimal latest execution metadata — one record per gate slot
+        Array<QUGATE_LatestExecution, QUGATE_MAX_GATES> _latestExecutions;
     };
 
     // =============================================
@@ -745,6 +788,7 @@ public:
         sint64 invReward;
         QuGateLogger logger;
         GateConfig newGate;
+        QUGATE_LatestExecution latestExecZero;
         uint64 totalRatio;
         uint64 i;
         uint64 slotIdx;
@@ -789,6 +833,7 @@ public:
     struct processRoundRobin_locals
     {
         GateConfig gate;
+        QUGATE_LatestExecution latestExec;
     };
 
     struct processThreshold_input
@@ -826,6 +871,7 @@ public:
     {
         GateConfig gate;
         uint64 recipientIdx;
+        QUGATE_LatestExecution latestExec;
     };
 
     struct processConditional_input
@@ -1649,6 +1695,14 @@ public:
         }
 
         state.mut()._gates.set(locals.slotIdx, locals.newGate);
+        locals.latestExecZero.valid = 0;
+        locals.latestExecZero.mode = 0;
+        locals.latestExecZero.outcomeType = QUGATE_EXEC_NONE;
+        locals.latestExecZero.selectedRecipientIndex = 255;
+        locals.latestExecZero.selectedDownstreamGateId = -1;
+        locals.latestExecZero.forwardedAmount = 0;
+        locals.latestExecZero.observedTick = 0;
+        state.mut()._latestExecutions.set(locals.slotIdx, locals.latestExecZero);
         output.gateId = ((uint64)(state.get()._gateGenerations.get(locals.slotIdx) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.slotIdx;
         state.mut()._activeGates += 1;
 
@@ -1750,11 +1804,21 @@ public:
     PRIVATE_PROCEDURE_WITH_LOCALS(processRoundRobin)
     {
         locals.gate = state.get()._gates.get(input.gateIdx);
+        locals.latestExec.valid = 1;
+        locals.latestExec.mode = locals.gate.mode;
+        locals.latestExec.outcomeType = QUGATE_EXEC_NONE;
+        locals.latestExec.selectedRecipientIndex = 255;
+        locals.latestExec.selectedDownstreamGateId = -1;
+        locals.latestExec.forwardedAmount = 0;
+        locals.latestExec.observedTick = qpi.tick();
 
         if (locals.gate.recipientCount == 0)
         {
             locals.gate.totalForwarded += input.amount;
             state.mut()._gates.set(input.gateIdx, locals.gate);
+            locals.latestExec.outcomeType = QUGATE_EXEC_FORWARDED;
+            locals.latestExec.forwardedAmount = input.amount;
+            state.mut()._latestExecutions.set(input.gateIdx, locals.latestExec);
             output.forwarded = input.amount;
             return;
         }
@@ -1772,6 +1836,10 @@ public:
                 output.deferredGateSlot = targetSlot;
                 output.deferredGateAmount = input.amount;
                 locals.gate.totalForwarded += input.amount;
+                locals.latestExec.outcomeType = QUGATE_EXEC_FORWARDED;
+                locals.latestExec.selectedRecipientIndex = (uint8)locals.gate.roundRobinIndex;
+                locals.latestExec.selectedDownstreamGateId = locals.gate.recipientGateIds.get(locals.gate.roundRobinIndex);
+                locals.latestExec.forwardedAmount = input.amount;
                 locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
                 output.forwarded = input.amount;
             }
@@ -1781,12 +1849,17 @@ public:
             if (qpi.transfer(locals.gate.recipients.get(locals.gate.roundRobinIndex), input.amount) >= 0) // [QG-08]
             {
                 locals.gate.totalForwarded += input.amount;
+                locals.latestExec.outcomeType = QUGATE_EXEC_FORWARDED;
+                locals.latestExec.selectedRecipientIndex = (uint8)locals.gate.roundRobinIndex;
+                locals.latestExec.selectedDownstreamGateId = -1;
+                locals.latestExec.forwardedAmount = input.amount;
                 locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
                 output.forwarded = input.amount;
             }
         }
 
         state.mut()._gates.set(input.gateIdx, locals.gate);
+        state.mut()._latestExecutions.set(input.gateIdx, locals.latestExec);
     }
 
     PRIVATE_PROCEDURE_WITH_LOCALS(processThreshold)
@@ -1843,11 +1916,21 @@ public:
     PRIVATE_PROCEDURE_WITH_LOCALS(processRandom)
     {
         locals.gate = state.get()._gates.get(input.gateIdx);
+        locals.latestExec.valid = 1;
+        locals.latestExec.mode = locals.gate.mode;
+        locals.latestExec.outcomeType = QUGATE_EXEC_NONE;
+        locals.latestExec.selectedRecipientIndex = 255;
+        locals.latestExec.selectedDownstreamGateId = -1;
+        locals.latestExec.forwardedAmount = 0;
+        locals.latestExec.observedTick = qpi.tick();
 
         if (locals.gate.recipientCount == 0)
         {
             locals.gate.totalForwarded += input.amount;
             state.mut()._gates.set(input.gateIdx, locals.gate);
+            locals.latestExec.outcomeType = QUGATE_EXEC_FORWARDED;
+            locals.latestExec.forwardedAmount = input.amount;
+            state.mut()._latestExecutions.set(input.gateIdx, locals.latestExec);
             output.forwarded = input.amount;
             return;
         }
@@ -1867,6 +1950,10 @@ public:
                 output.deferredGateSlot = targetSlot;
                 output.deferredGateAmount = input.amount;
                 locals.gate.totalForwarded += input.amount;
+                locals.latestExec.outcomeType = QUGATE_EXEC_FORWARDED;
+                locals.latestExec.selectedRecipientIndex = (uint8)locals.recipientIdx;
+                locals.latestExec.selectedDownstreamGateId = locals.gate.recipientGateIds.get(locals.recipientIdx);
+                locals.latestExec.forwardedAmount = input.amount;
                 output.forwarded = input.amount;
             }
         }
@@ -1875,11 +1962,16 @@ public:
             if (qpi.transfer(locals.gate.recipients.get(locals.recipientIdx), input.amount) >= 0) // [QG-10]
             {
                 locals.gate.totalForwarded += input.amount;
+                locals.latestExec.outcomeType = QUGATE_EXEC_FORWARDED;
+                locals.latestExec.selectedRecipientIndex = (uint8)locals.recipientIdx;
+                locals.latestExec.selectedDownstreamGateId = -1;
+                locals.latestExec.forwardedAmount = input.amount;
                 output.forwarded = input.amount;
             }
         }
 
         state.mut()._gates.set(input.gateIdx, locals.gate);
+        state.mut()._latestExecutions.set(input.gateIdx, locals.latestExec);
     }
 
     PRIVATE_PROCEDURE_WITH_LOCALS(processConditional)
@@ -2213,8 +2305,6 @@ public:
             // TIME_LOCK: released at unlockEpoch
             locals.gate = state.get()._gates.get(input.slotIdx);
             locals.gate.currentBalance += locals.amountAfterFee;
-            locals.gate.totalReceived += (uint64)locals.amountAfterFee;
-            locals.gate.lastActivityEpoch = qpi.epoch();
             state.mut()._gates.set(input.slotIdx, locals.gate);
             output.forwarded = locals.amountAfterFee;
         }
@@ -5695,13 +5785,43 @@ public:
         }
     }
 
+    PUBLIC_FUNCTION_WITH_LOCALS(getLatestExecution)
+    {
+        output.valid = 0;
+        output.mode = 0;
+        output.outcomeType = QUGATE_EXEC_NONE;
+        output.selectedRecipientIndex = 255;
+        output.selectedDownstreamGateId = -1;
+        output.forwardedAmount = 0;
+        output.observedTick = 0;
+
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            return;
+        }
+
+        locals.latestExecution = state.get()._latestExecutions.get(locals.slotIdx);
+        output.valid = locals.latestExecution.valid;
+        output.mode = locals.latestExecution.mode;
+        output.outcomeType = locals.latestExecution.outcomeType;
+        output.selectedRecipientIndex = locals.latestExecution.selectedRecipientIndex;
+        output.selectedDownstreamGateId = locals.latestExecution.selectedDownstreamGateId;
+        output.forwardedAmount = locals.latestExecution.forwardedAmount;
+        output.observedTick = locals.latestExecution.observedTick;
+    }
+
     // =============================================
     // Registration
     // =============================================
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
     {
-        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState 18=configureTimeLock 19=cancelTimeLock 20=getTimeLockState 21=setAdminGate 22=getAdminGate 23=withdrawReserve 24=getGatesByMode 25=getGateBySlot
+        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState 18=configureTimeLock 19=cancelTimeLock 20=getTimeLockState 21=setAdminGate 22=getAdminGate 23=withdrawReserve 24=getGatesByMode 25=getGateBySlot 26=getLatestExecution
         REGISTER_USER_PROCEDURE(createGate, 1);
         REGISTER_USER_PROCEDURE(sendToGate, 2);
         REGISTER_USER_PROCEDURE(closeGate, 3);
@@ -5727,6 +5847,7 @@ public:
         REGISTER_USER_PROCEDURE(withdrawReserve, 23);
         REGISTER_USER_FUNCTION(getGatesByMode, 24);
         REGISTER_USER_FUNCTION(getGateBySlot, 25);
+        REGISTER_USER_FUNCTION(getLatestExecution, 26);
         REGISTER_USER_PROCEDURE_NOTIFICATION(OraclePriceNotification);
     }
 
@@ -6261,5 +6382,3 @@ public:
     }
 
 };
-
-
