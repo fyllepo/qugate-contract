@@ -1473,6 +1473,25 @@ TEST(QuGate, RoundRobinCycles)
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 400);
 }
 
+TEST(QuGate, RandomSelectionTracksTickDeterministically)
+{
+    QuGateTest env;
+    id recips[] = { BOB, CHARLIE };
+    uint64 ratios[] = { 0, 0 };
+    auto out = makeSimpleGate(env, ALICE, 1000, MODE_RANDOM, 2, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    env.qpi._tick = 12345;
+    env.sendToGate(ALICE, out.gateId, 100);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 100);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 0);
+
+    env.qpi._tick = 12346;
+    env.sendToGate(ALICE, out.gateId, 100);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 100);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 100);
+}
+
 TEST(QuGate, ThresholdAccumulatesAndReleases)
 {
     QuGateTest env;
@@ -2438,6 +2457,27 @@ TEST(QuGateChain, SetChainUnauthorized)
     EXPECT_EQ(out.result, QUGATE_UNAUTHORIZED);
 }
 
+TEST(QuGateChain, SetChainCycleRejectedPreservesExistingLinks)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+
+    auto first = env.setChain(ALICE, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
+    ASSERT_EQ(first.result, QUGATE_SUCCESS);
+
+    auto cycle = env.setChain(ALICE, g1.gateId, g2.gateId, QUGATE_CHAIN_HOP_FEE);
+    EXPECT_EQ(cycle.result, QUGATE_INVALID_CHAIN);
+
+    EXPECT_EQ(env.getGate(g1.gateId).chainNextGateId, -1);
+    EXPECT_EQ(env.getGate(g1.gateId).chainDepth, 0);
+    EXPECT_EQ(env.getGate(g2.gateId).chainNextGateId, (sint64)g1.gateId);
+    EXPECT_EQ(env.getGate(g2.gateId).chainDepth, 1);
+}
+
 TEST(QuGateChain, SetChainInsufficientFee)
 {
     QuGateTest env;
@@ -2489,6 +2529,28 @@ TEST(QuGateChain, RouteToGateTwoHopChain)
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 8000);
     // Total hop fees burned: 2000
     EXPECT_EQ(env.qpi.totalBurned, 2000);
+}
+
+TEST(QuGateChain, RouteToGateThresholdAccumulatesAfterHopFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+
+    auto thresholdGate = makeSimpleGate(env, ALICE, 1000, MODE_THRESHOLD, 1, recips, ratios, 5000);
+    ASSERT_EQ(thresholdGate.status, QUGATE_SUCCESS);
+
+    env.qpi.reset();
+    auto first = env.routeToGate(thresholdGate.gateId - 1, 4000, 0);
+    EXPECT_EQ(first.forwarded, 3000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 0);
+    EXPECT_EQ(env.getGate(thresholdGate.gateId).currentBalance, 3000ULL);
+
+    env.qpi.reset();
+    auto second = env.routeToGate(thresholdGate.gateId - 1, 3000, 0);
+    EXPECT_EQ(second.forwarded, 2000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 5000);
+    EXPECT_EQ(env.getGate(thresholdGate.gateId).currentBalance, 0ULL);
 }
 
 TEST(QuGateChain, InsufficientFundsStrand)
