@@ -31,7 +31,7 @@ import requests
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
 RPC = "http://127.0.0.1:41841"
-QUGATE_INDEX = 24
+QUGATE_INDEX = 25  # Pulse took index 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
 ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
@@ -41,6 +41,12 @@ ADDR_C_KEY = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
 PROC_CLOSE_GATE = 3
+
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
 
 def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
@@ -188,7 +194,7 @@ print("  Address A creating Gate A (1000 QU fee)...")
 wait_ticks(15)
 
 total, active = query_gate_count()
-gate_a_id = total
+gate_a_id = encode_gate_id(total - 1)
 gate_a = query_gate(gate_a_id)
 print(f"  ✅ Gate A = #{gate_a_id}: mode={gate_a['mode']}, recipients={gate_a['recipientCount']}")
 
@@ -203,7 +209,7 @@ print("  Address B creating Gate B (1000 QU fee)...")
 wait_ticks(15)
 
 total, active = query_gate_count()
-gate_b_id = total
+gate_b_id = encode_gate_id(total - 1)
 gate_b = query_gate(gate_b_id)
 print(f"  ✅ Gate B = #{gate_b_id}: mode={gate_b['mode']}, threshold={gate_b['threshold']}")
 

@@ -12,24 +12,33 @@ QuGate is a **network primitive** — shared, permissionless payment routing inf
 
 1. [Overview](#overview)
 2. [Gate Modes](#gate-modes)
-3. [Contract Interface](#contract-interface)
-4. [Wire Format](#wire-format)
-5. [State Architecture](#state-architecture)
-6. [Anti-Spam Mechanisms](#anti-spam-mechanisms)
-7. [Fee Economics](#fee-economics)
-8. [Shareholder Governance](#shareholder-governance)
-9. [Design Decisions](#design-decisions)
-10. [Status Codes](#status-codes)
-11. [Log Types](#log-types)
-12. [Building and Testing](#building-and-testing)
-13. [Known Limitations](#known-limitations)
-14. [File Listing](#file-listing)
+3. [Chain Gates](#chain-gates)
+4. [Gate-as-Recipient](#gate-as-recipient-internal-routing)
+5. [Gate ID Format](#gate-id-format)
+5. [Contract Interface](#contract-interface)
+6. [Wire Format](#wire-format)
+7. [State Architecture](#state-architecture)
+8. [Anti-Spam Mechanisms](#anti-spam-mechanisms)
+9. [Fee Economics](#fee-economics)
+10. [Shareholder Governance](#shareholder-governance)
+11. [Design Decisions](#design-decisions)
+12. [Security Model](#security-model)
+13. [Edge Cases and Safety](#edge-cases-and-safety)
+14. [Status Codes](#status-codes)
+15. [Log Types](#log-types)
+16. [Building and Testing](#building-and-testing)
+17. [Known Limitations](#known-limitations)
+18. [File Listing](#file-listing)
 
 ---
 
 ## Overview
 
-QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of five modes. Gates are composable: the output of one gate can be forwarded into another via an intermediary transaction (signed by a client app, bot, or oracle), enabling multi-stage payment pipelines without writing custom contracts. The contract does not auto-forward between gates — each hop requires a separate transaction.
+QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of nine modes (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, ORACLE, HEARTBEAT, MULTISIG, TIME_LOCK). Gates are composable: the output of one gate can be forwarded into another, enabling multi-stage payment pipelines without writing custom contracts.
+
+Gate-to-gate forwarding can happen in two ways:
+1. **Manual forwarding**: An external actor (client app, bot) calls sendToGate on the next gate.
+2. **Automatic chain forwarding**: Gates configured with chainNextGateId auto-forward after each payout — no external transaction required (max 3 hops).
 
 ### Constants
 
@@ -46,6 +55,18 @@ QuGate introduces **gates** — configurable routing nodes that automatically fo
 ---
 
 ## Gate Modes
+
+| Mode | Constant | Value | Description |
+|------|----------|-------|-------------|
+| SPLIT | `QUGATE_MODE_SPLIT` | 0 | Proportional distribution to N recipients |
+| ROUND_ROBIN | `QUGATE_MODE_ROUND_ROBIN` | 1 | Rotating distribution, one recipient per payment |
+| THRESHOLD | `QUGATE_MODE_THRESHOLD` | 2 | Accumulate until threshold reached, then forward |
+| RANDOM | `QUGATE_MODE_RANDOM` | 3 | Probabilistic selection per payment |
+| CONDITIONAL | `QUGATE_MODE_CONDITIONAL` | 4 | Sender-restricted forwarding (whitelist) |
+| ORACLE | `QUGATE_MODE_ORACLE` | 5 | Oracle-triggered distribution on price/time condition |
+| HEARTBEAT | `QUGATE_MODE_HEARTBEAT` | 6 | Dead-man's switch: distribute if owner goes silent |
+| MULTISIG | `QUGATE_MODE_MULTISIG` | 7 | M-of-N guardian approval before funds release |
+| TIME_LOCK | `QUGATE_MODE_TIME_LOCK` | 8 | Holds funds until a target epoch, then releases to recipient |
 
 ### QUGATE_MODE_SPLIT (0) — Proportional Distribution
 
@@ -85,6 +106,11 @@ recipientIdx = mod(totalReceived + tick(), recipientCount)
 
 Where `totalReceived` is the gate's cumulative received amount (already incremented by the current payment) and `tick()` is the current Qubic tick number. The tick number is not controllable by the sender, providing sufficient unpredictability for payment routing, though this is not cryptographic randomness.
 
+> **Warning:** RANDOM mode uses on-chain tick + totalReceived as entropy. Both values are publicly
+> observable before a transaction is submitted, making recipient selection predictable to
+> a determined observer. Suitable for non-adversarial fair distribution. Not suitable for
+> use cases requiring cryptographic randomness.
+
 ### QUGATE_MODE_CONDITIONAL (4) — Sender-Restricted Forwarding
 
 Only forwards payments from addresses in the gate's `allowedSenders` list. Payments from unauthorized senders are bounced back (transferred back to the sender) with status `QUGATE_CONDITIONAL_REJECTED`.
@@ -93,9 +119,461 @@ When the sender is authorized, the full amount is forwarded to recipient 0.
 
 **Validation**: `allowedSenderCount` must be <= 8.
 
+### QUGATE_MODE_ORACLE (5) — Oracle-Triggered Distribution
+
+Accumulates incoming QU in `currentBalance`. An oracle subscription fires each epoch; when the configured condition (price above/below, or time-after) is met, the entire balance is distributed to recipients via SPLIT ratios.
+
+**Condition types**: `PRICE_ABOVE` (0), `PRICE_BELOW` (1), `TIME_AFTER` (2). Threshold is a price ratio scaled by 1e6, or a unix timestamp for `TIME_AFTER`.
+
+**Trigger modes**: `ONCE` (0) — gate auto-closes after first trigger. `RECURRING` (1) — gate resets and continues accumulating.
+
+**Oracle reserve**: The gate maintains an `oracleReserve` (QU) to pay the per-epoch subscription fee (10,000 QU). When the reserve is exhausted, the subscription lapses until re-funded via `fundGate`. Excess QU sent at creation (above the creation fee) is deposited into the oracle reserve.
+
+**Validation**: `oracleCondition` must be 0-2. `oracleThreshold` must be > 0. `oracleTriggerMode` must be 0 or 1.
+
+---
+
+## HEARTBEAT Gate (Mode 6)
+
+A heartbeat gate holds funds and distributes them to beneficiaries if the owner stops sending periodic `heartbeat()` signals. Ideal for dead man's switch, inheritance, or automated recurring distributions.
+
+### Setup
+1. Create a gate with `mode=6`
+2. Call `configureHeartbeat()` with threshold, payout percent, and beneficiaries
+3. Call `heartbeat()` periodically to keep the gate dormant
+4. If `thresholdEpochs` pass without a heartbeat, the gate triggers
+
+### Parameters
+| Field | Description |
+|-------|-------------|
+| thresholdEpochs | Epochs of inactivity before trigger (min 1, ~1 epoch/week) |
+| payoutPercentPerEpoch | % of balance distributed each epoch after trigger (1-100) |
+| minimumBalance | Gate auto-closes when balance drops below this amount |
+| beneficiaries | Up to 8 addresses with sharePercent summing to 100 |
+
+### Procedures
+- `configureHeartbeat(gateId, thresholdEpochs, payoutPercent, minimumBalance, beneficiaries[])` — owner only
+- `heartbeat(gateId)` — owner only, resets epoch counter. Rejected after trigger.
+- `getHeartbeat(gateId)` — read-only query
+
+### Example use cases
+- **Inheritance**: distribute crypto estate to family after inactivity
+- **Recurring payments**: automated salary/allowance that continues until cancelled
+- **Deadlines**: release funds to counterparty if action not taken within N epochs
+
+### Worked Example: Crypto inheritance
+
+**Scenario:** You want your QU to go to family if you stop checking in for 8 weeks.
+
+**Step 1: Create the gate**
+```
+createGate(mode=6, recipients=[], ratios=[])
+→ Returns gateId (e.g. 4294967296)
+```
+
+**Step 2: Fund it**
+```
+Send QU to the gate address: YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME
+```
+
+**Step 3: Configure**
+```
+configureHeartbeat(
+  gateId: 4294967296,
+  thresholdEpochs: 8,          // trigger after 8 missed epochs (~8 weeks)
+  payoutPercentPerEpoch: 25,   // pay 25% of remaining balance each epoch
+  minimumBalance: 1000000,     // stop when < 1M QU remains
+  beneficiaries: [
+    { address: WALLET_A, sharePercent: 60 },
+    { address: WALLET_B, sharePercent: 40 }
+  ]
+)
+```
+
+**Step 4: Keep alive (automate this)**
+```
+heartbeat(gateId: 4294967296)
+→ Call monthly. Miss 8 epochs → gate triggers automatically.
+```
+
+**What happens when triggered:**
+- Epoch 1 post-trigger: 25% of balance → 60/40 split to WALLET_A / WALLET_B
+- Epoch 2: another 25% of remaining
+- Continues until balance < 1,000,000 QU
+- Gate auto-closes
+
+**Chained with MULTISIG (guardians can update beneficiaries):**
+```
+createGate(mode=7)  → MULTISIG gate (gateId: 4294967297)
+configureMultisig(
+  gateId: 4294967297,
+  guardians: [GUARDIAN_1, GUARDIAN_2, GUARDIAN_3],
+  required: 2,
+  proposalExpiryEpochs: 4
+)
+// 2-of-3 guardians vote → can update the HEARTBEAT gate's beneficiaries
+```
+
+### Error codes
+| Code | Meaning |
+|------|---------|
+| QUGATE_HEARTBEAT_TRIGGERED (-16) | heartbeat() called after gate already triggered |
+| QUGATE_HEARTBEAT_NOT_ACTIVE (-17) | Gate not configured for heartbeat mode |
+| QUGATE_HEARTBEAT_INVALID (-18) | Invalid config (shares don't sum to 100, bad percent, etc) |
+
+---
+
+## MULTISIG Gate (Mode 7)
+
+A multisig gate holds funds until M-of-N designated guardians send approval transactions. When the threshold is reached, funds release to the target address. Proposals expire after a configurable number of epochs.
+
+### Setup
+1. Create a gate with `mode=7`
+2. Call `configureMultisig()` with guardian addresses, required count, and expiry
+3. Anyone can fund the gate by sending QU
+4. Guardians vote by sending any amount to the gate address
+5. When M guardians have voted, funds release to `recipients[0]`
+
+### Parameters
+| Field | Description |
+|-------|-------------|
+| guardians | Up to 8 wallet addresses authorised to vote |
+| required | Minimum approvals needed (M of N) |
+| proposalExpiryEpochs | Epochs before an incomplete proposal resets |
+
+### Procedures
+- `configureMultisig(gateId, guardians[], required, expiryEpochs)` — owner only
+- `getMultisigState(gateId)` — read-only: returns approvalBitmap, count, proposalEpoch
+
+### Voting mechanics
+- Any address can send QU to fund the gate
+- Only guardians' transactions count as votes
+- Bitmap tracks which guardians have voted (prevents double-voting)
+- Incomplete proposals reset after `proposalExpiryEpochs`
+- Once threshold met: full balance transfers to target, votes reset
+
+### Example use cases
+- **Joint accounts**: 1-of-2 partners can authorise a payment
+- **DAO treasury**: 3-of-5 committee members approve disbursements
+- **Escrow**: buyer + arbitrator both must sign off
+- **Inheritance config**: 2-of-3 guardians can update beneficiaries
+
+### Worked Example: DAO treasury payment
+
+**Scenario:** 3 committee members must approve any payment from the treasury.
+
+**Step 1: Create and configure**
+```
+createGate(mode=7, recipients=[TREASURY_TARGET], ratios=[100])
+configureMultisig(
+  gateId: ...,
+  guardians: [MEMBER_1, MEMBER_2, MEMBER_3],
+  required: 2,                    // 2-of-3 required
+  proposalExpiryEpochs: 8         // proposal lapses after 8 epochs if not completed
+)
+```
+
+**Step 2: Fund it**
+```
+Send 500,000 QU to the gate address
+```
+
+**Step 3: Vote**
+```
+// Member 1 sends 1 QU to the gate → registers vote
+// Member 2 sends 1 QU to the gate → 2nd vote, threshold met
+// → Gate releases 500,000 QU to TREASURY_TARGET
+// → Vote bitmap resets, ready for next proposal
+```
+
+**What happens with an expired proposal:**
+```
+// Member 1 votes at epoch 100
+// No second vote by epoch 108 (proposalExpiryEpochs=8)
+// → Proposal resets automatically at epoch boundary
+// → Funds remain in gate, ready for a new proposal
+```
+
+### Error codes
+| Code | Meaning |
+|------|---------|
+| QUGATE_MULTISIG_NOT_GUARDIAN (-19) | Sender is not in guardian list |
+| QUGATE_MULTISIG_ALREADY_VOTED (-20) | Guardian already voted this proposal |
+| QUGATE_MULTISIG_INVALID_CONFIG (-21) | Invalid config (0 guardians, required > count, etc) |
+| QUGATE_MULTISIG_NO_ACTIVE_PROP (-22) | No active proposal to query |
+
+---
+
+## Admin Gate (adminGateId) — MULTISIG Governance for Any Gate
+
+Any gate can be placed under MULTISIG governance by assigning an **admin gate**. When an admin gate is set, configuration changes (closeGate, updateGate, configureHeartbeat, configureMultisig, configureTimeLock, cancelTimeLock, setChain) require either the owner's signature **or** approval from the admin gate's MULTISIG quorum.
+
+The `heartbeat()` procedure is intentionally excluded — it is a keep-alive signal that should always remain owner-only.
+
+### How it works
+
+1. Create a MULTISIG gate (mode 7) with guardians and a required threshold
+2. Call `setAdminGate(gateId, adminGateId)` on the gate you want to govern
+3. From that point, config changes on the governed gate require either:
+   - The owner calling the procedure directly, **or**
+   - The admin gate's MULTISIG quorum reaching approval in the current epoch
+4. To remove governance, call `setAdminGate(gateId, -1)` — requires admin gate approval if one is set
+
+### Procedures
+- `setAdminGate(gateId, adminGateId)` — owner-only if no admin gate set; requires admin gate approval if already set
+- `getAdminGate(gateId)` — read-only: returns hasAdminGate, adminGateId, adminGateMode, guardianCount, required, guardians
+
+### Worked Example: HEARTBEAT + MULTISIG admin governance
+
+**Scenario:** You set up a HEARTBEAT inheritance gate and want 2-of-3 guardians to approve any configuration changes.
+
+**Step 1: Create a MULTISIG admin gate**
+```
+createGate(mode=7, recipients=[ANY_ADDRESS], ratios=[100])
+→ Returns adminGateId (e.g. 5368709121)
+configureMultisig(
+  gateId: 5368709121,
+  guardians: [GUARDIAN_1, GUARDIAN_2, GUARDIAN_3],
+  required: 2,
+  proposalExpiryEpochs: 4
+)
+```
+
+**Step 2: Create and configure the HEARTBEAT gate**
+```
+createGate(mode=6, recipients=[], ratios=[])
+→ Returns gateId (e.g. 4294967296)
+configureHeartbeat(
+  gateId: 4294967296,
+  thresholdEpochs: 8,
+  payoutPercentPerEpoch: 25,
+  minimumBalance: 1000000,
+  beneficiaries: [
+    { address: WALLET_A, sharePercent: 60 },
+    { address: WALLET_B, sharePercent: 40 }
+  ]
+)
+```
+
+**Step 3: Assign the admin gate**
+```
+setAdminGate(gateId: 4294967296, adminGateId: 5368709121)
+```
+
+**Step 4: Owner can still heartbeat() normally**
+```
+heartbeat(gateId: 4294967296)
+→ Works — heartbeat stays owner-only
+```
+
+**Step 5: Config changes now require guardian approval**
+```
+// Owner tries to updateGate() alone → QUGATE_UNAUTHORIZED (unless they are the owner)
+// Guardians vote on the MULTISIG gate:
+//   GUARDIAN_1 sends 1 QU to gate 5368709121 → vote registered
+//   GUARDIAN_2 sends 1 QU to gate 5368709121 → 2-of-3 met
+// Now updateGate(4294967296, ...) succeeds in this epoch
+```
+
+### Error codes
+| Code | Meaning |
+|------|---------|
+| QUGATE_ADMIN_GATE_REQUIRED (-26) | Config change needs admin gate approval |
+| QUGATE_INVALID_ADMIN_GATE (-27) | adminGateId doesn't exist or isn't MULTISIG mode |
+
+---
+
+## TIME_LOCK Gate (Mode 8)
+
+A TIME_LOCK gate holds incoming QU and releases the full balance to a designated target address when a specified future epoch is reached. Nothing releases before that epoch.
+
+### Setup
+1. Create a gate with `mode=8` and `recipients[0]` = target address
+2. Call `configureTimeLock()` with `unlockEpoch` (must be > current epoch) and `cancellable`
+3. Send QU to the gate — funds accumulate in `currentBalance`
+4. At the start of the unlock epoch, `END_EPOCH` automatically releases the full balance to the target
+
+### Parameters
+| Field | Description |
+|-------|-------------|
+| recipients[0] | Target address that receives funds on unlock |
+| unlockEpoch | The epoch number when funds are released |
+| cancellable | 1 = owner can cancel and recover funds before unlock |
+
+### Procedures
+| Procedure | Description |
+|-----------|-------------|
+| `configureTimeLock(gateId, unlockEpoch, cancellable)` | Owner only — sets unlock parameters |
+| `cancelTimeLock(gateId)` | Owner only — cancels and refunds balance (requires cancellable=1) |
+| `getTimeLockState(gateId)` | Read-only — returns config, balance, current epoch, epochs remaining |
+
+### Error codes
+| Code | Meaning |
+|------|---------|
+| QUGATE_TIME_LOCK_ALREADY_FIRED (-23) | Gate has already unlocked and closed |
+| QUGATE_TIME_LOCK_NOT_CANCELLABLE (-24) | cancelTimeLock() called but cancellable=0 |
+| QUGATE_TIME_LOCK_EPOCH_PAST (-25) | unlockEpoch is in the past at configuration time |
+
+### Worked Example: Lock 500K QU for 8 epochs (vesting)
+
+**Scenario:** Alice wants to lock 500,000 QU for Bob, releasing 8 epochs from now.
+
+**Step 1: Create the gate**
+```
+createGate(
+  mode = 8,                        // TIME_LOCK
+  recipientCount = 1,
+  recipients[0] = BOB_ADDRESS,     // target
+  ratios[0] = 10000
+)
+→ gateId: 1234
+```
+
+**Step 2: Configure the time lock**
+```
+configureTimeLock(
+  gateId: 1234,
+  unlockEpoch: currentEpoch + 8,   // e.g. epoch 218 if current is 210
+  cancellable: 1                    // Alice can cancel if plans change
+)
+```
+
+**Step 3: Fund the gate**
+```
+sendToGate(gateId: 1234, amount: 500000 QU)
+// Funds held in gate.currentBalance
+// getTimeLockState shows: epochsRemaining = 8
+```
+
+**Step 4: Wait (or cancel)**
+```
+// Option A: Wait — at epoch 218, END_EPOCH automatically runs:
+//   qpi.transfer(BOB_ADDRESS, 500000)
+//   gate closes, QUGATE_LOG_TIME_LOCK_FIRED emitted
+
+// Option B: Cancel before epoch 218:
+//   cancelTimeLock(gateId: 1234)
+//   → 500000 QU refunded to Alice, gate closes
+```
+
+---
+
+## Chain Gates
+
+Gates can be linked into chains (max 3 hops) for multi-stage payment pipelines. When a gate completes its payout, funds are automatically forwarded to the next gate in the chain — no external transaction required.
+
+### Flow
+
+1. Payment arrives at Gate A via `sendToGate`
+2. Gate A processes the payment according to its mode (SPLIT, ROUND_ROBIN, etc.)
+3. If Gate A has `chainNextGateId` set, the forwarded amount is routed to Gate B
+4. Gate B processes the forwarded amount, then forwards to Gate C if chained
+5. Each hop continues until the chain ends or `QUGATE_MAX_CHAIN_DEPTH` (3) is reached
+
+### Hop Fees and Reserves
+
+Each chain hop burns a `QUGATE_CHAIN_HOP_FEE` (1,000 QU). If the forwarded amount exceeds the hop fee, the fee is deducted from the amount. If the forwarded amount is too small to cover the hop fee, the gate's `chainReserve` pays instead. If neither can cover the fee, the funds are stranded in `currentBalance`.
+
+Fund a gate's chain reserve via `fundGate` with `reserveTarget = 1`. The chain reserve is refunded to the owner on gate close or expiry.
+
+### Setting Up Chains
+
+- At creation: set `chainNextGateId` in `createGate_input`
+- After creation: use `setChain` (costs one hop fee, burned)
+- Clear a chain: call `setChain` with `nextGateId = -1`
+
+**Note:** CONDITIONAL mode as a chain target requires the contract's own address in `allowedSenders`, because the invocator during chain routing is the contract itself, not the original external sender.
+
+---
+
+## Gate-as-Recipient (Internal Routing)
+
+Recipients can be other gates, not just wallets. When a gate distributes funds (SPLIT, ROUND_ROBIN, RANDOM, CONDITIONAL, THRESHOLD), each share can route internally to another gate via `routeToGate()` instead of `qpi.transfer()`.
+
+### How it works
+
+Each gate has a parallel array `recipientGateIds[8]` alongside `recipients[8]`:
+- `recipientGateIds[i] == -1` → wallet recipient (use `recipients[i]` address, existing behaviour)
+- `recipientGateIds[i] >= 0` → gate recipient (route share to that versioned gate ID)
+
+### Example: Lottery with house rake
+
+```
+Jackpot Pool (THRESHOLD 10M QU)
+  → chains to → House Rake (SPLIT: 5% wallet, 95% gate)
+                  → 5% → House wallet (qpi.transfer)
+                  → 95% → Winner Selection (RANDOM: 6 players, via routeToGate)
+```
+
+### Validation
+
+- Gate recipient IDs are validated at create/update time (must be active, correct generation)
+- Invalid/closed gate recipients at send time silently retain funds in the contract
+- Returns `QUGATE_INVALID_GATE_RECIPIENT` (-28) on invalid IDs at creation
+
+### Deferred routing pattern
+
+Mode processors (processSplit, etc.) cannot call `routeToGate` directly (circular struct dependency). Instead, they populate deferred output fields. The caller (`sendToGate`, `sendToGateVerified`, `OraclePriceNotification`) dispatches the deferred routing after the mode processor returns.
+
+### Interaction with chain forwarding
+
+Gate-as-recipient and chain forwarding are independent:
+- **Chain forwarding** (`chainNextGateId`): forwards *remaining balance* after distribution
+- **Gate-as-recipient** (`recipientGateIds`): routes *individual shares* during distribution
+
+Both can be used on the same gate. A SPLIT gate can send 5% to a wallet, 95% to a gate-recipient, and chain its remaining balance to another gate.
+
+---
+
+## Gate ID Format
+
+Gate IDs use a versioned encoding to prevent slot-reuse squatting attacks:
+
+```
+gateId = ((generation + 1) << 20) | slotIndex
+```
+
+- **Lower 20 bits**: slot index in the `_gates` array (supports up to 1,048,575 slots)
+- **Upper bits**: generation counter + 1 (incremented each time a slot is recycled)
+
+When a gate is closed or expires, its slot's generation counter increments. Any stored gate ID referencing the old generation becomes invalid, preventing an attacker from creating a new gate in a recycled slot and intercepting payments meant for the previous occupant.
+
+Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
+
 ---
 
 ## Contract Interface
+
+### Procedure Index
+
+| # | Name | Type | Description |
+|---|------|------|-------------|
+| 1 | createGate | PUBLIC_PROCEDURE | Create a new gate (fee required) |
+| 2 | sendToGate | PUBLIC_PROCEDURE | Send QU through a gate |
+| 3 | closeGate | PUBLIC_PROCEDURE | Close a gate (owner only) |
+| 4 | updateGate | PUBLIC_PROCEDURE | Update gate recipients/ratios/config (owner only) |
+| 5 | getGate | PUBLIC_FUNCTION | Query full gate state and statistics |
+| 6 | getGateCount | PUBLIC_FUNCTION | Query total/active gate counts and total burned |
+| 7 | getGatesByOwner | PUBLIC_FUNCTION | List gate IDs owned by an address |
+| 8 | getGateBatch | PUBLIC_FUNCTION | Batch query up to 32 gates by ID |
+| 9 | getFees | PUBLIC_FUNCTION | Query current fee parameters |
+| 10 | fundGate | PUBLIC_PROCEDURE | Add QU to oracle or chain reserve |
+| 11 | setChain | PUBLIC_PROCEDURE | Set or clear a chain link (owner only) |
+| 12 | sendToGateVerified | PUBLIC_PROCEDURE | Like sendToGate, but verifies gate owner before routing |
+| 13 | configureHeartbeat | PUBLIC_PROCEDURE | Configure HEARTBEAT gate params and beneficiaries |
+| 14 | heartbeat | PUBLIC_PROCEDURE | Reset epoch counter (keep-alive signal) |
+| 15 | getHeartbeat | PUBLIC_FUNCTION | Query HEARTBEAT gate state |
+| 16 | configureMultisig | PUBLIC_PROCEDURE | Configure MULTISIG gate guardians and threshold |
+| 17 | getMultisigState | PUBLIC_FUNCTION | Query current approval state |
+| 18 | configureTimeLock | PUBLIC_PROCEDURE | Configure TIME_LOCK gate unlock epoch and cancellability |
+| 19 | cancelTimeLock | PUBLIC_PROCEDURE | Cancel a TIME_LOCK gate and refund held balance (owner only) |
+| 20 | getTimeLockState | PUBLIC_FUNCTION | Query TIME_LOCK gate state and epochs remaining |
+| 21 | setAdminGate | PUBLIC_PROCEDURE | Set or clear admin gate (MULTISIG governance) on any gate |
+| 22 | getAdminGate | PUBLIC_FUNCTION | Query admin gate configuration for a gate |
+| 23 | withdrawReserve | PUBLIC_PROCEDURE | Withdraw from oracle or chain reserve without closing (owner only) |
+| 24 | getGatesByMode | PUBLIC_FUNCTION | Query up to 16 active gates matching a given mode |
+
+**Totals**: 14 procedures + 10 functions = 24 registered entry points.
 
 ### Procedures (State-Changing)
 
@@ -109,7 +587,7 @@ Creates a new gate. Requires payment of the current escalated creation fee.
 
 | Field | Type | Size | Description |
 |-------|------|------|-------------|
-| mode | uint8 | 1 | Gate mode (0-4) |
+| mode | uint8 | 1 | Gate mode (0-8) |
 | recipientCount | uint8 | 1 | Number of recipients (1-8) |
 | recipients | Array\<id, 8\> | 256 | Recipient public keys (32 bytes each) |
 | ratios | Array\<uint64, 8\> | 64 | Ratio per recipient (SPLIT mode) |
@@ -209,12 +687,21 @@ Returns full gate configuration and statistics.
 | owner | id | Gate owner public key |
 | totalReceived | uint64 | Cumulative QU received |
 | totalForwarded | uint64 | Cumulative QU forwarded |
-| currentBalance | uint64 | Held balance (THRESHOLD mode) |
+| currentBalance | uint64 | Held balance (THRESHOLD/ORACLE mode) |
 | threshold | uint64 | Threshold amount |
 | createdEpoch | uint16 | Epoch when gate was created |
 | lastActivityEpoch | uint16 | Epoch of last send/update |
 | recipients | Array\<id, 8\> | Recipient addresses |
 | ratios | Array\<uint64, 8\> | Recipient ratios |
+| allowedSenders | Array\<id, 8\> | Allowed sender addresses (CONDITIONAL mode) |
+| allowedSenderCount | uint8 | Number of allowed senders |
+| oracleReserve | sint64 | QU remaining in oracle subscription reserve |
+| oracleSubscriptionId | sint32 | Current oracle subscription ID (-1 if not subscribed) |
+| chainNextGateId | sint64 | Versioned gate ID of next gate in chain (-1 if no chain) |
+| chainReserve | sint64 | QU remaining in chain hop fee reserve |
+| chainDepth | uint8 | This gate's position in its chain (0 = root) |
+| adminGateId | sint64 | Versioned gate ID of admin gate (-1 if no admin gate) |
+| hasAdminGate | uint8 | 1 if governed by an admin gate |
 
 Returns `active=0` for invalid gate IDs.
 
@@ -262,29 +749,258 @@ Performs a linear scan of all gate slots. Returns up to 16 gates.
 | minSendAmount | uint64 | Minimum send amount |
 | expiryEpochs | uint64 | Epochs of inactivity before expiry |
 
+#### fundGate (Input Type 10)
+
+Adds QU to a gate's oracle reserve or chain reserve. Anyone can fund a gate.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | sint64 | 8 | Target gate ID |
+| reserveTarget | uint8 | 1 | 0 = oracleReserve, 1 = chainReserve |
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| result | sint64 | 0 on success, negative on error |
+
+**Behaviour**: Validates the gate exists and is active. For `reserveTarget=0`, the gate must be ORACLE mode. For `reserveTarget=1`, the gate must have a chain link (`chainNextGateId != -1`). Attached QU is deposited into the specified reserve.
+
+#### setChain (Input Type 11)
+
+Sets or clears the chain link on an existing gate. Owner only. Burns one hop fee.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | sint64 | 8 | Source gate ID |
+| nextGateId | sint64 | 8 | Target gate ID to chain to (-1 to clear chain) |
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| result | sint64 | 0 on success, negative on error |
+
+**Behaviour**: Validates ownership and active status. Requires `QUGATE_CHAIN_HOP_FEE` as invocation reward (burned). Validates the target gate exists, is active, and the resulting chain depth does not exceed `QUGATE_MAX_CHAIN_DEPTH`. Performs cycle detection by walking forward from the target. Setting `nextGateId=-1` clears the chain link.
+
+#### sendToGateVerified (Input Type 12)
+
+Like `sendToGate`, but additionally asserts that `gate.owner == expectedOwner` before routing. Full refund if mismatch. Prevents payments to a recycled slot whose new gate has a different owner.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | uint64 | 8 | Target gate ID |
+| expectedOwner | id | 32 | Expected gate owner public key |
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| status | sint64 | 0 on success, negative on error |
+
+**Behaviour**: Identical to `sendToGate` except for the owner check. Returns `QUGATE_OWNER_MISMATCH` (-15) with full refund if `gate.owner != expectedOwner`. All other validation, dust burn, and routing logic is the same as `sendToGate`.
+
+#### configureHeartbeat (Input Type 13)
+
+Configures heartbeat mode on a HEARTBEAT gate. Owner only. Sets the inactivity threshold, payout rate, minimum balance, and beneficiary list. Cannot be called after the gate has triggered.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | uint64 | 8 | Target HEARTBEAT gate ID |
+| thresholdEpochs | uint32 | 4 | Epochs of inactivity before trigger (>= 1) |
+| payoutPercentPerEpoch | uint8 | 1 | % of balance to pay per epoch after trigger (1-100) |
+| minimumBalance | sint64 | 8 | Gate auto-closes when balance falls to or below this |
+| beneficiaryAddresses | Array\<id, 8\> | 256 | Beneficiary public keys |
+| beneficiaryShares | Array\<uint8, 8\> | 8 | Share per beneficiary (must sum to 100) |
+| beneficiaryCount | uint8 | 1 | Number of beneficiaries (1-8) |
+
+**Output**: `status` (sint64)
+
+#### heartbeat (Input Type 14)
+
+Resets the heartbeat epoch counter. Owner only. Rejected after the gate has triggered. Attach any QU — it is refunded.
+
+**Input**: `gateId` (uint64)
+
+**Output**: `status` (sint64), `epochRecorded` (uint32)
+
+#### getHeartbeat (Input Type 15)
+
+Read-only query for heartbeat configuration and state.
+
+**Input**: `gateId` (uint64)
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| active | uint8 | 1 if heartbeat is configured |
+| triggered | uint8 | 1 if the gate has triggered |
+| thresholdEpochs | uint32 | Inactivity threshold |
+| lastHeartbeatEpoch | uint32 | Epoch of last heartbeat() call |
+| triggerEpoch | uint32 | Epoch when gate triggered (0 if not yet triggered) |
+| payoutPercentPerEpoch | uint8 | Payout rate per epoch |
+| minimumBalance | sint64 | Auto-close threshold |
+| beneficiaryCount | uint8 | Number of beneficiaries |
+| beneficiaryAddresses | Array\<id, 8\> | Beneficiary addresses |
+| beneficiaryShares | Array\<uint8, 8\> | Beneficiary share percentages |
+
+#### configureMultisig (Input Type 16)
+
+Configures M-of-N guardian approval on a MULTISIG gate. Owner only. Resets any active proposal.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | uint32 | 4 | Target MULTISIG gate ID |
+| guardians | Array\<id, 8\> | 256 | Guardian public keys |
+| guardianCount | uint8 | 1 | Number of guardians (1-8) |
+| required | uint8 | 1 | Minimum approvals needed (1-guardianCount) |
+| proposalExpiryEpochs | uint32 | 4 | Epochs before incomplete proposal resets (>= 1) |
+
+**Output**: `status` (sint64)
+
+**Validation**: No duplicate guardians. `required <= guardianCount`. `proposalExpiryEpochs >= 1`.
+
+#### getMultisigState (Input Type 17)
+
+Read-only query for current multisig proposal state.
+
+**Input**: `gateId` (uint32)
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| status | sint64 | 0 on success, negative on error |
+| approvalBitmap | uint8 | Bitmask of guardians who have voted (bit i = guardian i) |
+| approvalCount | uint8 | Current vote count |
+| required | uint8 | Threshold needed for execution |
+| guardianCount | uint8 | Total number of guardians |
+| proposalEpoch | uint32 | Epoch when current proposal started |
+| proposalActive | uint8 | 1 if a proposal is in progress |
+| guardians | Array\<id, 8\> | Guardian public keys from MultisigConfig |
+
+#### configureTimeLock (Input Type 18)
+
+Configures a TIME_LOCK gate with an unlock epoch and cancellability flag. Owner only. The unlock epoch must be in the future.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | uint32 | 4 | Target TIME_LOCK gate ID |
+| unlockEpoch | uint32 | 4 | Epoch when funds release (must be > current epoch) |
+| cancellable | uint8 | 1 | 1 = owner can cancel before unlock |
+
+**Output**: `status` (sint64)
+
+**Validation**: Gate must be mode 8 (TIME_LOCK) and active. `unlockEpoch` must be greater than the current epoch. Owner only.
+
+#### cancelTimeLock (Input Type 19)
+
+Cancels a TIME_LOCK gate before the unlock epoch. Owner only. Requires `cancellable=1`. Refunds all held balance to the gate owner and closes the gate.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | uint32 | 4 | Target TIME_LOCK gate ID |
+
+**Output**: `status` (sint64)
+
+**Validation**: Gate must be TIME_LOCK, active, not yet fired, and `cancellable=1`. Returns `QUGATE_TIME_LOCK_NOT_CANCELLABLE` (-24) if cancellable=0, `QUGATE_TIME_LOCK_ALREADY_FIRED` (-23) if already unlocked.
+
+#### getTimeLockState (Input Type 20)
+
+Read-only query for TIME_LOCK gate state.
+
+**Input**: `gateId` (uint32)
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| status | sint64 | 0 on success, negative on error |
+| unlockEpoch | uint32 | Target epoch for fund release |
+| cancellable | uint8 | 1 if owner can cancel |
+| fired | uint8 | 1 if funds have been released |
+| cancelled | uint8 | 1 if cancelled by owner |
+| active | uint8 | 1 if time lock is configured |
+| currentBalance | sint64 | Held balance |
+| currentEpoch | uint32 | Current network epoch |
+| epochsRemaining | uint32 | Epochs until unlock (0 if fired or past) |
+
+#### setAdminGate (Input Type 21)
+
+Sets or clears the admin gate on a gate. When setting, the admin gate must exist and be MULTISIG mode. Owner-only if no admin gate is currently set; requires admin gate approval if one is already set.
+
+**Input**:
+
+| Field | Type | Size | Description |
+|-------|------|------|-------------|
+| gateId | uint64 | 8 | Target gate ID |
+| adminGateId | sint64 | 8 | MULTISIG gate ID to assign (-1 to clear) |
+
+**Output**: `status` (sint64)
+
+**Validation**: Target gate must be active. Admin gate (if not -1) must exist, be active, and be MULTISIG mode. Returns `QUGATE_INVALID_ADMIN_GATE` (-27) on invalid admin gate. Returns `QUGATE_ADMIN_GATE_REQUIRED` (-26) if admin gate is set and caller lacks approval.
+
+#### getAdminGate (Input Type 22)
+
+Read-only query for admin gate configuration on a gate.
+
+**Input**: `gateId` (uint64)
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| hasAdminGate | uint8 | 1 if an admin gate is assigned |
+| adminGateId | sint64 | Versioned gate ID of the admin gate (-1 if none) |
+| adminGateMode | uint8 | Mode of the admin gate (should be MULTISIG=7) |
+| guardianCount | uint8 | Number of guardians on the admin gate |
+| required | uint8 | M-of-N threshold on the admin gate |
+| guardians | Array\<id, 8\> | Guardian public keys from the admin gate's MultisigConfig |
+
 ---
 
 ## Wire Format
 
 All data is little-endian. Public keys (`id`) are 32 bytes. `Array<T, N>` is serialized as N contiguous elements with no length prefix.
 
-### createGate_input Layout (~600 bytes)
+### createGate_input Layout (784 bytes)
 
 ```
 Offset  Size   Field
 ------  -----  -----
 0       1      mode (uint8)
 1       1      recipientCount (uint8)
-+pad    ...    (compiler alignment padding to Array boundary)
-        256    recipients[8] (8 x 32-byte pubkeys)
-        64     ratios[8] (8 x uint64)
-        8      threshold (uint64)
-        256    allowedSenders[8] (8 x 32-byte pubkeys)
-        1      allowedSenderCount (uint8)
-+pad    ...    (trailing padding)
+8       256    recipients[8] (8 x 32-byte pubkeys)
+264     64     ratios[8] (8 x uint64)
+328     8      threshold (uint64)
+336     256    allowedSenders[8] (8 x 32-byte pubkeys)
+592     1      allowedSenderCount (uint8)
+600     32     oracleId (id)
+632     32     oracleCurrency1 (id)
+664     32     oracleCurrency2 (id)
+696     1      oracleCondition (uint8)
+697     1      oracleTriggerMode (uint8)
+704     8      oracleThreshold (sint64)
+712     8      chainNextGateId (sint64, -1 = no chain)
+720     64     recipientGateIds[8] (8 x sint64, -1 = wallet)
 ```
 
-### updateGate_input Layout (~608 bytes)
+### updateGate_input Layout (672 bytes)
 
 ```
 Offset  Size   Field
@@ -324,7 +1040,7 @@ _expiryEpochs   uint64                          Inactivity epochs before expiry 
 
 ```
 owner               id (32 bytes)       Gate creator
-mode                uint8               Gate mode (0-4, immutable)
+mode                uint8               Gate mode (0-8, immutable)
 recipientCount      uint8               Active recipients (1-8)
 active              uint8               1 = active, 0 = closed/expired
 allowedSenderCount  uint8               Allowed senders for CONDITIONAL
@@ -332,12 +1048,25 @@ createdEpoch        uint16              Creation epoch
 lastActivityEpoch   uint16              Last send/update/create epoch
 totalReceived       uint64              Cumulative QU received
 totalForwarded      uint64              Cumulative QU forwarded
-currentBalance      uint64              Held balance (THRESHOLD mode)
+currentBalance      uint64              Held balance (THRESHOLD/ORACLE mode)
 threshold           uint64              Threshold amount
 roundRobinIndex     uint64              Next recipient index (ROUND_ROBIN)
 recipients          Array<id, 8>        Recipient addresses (256 bytes)
 ratios              Array<uint64, 8>    Ratios (64 bytes)
 allowedSenders      Array<id, 8>        Allowed senders (256 bytes)
+oracleId            id (32 bytes)       Oracle provider identity (ORACLE mode)
+oracleCurrency1     id (32 bytes)       First currency of price pair (ORACLE mode)
+oracleCurrency2     id (32 bytes)       Second currency of price pair (ORACLE mode)
+oracleCondition     uint8               Trigger condition type (ORACLE mode)
+oracleTriggerMode   uint8               ONCE (0) or RECURRING (1) (ORACLE mode)
+oracleThreshold     sint64              Price ratio * 1e6 or timestamp (ORACLE mode)
+oracleReserve       sint64              QU reserve for subscription fees (ORACLE mode)
+oracleSubscriptionId sint32             Subscription ID; -1 if not subscribed (ORACLE mode)
+chainNextGateId     sint64              Next gate in chain; -1 if terminal
+chainReserve        sint64              QU reserve for hop fees
+chainDepth          uint8               Position in chain (0 = root)
+adminGateId         sint64              MULTISIG gate ID for governance; -1 if none
+hasAdminGate        uint8               1 if adminGateId is set
 ```
 
 ### Free-List
@@ -375,16 +1104,23 @@ Use `getFees()` to query the current escalated fee before creating a gate.
 
 ### Gate Expiry
 
-Gates with no activity (no `sendToGate` or `updateGate`) for `_expiryEpochs` epochs are automatically closed during `END_EPOCH`. The expiry check uses:
+Gates with no activity for `_expiryEpochs` epochs are expired via two complementary mechanisms:
+
+1. **Lazy expiry on interaction** (primary): When any procedure (`sendToGate`, `sendToGateVerified`, `updateGate`, `closeGate`, `fundGate`, `setChain`) touches a gate, it checks whether the gate has exceeded its inactivity window. If so, the gate is expired inline — balances (current, oracle reserve, chain reserve) are refunded to the owner, the slot is freed, and the caller is refunded. The `getGate` function also reports expired gates as `active=0` without mutating state.
+
+2. **END_EPOCH sweep** (safety net): The `END_EPOCH` handler still scans all gates each epoch. This catches gates that nobody interacts with. At scale, most expiries happen lazily, reducing `END_EPOCH` processing load.
+
+The expiry check uses:
 
 ```
 if (epoch() - lastActivityEpoch >= expiryEpochs)  →  expire
 ```
 
 Expired gates:
-- Have any held balance (THRESHOLD mode) refunded to the owner
+- Have any held balance (current, oracle reserve, chain reserve) refunded to the owner
 - Are marked inactive
 - Have their slot pushed onto the free-list
+- Have their generation counter incremented (invalidates old gate IDs)
 
 Default expiry: 50 epochs (approximately 1 year at current epoch length). Set to 0 to disable expiry entirely. Shareholder-adjustable.
 
@@ -425,9 +1161,9 @@ Until the shareholder infrastructure is wired, fees are set during `INITIALIZE` 
 
 ## Design Decisions
 
-### Why 5 modes?
+### Why 9 modes?
 
-These five modes cover the most common payment routing patterns observed in blockchain applications: proportional splitting (revenue share), rotation (load balancing/fairness), accumulation (crowdfunding/escrow), randomization (lottery/raffle), and access control (whitelisting). Together they can be composed to handle most real-world payment flows without custom contracts.
+These nine modes cover the most common payment routing and custody patterns observed in blockchain applications: proportional splitting (revenue share), rotation (load balancing/fairness), accumulation (crowdfunding/escrow), randomization (lottery/raffle), access control (whitelisting), oracle-triggered distribution (conditional release), heartbeat-based inheritance (dead-man's switch), M-of-N multisig approval (DAO treasury, joint accounts), and epoch-based time locks (vesting, escrow). Together they can be composed to handle most real-world payment flows without custom contracts.
 
 ### Why 8 max recipients?
 
@@ -455,23 +1191,124 @@ Accumulating fees in the contract would create a honeypot and complicate governa
 
 ---
 
+## Security Model
+
+### Deflationary Design
+
+All fees (creation fees, dust burns, chain hop fees) are destroyed via `qpi.burn()`. No QU accumulates in the contract. No rent-seeking, no honeypot.
+
+### No Rug-Pull
+
+Oracle gates with a non-zero `currentBalance` cannot have their recipients changed via `updateGate`. This prevents an owner from redirecting accumulated funds to a different address after senders have deposited.
+
+### Versioned Gate IDs
+
+Gate IDs encode a generation counter to prevent slot-reuse attacks. See [Gate ID Format](#gate-id-format).
+
+### Chain Cycle Prevention
+
+Chain links are validated at creation and update time. The contract walks forward from the target gate (up to `QUGATE_MAX_CHAIN_DEPTH` steps) to detect cycles. Depth is capped at 3 hops.
+
+### RANDOM Entropy Warning
+
+RANDOM mode uses `mod(totalReceived + tick(), recipientCount)` as entropy. Both `totalReceived` and `tick()` are publicly observable before transaction submission, making recipient selection predictable to a determined observer. Not suitable for use cases requiring cryptographic randomness.
+
+### TIME_AFTER Oracle Requirement
+
+The `TIME_AFTER` condition type (oracle condition 2) interprets the oracle reply's `numerator` field as a tick-derived timestamp. This requires a Price oracle whose reply encodes time in the numerator — not all oracles do this. Verify oracle compatibility before configuring `TIME_AFTER` gates.
+
+### activeGates Underflow Guard
+
+The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_EPOCH`, and oracle ONCE-mode auto-close prevents underflow from double-close scenarios.
+
+### Transfer-First State Updates [QG-01..QG-17]
+
+All `qpi.transfer()` calls that move funds (to recipients, owners, beneficiaries) check the return value (`>= 0`) before updating state. If a transfer fails, state remains unchanged — no funds are lost or double-counted. Error-path refunds (returning `invocationReward` on validation failure) don't need this pattern since no state mutation precedes them.
+
+### Single invocationReward Capture
+
+Every public procedure captures `qpi.invocationReward()` into `locals.invReward` at entry. All subsequent references use the cached value. This prevents inconsistencies if the value were to change between calls and simplifies audit of refund paths.
+
+---
+
+## Edge Cases and Safety
+
+### Dead Chain Links
+
+When a gate is chained to another gate that has been closed, expired, or recycled, the chain forwarding detects the dead link and reverts undeliverable funds to the source gate's currentBalance. The owner can then either fix the chain via setChain or close the gate to recover funds. No QU is lost.
+
+### Chain-Only Gates (0 Recipients)
+
+Gates with recipientCount=0 are valid only when chainNextGateId is set. All funds flow through the chain. If the chain link dies, funds revert to currentBalance. The owner can always closeGate to recover.
+
+### Admin Gate Expiry
+
+If a gate's admin MULTISIG gate expires or is closed, the gate owner can still clear the admin gate (setAdminGate with adminGateId=-1) and regain full control. This prevents permanently locked gates.
+
+### Lazy Expiry on Interaction
+
+When a procedure (`sendToGate`, `updateGate`, `closeGate`, `fundGate`, `setChain`) encounters an expired gate, it expires the gate inline and refunds all balances to the owner. The caller receives `QUGATE_GATE_NOT_ACTIVE` and their invocation reward is refunded. This means most expiries happen on first interaction after the inactivity window, rather than waiting for the next `END_EPOCH` sweep. The `END_EPOCH` sweep remains as a safety net for gates that nobody interacts with.
+
+### Heartbeat + Expiry Interaction
+
+Calling heartbeat() refreshes lastActivityEpoch, preventing the 50-epoch expiry from firing. If the owner stops calling heartbeat(), the heartbeat trigger fires first (at thresholdEpochs), then payouts run. The gate won't expire during active payouts because END_EPOCH payout processing counts as implicit activity.
+
+### Round Robin After Recipient Reduction
+
+When updateGate reduces recipientCount, the roundRobinIndex is automatically reset to 0 if it would be out of bounds. This prevents payments to zeroed addresses.
+
+### MULTISIG Proposal Expiry
+
+Incomplete proposals (fewer than M votes) automatically reset after proposalExpiryEpochs. Funds remain in the gate and a new proposal can begin. Guardian votes are tracked via a bitmap — each guardian can only vote once per proposal.
+
+### Oracle Reserve Exhaustion
+
+When an ORACLE gate's oracleReserve drops below the per-epoch subscription fee, the oracle subscription lapses. Accumulated funds remain in currentBalance. The owner can re-fund via fundGate or withdraw via withdrawReserve. No funds are lost.
+
+### Fund Recovery
+
+The owner can always recover funds via:
+- closeGate: refunds currentBalance, oracleReserve, chainReserve to owner
+- withdrawReserve: retrieves oracle or chain reserves without closing
+- cancelTimeLock: refunds TIME_LOCK balance (if cancellable)
+
+No QU can be permanently locked in the contract (assuming the owner retains access).
+
+---
+
 ## Status Codes
 
 | Code | Constant | Description |
 |------|----------|-------------|
 | 0 | `QUGATE_SUCCESS` | Operation succeeded |
-| -1 | `QUGATE_INVALID_GATE_ID` | Gate ID is 0 or exceeds gateCount |
-| -2 | `QUGATE_GATE_NOT_ACTIVE` | Gate exists but is inactive |
+| -1 | `QUGATE_INVALID_GATE_ID` | Gate ID is 0, exceeds gateCount, or wrong generation |
+| -2 | `QUGATE_GATE_NOT_ACTIVE` | Gate exists but has been closed or expired |
 | -3 | `QUGATE_UNAUTHORIZED` | Caller is not the gate owner |
-| -4 | `QUGATE_INVALID_MODE` | Mode value > 4 |
+| -4 | `QUGATE_INVALID_MODE` | Mode value exceeds QUGATE_MODE_TIME_LOCK (8) |
 | -5 | `QUGATE_INVALID_RECIPIENT_COUNT` | Recipient count is 0 or > 8 |
-| -6 | `QUGATE_INVALID_RATIO` | Ratio > 10,000 or total ratio is 0 |
+| -6 | `QUGATE_INVALID_RATIO` | Individual ratio > 10,000 or total ratio is 0 |
 | -7 | `QUGATE_INSUFFICIENT_FEE` | Invocation reward < escalated creation fee |
-| -8 | `QUGATE_NO_FREE_SLOTS` | No free-list slots and gateCount at capacity |
-| -9 | `QUGATE_DUST_AMOUNT` | Send amount is 0 or below minimum |
+| -8 | `QUGATE_NO_FREE_SLOTS` | Free-list empty and gateCount at QUGATE_MAX_GATES |
+| -9 | `QUGATE_DUST_AMOUNT` | Send amount is 0 or below minimum (burned) |
 | -10 | `QUGATE_INVALID_THRESHOLD` | Threshold is 0 for THRESHOLD mode |
-| -11 | `QUGATE_INVALID_SENDER_COUNT` | Allowed sender count > 8 |
+| -11 | `QUGATE_INVALID_SENDER_COUNT` | allowedSenderCount exceeds QUGATE_MAX_RECIPIENTS |
 | -12 | `QUGATE_CONDITIONAL_REJECTED` | Sender not in allowed list (funds bounced) |
+| -13 | `QUGATE_INVALID_ORACLE_CONFIG` | Invalid oracle condition, threshold, or trigger mode |
+| -14 | `QUGATE_INVALID_CHAIN` | Chain target invalid, depth exceeded, or cycle detected |
+| -15 | `QUGATE_OWNER_MISMATCH` | gate.owner != expectedOwner in sendToGateVerified |
+| -16 | `QUGATE_HEARTBEAT_TRIGGERED` | heartbeat() called after gate already triggered |
+| -17 | `QUGATE_HEARTBEAT_NOT_ACTIVE` | heartbeat() or configureHeartbeat() on non-HEARTBEAT gate |
+| -18 | `QUGATE_HEARTBEAT_INVALID` | Invalid heartbeat config (bad shares, percent, threshold) |
+| -19 | `QUGATE_MULTISIG_NOT_GUARDIAN` | Sender is not in the guardian list |
+| -20 | `QUGATE_MULTISIG_ALREADY_VOTED` | Guardian already voted on the current proposal |
+| -21 | `QUGATE_MULTISIG_INVALID_CONFIG` | Invalid config (0 guardians, required > count, etc) |
+| -22 | `QUGATE_MULTISIG_NO_ACTIVE_PROP` | No active multisig proposal to query |
+| -23 | `QUGATE_TIME_LOCK_ALREADY_FIRED` | Gate already unlocked and closed |
+| -24 | `QUGATE_TIME_LOCK_NOT_CANCELLABLE` | cancelTimeLock() called but cancellable=0 |
+| -25 | `QUGATE_TIME_LOCK_EPOCH_PAST` | unlockEpoch is in the past at configuration time |
+| -26 | `QUGATE_ADMIN_GATE_REQUIRED` | Config change needs admin gate approval |
+| -27 | `QUGATE_INVALID_ADMIN_GATE` | adminGateId doesn't exist or isn't MULTISIG mode |
+| -28 | `QUGATE_INVALID_GATE_RECIPIENT` | recipientGateIds entry is invalid (bad slot/gen/inactive) |
 
 ---
 
@@ -489,6 +1326,25 @@ Accumulating fees in the contract would create a honeypot and complicate governa
 | 6 | `QUGATE_LOG_DUST_BURNED` | Dust amount burned |
 | 7 | `QUGATE_LOG_FEE_CHANGED` | Fee parameter changed (future) |
 | 8 | `QUGATE_LOG_GATE_EXPIRED` | Gate auto-closed due to inactivity |
+| 9 | `QUGATE_LOG_ORACLE_TRIGGERED` | Oracle condition met; accumulated balance distributed |
+| 10 | `QUGATE_LOG_ORACLE_EXHAUSTED` | Oracle reserve insufficient for subscription fee |
+| 11 | `QUGATE_LOG_ORACLE_SUBSCRIBED` | Oracle subscription established for this epoch |
+| 12 | `QUGATE_LOG_CHAIN_HOP` | Chain hop executed — funds routed to next gate |
+| 13 | `QUGATE_LOG_CHAIN_CYCLE` | Chain cycle detected or max depth exceeded |
+| 14 | `QUGATE_LOG_CHAIN_HOP_INSUFFICIENT` | Hop fee not payable; funds stranded in currentBalance |
+| 15 | `QUGATE_LOG_HEARTBEAT_CONFIGURED` | configureHeartbeat() called successfully |
+| 16 | `QUGATE_LOG_HEARTBEAT_PULSE` | heartbeat() called, epoch counter reset |
+| 17 | `QUGATE_LOG_HEARTBEAT_TRIGGERED` | Threshold exceeded, heartbeat gate triggered |
+| 18 | `QUGATE_LOG_HEARTBEAT_PAYOUT` | Recurring payout dispatched to beneficiaries |
+| 19 | `QUGATE_LOG_MULTISIG_VOTE` | Guardian voted on active proposal |
+| 20 | `QUGATE_LOG_MULTISIG_EXECUTED` | M-of-N threshold reached, funds released |
+| 21 | `QUGATE_LOG_MULTISIG_EXPIRED` | Proposal expired without reaching threshold |
+| 22 | `QUGATE_LOG_MULTISIG_CONFIGURED` | configureMultisig() called successfully |
+| 23 | `QUGATE_LOG_TIME_LOCK_FIRED` | Unlock epoch reached, funds released to target |
+| 24 | `QUGATE_LOG_TIME_LOCK_CANCELLED` | Owner cancelled, funds refunded |
+| 25 | `QUGATE_LOG_TIME_LOCK_CONFIGURED` | configureTimeLock() called successfully |
+| 26 | `QUGATE_LOG_ADMIN_GATE_SET` | Admin gate assigned to a gate |
+| 27 | `QUGATE_LOG_ADMIN_GATE_CLEARED` | Admin gate removed from a gate |
 
 ### Failure Events (high range)
 
@@ -500,6 +1356,7 @@ Accumulating fees in the contract would create a honeypot and complicate governa
 | 103 | `QUGATE_LOG_FAIL_INVALID_PARAMS` | Invalid parameters |
 | 104 | `QUGATE_LOG_FAIL_INSUFFICIENT_FEE` | Fee too low |
 | 105 | `QUGATE_LOG_FAIL_NO_SLOTS` | No slots available |
+| 106 | `QUGATE_LOG_FAIL_OWNER_MISMATCH` | Owner verification failed (sendToGateVerified) |
 
 ### Log Structures
 
@@ -509,6 +1366,22 @@ Accumulating fees in the contract would create a honeypot and complicate governa
 ---
 
 ## Building and Testing
+
+### Guard Rails
+
+Run this before pushing structural changes to `QuGate.h`:
+
+```bash
+python3 scripts/contract_guard.py
+```
+
+It currently checks:
+
+- contract constants vs `contract_qugate.cpp` harness constants
+- public functions accidentally calling private procedures
+- obvious locals hotspots where routing locals are embedded into other locals structs
+
+This is a fast repo-local safety net, not a replacement for a real core-lite compile.
 
 ### Prerequisites
 
@@ -523,8 +1396,10 @@ g++ -std=c++17 -I. contract_qugate.cpp -lgtest -lgtest_main -o qugate_tests
 ./qugate_tests
 ```
 
-The test suite (`contract_qugate.cpp`) contains 40 unit tests covering:
-- All 5 gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce)
+The test suite (`contract_qugate.cpp`) contains 50+ unit tests covering:
+- All 9 gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, oracle trigger/distribution, heartbeat dead-man's switch, M-of-N multisig approval, epoch-based time lock)
+- Chain gates (hop fees, chain reserve, depth limits, cycle detection)
+- Versioned gate IDs and sendToGateVerified
 - Anti-spam features (escalating fees at 0/1024/2048 gates, dust burn, fee overpayment refund, gate expiry with balance refund, activity epoch tracking)
 - Error cases (invalid gate ID, unauthorized close/update, insufficient fee, invalid mode/ratio/threshold/sender count)
 - Free-list slot reuse
@@ -540,40 +1415,61 @@ To run end-to-end tests against a live node:
 git clone https://github.com/qubic/core-lite
 cd core-lite
 
-# Copy QuGate.h into the contracts directory
+# Copy QuGate.h and set index
 cp /path/to/QuGate.h src/contracts/QuGate.h
+sed -i 's/#define CONTRACT_INDEX 25/#define CONTRACT_INDEX 26/' src/contracts/QuGate.h
+```
 
-# Register QuGate in src/contract_def.h:
-#   - Add QUGATE_CONTRACT_INDEX = 24 (or next available)
-#   - Add setContractFeeReserve(QUGATE_CONTRACT_INDEX, 100000000000LL)
-#   - Set constructionEpoch to match your starting epoch
+**Required patches** (6 files — see `QUGATE-TESTNET-NODE.md` for full details):
 
+1. `lib/platform_efi/uefi.h` — add `#define __cdecl` for Linux
+2. `src/extensions/overload.h` — add `OutputString` stub
+3. `src/contract_core/contract_exec.h` — graceful null function check (replaces crashing ASSERT)
+4. `src/extensions/http/controller/rpc_live_controller.h` — 503 race condition fix for RPC thread safety
+5. `src/public_settings.h` — set `EPOCH 1`, `TICK 0`
+6. `src/contract_core/contract_def.h` — register QuGate at index 26
+7. `src/contract_core/qpi_oracle_impl.h` — add `typename` for dependent type (upstream Clang bug)
+
+**Build** (must use Clang — GCC missing BMI flags in upstream CMakeLists):
+
+```bash
 mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
+CC=clang CXX=clang++ cmake .. \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DTESTNET=ON \
+    -DTESTNET_PREFILL_QUS=ON
+make -j$(nproc) Qubic
 ```
 
 2. **Start the testnet node**:
 
 ```bash
-./build/src/Qubic  # Listens on TCP 31841, HTTP RPC 41841
+# Stop any miner first — node needs ~27GB RAM
+systemctl stop qlab 2>/dev/null
+
+./build/src/Qubic --sm 3 --ticking-delay 1500  # HTTP RPC on port 41841
+# Verify: curl http://localhost:41841/v1/latest-stats
 ```
 
 3. **Run the tests** (see `tests/README.md` for full details):
 
 ```bash
 export QUBIC_CLI=/path/to/qubic-cli
-python3 tests/test_all_modes.py        # All 5 modes (21 checks)
+python3 tests/test_all_modes.py        # All 9 modes (25+ checks)
+python3 tests/test_heartbeat.py        # HEARTBEAT mode (10 tests, epoch-dependent)
+python3 tests/test_multisig.py         # MULTISIG mode (10 tests)
 python3 tests/test_stress_50gates.py   # 50-gate stress test
 python3 tests/test_attack_vectors.py   # Security edge cases
 ```
 
 ### Testnet Results
 
-Tested on Qubic Core-Lite (local testnet):
-- All 5 modes verified with real contract execution (21/21 pass)
+Tested on Qubic Core-Lite v1.283.0 (local testnet, 2026-03-22):
+- All 9 modes verified with real contract execution (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, ORACLE, HEARTBEAT, MULTISIG, TIME_LOCK)
 - 50-gate stress test: 50/50 creates, sends across all modes, slot reuse verified
 - 7 attack vectors tested (unauthorized close, sends to non-existent/closed gates, double close, zero sends, slot reuse)
+- Node stable on Hetzner AX42 (64GB RAM, Ryzen 7 PRO 8700GE), QuGate at index 26
+- HTTP RPC responsive under external traffic with 503 race condition fix applied
 - 4+ hours continuous operation, zero memory growth
 
 See `TESTNET_RESULTS.md` for detailed results.
@@ -588,11 +1484,11 @@ See `TESTNET_RESULTS.md` for detailed results.
 
 3. **getGatesByOwner is O(n) linear scan.** It iterates all gate slots to find gates by owner. At 4,096 slots this is acceptable; at higher X_MULTIPLIER values it may become slow. Limited to 16 results.
 
-4. **END_EPOCH expiry iterates all gates.** The expiry check runs every epoch and scans all gate slots. At high capacity this adds per-epoch computation.
+4. **END_EPOCH expiry iterates all gates.** The expiry check runs every epoch and scans all gate slots. At high capacity this adds per-epoch computation. Lazy expiry on interaction handles most cases, reducing the practical load, but the full scan remains as a safety net.
 
 5. **Shareholder governance is not yet wired.** Fee parameters are set at initialization and cannot be changed until `DEFINE_SHAREHOLDER_PROPOSAL_STORAGE` is enabled with a valid contract asset name.
 
-6. **Maximum 8 recipients per gate.** Larger distributions require chaining multiple SPLIT gates via intermediary forwarding (each hop is a separate transaction).
+6. **Maximum 8 recipients per gate.** Larger distributions can be achieved by chaining multiple SPLIT gates via chain gates (automatic forwarding, max 3 hops) or manual intermediary forwarding.
 
 7. **Mode is immutable after creation.** To change a gate's mode, you must close it and create a new one.
 
@@ -600,25 +1496,46 @@ See `TESTNET_RESULTS.md` for detailed results.
 
 9. **No refund mechanism for THRESHOLD below target.** If a THRESHOLD gate never reaches its target, funds are held until the owner closes the gate or the gate expires. There is no "cancel and refund senders" mechanism — held balance goes to the gate owner.
 
+10. **Gate-as-recipient routing through chain hops.** When a gate-recipient target is accessed through chain forwarding (depth 2+), deferred dispatch is bounded to one level of nesting. Deeply nested gate-recipient chains (gate A → chain to gate B → gate-recipient gate C → gate-recipient gate D) may not fully propagate beyond 2 hops. Direct sends to gates with gate-recipients work correctly at any depth up to `MAX_CHAIN_DEPTH`.
+
 ---
 
 ## File Listing
 
 | File | Description |
 |------|-------------|
-| `QuGate.h` | Contract source code (QPI-compliant) |
-| `contract_qugate.cpp` | Test suite (40 unit tests, Google Test) |
+| `QuGate.h` | Contract source code (QPI-compliant, ~5500 lines) |
+| `contract_qugate.cpp` | Unit test suite (70 tests, Google Test, Allman brace style) |
 | `README.md` | Technical reference (this file) |
 | `TESTNET_RESULTS.md` | Testnet verification results |
-| `tests/` | Python testnet test scripts (11 scripts) |
-| `.github/workflows/` | CI: contract verification |
+| `tests/` | Python integration test scripts (17 scripts, require live testnet node) |
+| `tests/conftest.py` | Pytest config — skips integration tests when no node available |
+| `.github/workflows/` | CI: contract verification, style lint, integration tests |
+
+---
+
+## QPI Compliance
+
+QuGate is written to pass `qubic-contract-verify`. The `#ifndef CONTRACT_INDEX` preprocessor guard was removed; testnet builds pass the index via cmake flags (`-DCONTRACT_INDEX=26`). The oracle template syntax (`OracleNotificationInput<OI::Price>`) is flagged by the verifier (v0.3.0-beta limitation — does not support templates).
+
+| Requirement | Status |
+|-------------|--------|
+| No C-style arrays in state structs | `Array<T, N>` throughout; `.get()` / `.set()` access |
+| No division operator (`/`) | All division via `QPI::div()` |
+| No modulo operator (`%`) | All modulo via `QPI::mod()` |
+| No double quotes, single quotes in source | Clean |
+| No square bracket access (`[]`) | `.get()` / `.set()` only |
+| `state.get()` / `state.mut()` dirty-tracking | Used exclusively |
+| No `double`, `float`, `typedef`, `union` | Not used |
+| No double underscores in identifiers | Not used |
+
+**Preprocessor guard**: The `#ifndef CONTRACT_INDEX` / `#define` / `#endif` block at the top of `QuGate.h` exists for testnet flexibility (allows overriding the contract index at compile time). `qubic-contract-verify` will flag this. **Remove the guard before mainnet submission** and replace with a plain `constexpr` or the assigned contract index.
 
 ---
 
 ## Roadmap
 
 - **Mainnet deployment** — pending computor vote on [Proposal PR #33](https://github.com/qubic/proposal/pull/33)
-- **`sendToGateVerified`** — optional procedure that validates gate state before accepting funds ([#1](https://github.com/fyllepo/qugate-contract/issues/1))
 - **Ecosystem tooling** — SDK helpers, explorer integration, documentation site
 - **Community adoption** — gather feedback from builders, iterate on governance parameters
 

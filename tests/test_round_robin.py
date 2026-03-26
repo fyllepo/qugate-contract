@@ -11,7 +11,7 @@ import requests
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
 RPC = "http://127.0.0.1:41841"
-QUGATE_INDEX = 24
+QUGATE_INDEX = 25  # Pulse took index 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
 ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
@@ -22,6 +22,12 @@ PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
 PROC_CLOSE_GATE = 3
 MODE_ROUND_ROBIN = 1
+
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
 
 def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
@@ -158,15 +164,14 @@ wait_ticks(15)
 
 total, active = query_gate_count()
 print(f"\n  Gate count: total={total}, active={active}")
-gate = query_gate(total)
-print(f"  Gate #{total}: mode={gate['mode']}, recipients={gate['recipientCount']}, active={gate['active']}")
+RR_GATE = encode_gate_id(total - 1)
+gate = query_gate(RR_GATE)
+print(f"  Gate #{RR_GATE}: mode={gate['mode']}, recipients={gate['recipientCount']}, active={gate['active']}")
 
 if gate['mode'] == 'ROUND_ROBIN' and gate['active']:
     print("  ✅ ROUND_ROBIN gate created!")
-    RR_GATE = total
 else:
     print(f"  ⚠ Unexpected: mode={gate['mode']}, active={gate['active']}")
-    RR_GATE = total
 
 # ━━━ Send 3 payments — should alternate: Address B, Address C, Address B ━━━
 print("\n" + "="*50)

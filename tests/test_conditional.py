@@ -11,7 +11,7 @@ import requests
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
 RPC = "http://127.0.0.1:41841"
-QUGATE_INDEX = 24
+QUGATE_INDEX = 25  # Pulse took index 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
 ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
@@ -22,6 +22,12 @@ PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
 PROC_CLOSE_GATE = 3
 MODE_CONDITIONAL = 4
+
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
 
 def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
@@ -160,15 +166,14 @@ wait_ticks(15)
 
 total, active = query_gate_count()
 print(f"\n  Gate count: total={total}, active={active}")
-gate = query_gate(total)
-print(f"  Gate #{total}: mode={gate['mode']}, recipients={gate['recipientCount']}, active={gate['active']}")
+COND_GATE = encode_gate_id(total - 1)
+gate = query_gate(COND_GATE)
+print(f"  Gate #{COND_GATE}: mode={gate['mode']}, recipients={gate['recipientCount']}, active={gate['active']}")
 
 if gate['mode'] == 'CONDITIONAL' and gate['active']:
     print("  ✅ CONDITIONAL gate created!")
-    COND_GATE = total
 else:
     print("  ⚠ Unexpected")
-    COND_GATE = total
 
 # ━━━ Test 1: Allowed sender (Address A) sends — should forward ━━━
 print("\n" + "="*50)

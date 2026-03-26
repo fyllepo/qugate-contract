@@ -4,7 +4,7 @@ End-to-end tests that run against a live Qubic Core-Lite testnet node. Each scri
 
 ## Prerequisites
 
-- **Qubic Core-Lite** testnet running with QuGate registered at contract index 24
+- **Qubic Core-Lite** testnet running with QuGate registered at contract index 25
 - **qubic-cli** on your PATH (or set `QUBIC_CLI` env var)
 - **Python 3** with `requests` (`pip install requests`)
 - Node listening on `localhost:31841` (TCP) and `localhost:41841` (HTTP RPC)
@@ -21,17 +21,23 @@ End-to-end tests that run against a live Qubic Core-Lite testnet node. Each scri
 
 | Script | What it tests |
 |--------|---------------|
-| `test_all_modes.py` | All 5 modes + updateGate + closeGate + access control (21 checks) |
+| `test_all_modes.py` | All 9 modes + updateGate + closeGate + access control + query output verification |
 | `test_stress_50gates.py` | 50-gate stress test across all modes + slot reuse |
-| `test_split.py` | SPLIT mode distribution |
-| `test_round_robin.py` | ROUND_ROBIN cycling |
-| `test_threshold.py` | THRESHOLD accumulation and trigger |
-| `test_random.py` | RANDOM tick-based distribution |
-| `test_conditional.py` | CONDITIONAL sender whitelist |
+| `test_split.py` | SPLIT mode proportional distribution |
+| `test_round_robin.py` | ROUND_ROBIN cycling through recipients |
+| `test_threshold.py` | THRESHOLD accumulation and release trigger |
+| `test_random.py` | RANDOM tick-based recipient selection |
+| `test_conditional.py` | CONDITIONAL sender whitelist and bounce |
 | `test_attack_vectors.py` | Security: unauthorized access, closed gates, edge cases |
 | `test_gate_lifecycle.py` | Full lifecycle: create → send → update → close |
-| `test_gate_chaining.py` | Multi-gate pipeline composability |
+| `test_gate_chaining.py` | Multi-gate pipeline composability (manual forwarding) |
 | `test_multi_sender.py` | Multiple senders to same gate |
+| `test_oracle.py` | ORACLE mode: creation, fundGate, condition logic, ONCE/RECURRING |
+| `test_chain.py` | Chain gates: automatic forwarding, hop fees, depth limits |
+| `test_testnet.py` | End-to-end testnet smoke test |
+| `test_verified.py` | sendToGateVerified: owner check, mismatch refund |
+| `test_heartbeat.py` | HEARTBEAT mode: create, configure, heartbeat(), trigger, payout |
+| `test_multisig.py` | MULTISIG mode: create, configure, vote, release, guardian identity verification |
 
 ## Running
 
@@ -53,7 +59,7 @@ All scripts use these defaults:
 ```python
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 RPC = "http://127.0.0.1:41841"
-CONTRACT_INDEX = 24
+CONTRACT_INDEX = 25
 ```
 
 ## Results
