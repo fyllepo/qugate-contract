@@ -5368,7 +5368,16 @@ public:
         }
         else
         {
-            locals.cfg.unlockEpoch = 0;
+            // If the gate already holds funds, anchor the relative unlock window immediately
+            // from the current epoch rather than waiting for another deposit.
+            if (locals.gate.currentBalance > 0)
+            {
+                locals.cfg.unlockEpoch = (uint32)qpi.epoch() + input.delayEpochs;
+            }
+            else
+            {
+                locals.cfg.unlockEpoch = 0;
+            }
         }
         locals.cfg.delayEpochs = input.delayEpochs;
         locals.cfg.lockMode = input.lockMode;
