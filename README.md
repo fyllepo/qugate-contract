@@ -44,7 +44,7 @@ Gate-to-gate forwarding can happen in two ways:
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `QUGATE_MAX_GATES` | 4,096 x X_MULTIPLIER | Max concurrent gates (scales with network) |
+| `QUGATE_MAX_GATES` | 256 x X_MULTIPLIER | Max concurrent gates (scales with network) |
 | `QUGATE_MAX_RECIPIENTS` | 8 | Max recipients per gate |
 | `QUGATE_MAX_RATIO` | 10,000 | Max ratio value per recipient |
 | `QUGATE_DEFAULT_CREATION_FEE` | 100,000 QU | Initial base creation fee |
@@ -385,25 +385,35 @@ heartbeat(gateId: 4294967296)
 
 ## TIME_LOCK Gate (Mode 8)
 
-A TIME_LOCK gate holds incoming QU and releases the full balance to a designated target address when a specified future epoch is reached. Nothing releases before that epoch.
+A TIME_LOCK gate holds incoming QU and releases the full balance to a designated target address when a specified future epoch is reached. Nothing releases before that epoch. Supports two lock modes: **absolute** (unlock at a specific epoch) and **relative** (unlock N epochs after configuration).
 
 ### Setup
 1. Create a gate with `mode=8` and `recipients[0]` = target address
-2. Call `configureTimeLock()` with `unlockEpoch` (must be > current epoch) and `cancellable`
+2. Call `configureTimeLock()` with lock mode, timing parameters, and `cancellable`
 3. Send QU to the gate — funds accumulate in `currentBalance`
 4. At the start of the unlock epoch, `END_EPOCH` automatically releases the full balance to the target
+
+### Lock Modes
+| Mode | Constant | Value | Description |
+|------|----------|-------|-------------|
+| Absolute | `QUGATE_TIME_LOCK_ABSOLUTE_EPOCH` | 0 | Unlock at a specific epoch number (`unlockEpoch` must be > current epoch) |
+| Relative | `QUGATE_TIME_LOCK_RELATIVE_EPOCHS` | 1 | Unlock `delayEpochs` epochs after configuration (`delayEpochs` must be > 0) |
+
+In relative mode, the contract computes `unlockEpoch = currentEpoch + delayEpochs` at configuration time. After that, behaviour is identical to absolute mode.
 
 ### Parameters
 | Field | Description |
 |-------|-------------|
 | recipients[0] | Target address that receives funds on unlock |
-| unlockEpoch | The epoch number when funds are released |
+| lockMode | 0 = absolute epoch, 1 = relative epochs |
+| unlockEpoch | The epoch number when funds are released (absolute mode) |
+| delayEpochs | Number of epochs from now until unlock (relative mode) |
 | cancellable | 1 = owner can cancel and recover funds before unlock |
 
 ### Procedures
 | Procedure | Description |
 |-----------|-------------|
-| `configureTimeLock(gateId, unlockEpoch, cancellable)` | Owner only — sets unlock parameters |
+| `configureTimeLock(gateId, unlockEpoch, delayEpochs, lockMode, cancellable)` | Owner only — sets unlock parameters |
 | `cancelTimeLock(gateId)` | Owner only — cancels and refunds balance (requires cancellable=1) |
 | `getTimeLockState(gateId)` | Read-only — returns config, balance, current epoch, epochs remaining |
 
@@ -413,6 +423,7 @@ A TIME_LOCK gate holds incoming QU and releases the full balance to a designated
 | QUGATE_TIME_LOCK_ALREADY_FIRED (-23) | Gate has already unlocked and closed |
 | QUGATE_TIME_LOCK_NOT_CANCELLABLE (-24) | cancelTimeLock() called but cancellable=0 |
 | QUGATE_TIME_LOCK_EPOCH_PAST (-25) | unlockEpoch is in the past at configuration time |
+| QUGATE_INVALID_PARAMS (-31) | Invalid lockMode or zero delayEpochs in relative mode |
 
 ### Worked Example: Lock 500K QU for 8 epochs (vesting)
 
@@ -429,11 +440,13 @@ createGate(
 → gateId: 1234
 ```
 
-**Step 2: Configure the time lock**
+**Step 2: Configure the time lock (relative mode)**
 ```
 configureTimeLock(
   gateId: 1234,
-  unlockEpoch: currentEpoch + 8,   // e.g. epoch 218 if current is 210
+  unlockEpoch: 0,                   // ignored in relative mode
+  delayEpochs: 8,                   // unlock 8 epochs from now
+  lockMode: 1,                      // RELATIVE
   cancellable: 1                    // Alice can cancel if plans change
 )
 ```
@@ -572,8 +585,10 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 | 22 | getAdminGate | PUBLIC_FUNCTION | Query admin gate configuration for a gate |
 | 23 | withdrawReserve | PUBLIC_PROCEDURE | Withdraw from oracle or chain reserve without closing (owner only) |
 | 24 | getGatesByMode | PUBLIC_FUNCTION | Query up to 16 active gates matching a given mode |
+| 25 | getGateBySlot | PUBLIC_FUNCTION | Query a gate by raw slot index (returns versioned gate ID + full state) |
+| 26 | getLatestExecution | PUBLIC_FUNCTION | Query the latest execution metadata for a gate (outcome, recipient, tick) |
 
-**Totals**: 14 procedures + 10 functions = 24 registered entry points.
+**Totals**: 14 procedures + 12 functions = 26 registered entry points.
 
 ### Procedures (State-Changing)
 
@@ -898,13 +913,15 @@ Configures a TIME_LOCK gate with an unlock epoch and cancellability flag. Owner 
 
 | Field | Type | Size | Description |
 |-------|------|------|-------------|
-| gateId | uint32 | 4 | Target TIME_LOCK gate ID |
-| unlockEpoch | uint32 | 4 | Epoch when funds release (must be > current epoch) |
+| gateId | uint64 | 8 | Target TIME_LOCK gate ID |
+| unlockEpoch | uint32 | 4 | Epoch when funds release (absolute mode, must be > current epoch) |
+| delayEpochs | uint32 | 4 | Epochs from now until unlock (relative mode, must be > 0) |
+| lockMode | uint8 | 1 | 0 = absolute epoch, 1 = relative epochs |
 | cancellable | uint8 | 1 | 1 = owner can cancel before unlock |
 
 **Output**: `status` (sint64)
 
-**Validation**: Gate must be mode 8 (TIME_LOCK) and active. `unlockEpoch` must be greater than the current epoch. Owner only.
+**Validation**: Gate must be mode 8 (TIME_LOCK) and active. `lockMode` must be 0 or 1. In absolute mode, `unlockEpoch` must be > current epoch. In relative mode, `delayEpochs` must be > 0. Owner only. Returns `QUGATE_INVALID_PARAMS` (-31) for invalid lockMode or zero delayEpochs.
 
 #### cancelTimeLock (Input Type 19)
 
@@ -924,7 +941,7 @@ Cancels a TIME_LOCK gate before the unlock epoch. Owner only. Requires `cancella
 
 Read-only query for TIME_LOCK gate state.
 
-**Input**: `gateId` (uint32)
+**Input**: `gateId` (uint64)
 
 **Output**:
 
@@ -932,6 +949,8 @@ Read-only query for TIME_LOCK gate state.
 |-------|------|-------------|
 | status | sint64 | 0 on success, negative on error |
 | unlockEpoch | uint32 | Target epoch for fund release |
+| delayEpochs | uint32 | Original delay (relative mode) |
+| lockMode | uint8 | 0 = absolute, 1 = relative |
 | cancellable | uint8 | 1 if owner can cancel |
 | fired | uint8 | 1 if funds have been released |
 | cancelled | uint8 | 1 if cancelled by owner |
@@ -971,6 +990,39 @@ Read-only query for admin gate configuration on a gate.
 | guardianCount | uint8 | Number of guardians on the admin gate |
 | required | uint8 | M-of-N threshold on the admin gate |
 | guardians | Array\<id, 8\> | Guardian public keys from the admin gate's MultisigConfig |
+
+#### getGateBySlot (Input Type 25)
+
+Queries a gate by its raw slot index (0-based) rather than versioned gate ID. Useful for iterating all slots.
+
+**Input**: `slotIndex` (uint64)
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| valid | uint8 | 1 if slot is within gateCount range |
+| gateId | uint64 | Current versioned gate ID for this slot |
+| generation | uint16 | Current generation counter |
+| *(remaining fields)* | | Same as `getGate_output` (mode, recipientCount, active, owner, etc.) |
+
+#### getLatestExecution (Input Type 26)
+
+Returns the most recent execution metadata for a gate — what happened the last time a payment was routed through it. Useful for debugging and observability without parsing logs.
+
+**Input**: `gateId` (uint64)
+
+**Output**:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| valid | uint8 | 1 if an execution has been recorded for this gate |
+| mode | uint8 | Gate mode at execution time |
+| outcomeType | uint8 | Execution outcome (`QUGATE_EXEC_*`: 0=NONE, 1=FORWARDED, 2=HELD, 3=REFUNDED, 4=BURNED, 5=REJECTED) |
+| selectedRecipientIndex | uint8 | Recipient chosen (255 = none/not applicable) |
+| selectedDownstreamGateId | sint64 | Gate-as-recipient target (-1 if wallet) |
+| forwardedAmount | uint64 | Amount forwarded in this execution |
+| observedTick | uint64 | Tick number at execution time |
 
 ---
 
@@ -1073,9 +1125,9 @@ hasAdminGate        uint8               1 if adminGateId is set
 
 Gate slots are reused via a stack-based free-list. When a gate is closed or expires, its slot index is pushed onto `_freeSlots`. When a new gate is created, the contract first pops from the free-list; only if empty does it allocate from the end of the array (incrementing `_gateCount`).
 
-This prevents a permanent denial-of-service where an attacker creates and closes gates to exhaust the 4,096-slot array.
+This prevents a permanent denial-of-service where an attacker creates and closes gates to exhaust the 256-slot array (at X_MULTIPLIER=1).
 
-Total state size at X_MULTIPLIER=1: approximately 1.6 MB (4,096 gates x ~400 bytes + free-list overhead + metadata).
+Total state size at X_MULTIPLIER=1: approximately 100 KB (256 gates x ~400 bytes + free-list overhead + metadata).
 
 ---
 
@@ -1093,12 +1145,12 @@ Where `FEE_ESCALATION_STEP = 1024` (integer division).
 
 | Active Gates | Multiplier | Fee (base=100,000 QU) |
 |--------------|------------|----------------------|
-| 0 - 1,023 | 1x | 100,000 |
+| 0 - 255 (X=1) | 1x | 100,000 |
+| 0 - 1,023 (X=4+) | 1x | 100,000 |
 | 1,024 - 2,047 | 2x | 200,000 |
 | 2,048 - 3,071 | 3x | 300,000 |
-| 3,072 - 4,095 | 4x | 400,000 |
 
-At X_MULTIPLIER=10 with 40,960 slots, the maximum multiplier would be 41x (4,100,000 QU). This makes bulk slot squatting progressively expensive.
+At X_MULTIPLIER=10 with 2,560 slots, the maximum multiplier would be 3x (300,000 QU). At X_MULTIPLIER=100 with 25,600 slots, the maximum would be 26x (2,600,000 QU). This makes bulk slot squatting progressively expensive.
 
 Use `getFees()` to query the current escalated fee before creating a gate.
 
@@ -1179,7 +1231,7 @@ A gate's mode is set at creation and cannot be changed via `updateGate`. This pr
 
 ### Why a free-list?
 
-Without slot reuse, an attacker could create and close 4,096 gates to permanently exhaust capacity. The free-list ensures closed gate slots are recycled. Combined with escalating fees, this makes the contract resilient to slot exhaustion attacks.
+Without slot reuse, an attacker could create and close all gate slots to permanently exhaust capacity. The free-list ensures closed gate slots are recycled. Combined with escalating fees, this makes the contract resilient to slot exhaustion attacks.
 
 ### Why burn, not revenue?
 
@@ -1309,6 +1361,9 @@ No QU can be permanently locked in the contract (assuming the owner retains acce
 | -26 | `QUGATE_ADMIN_GATE_REQUIRED` | Config change needs admin gate approval |
 | -27 | `QUGATE_INVALID_ADMIN_GATE` | adminGateId doesn't exist or isn't MULTISIG mode |
 | -28 | `QUGATE_INVALID_GATE_RECIPIENT` | recipientGateIds entry is invalid (bad slot/gen/inactive) |
+| -29 | `QUGATE_INVALID_ADMIN_CYCLE` | adminGateId creates a circular admin chain (self or loop) |
+| -30 | `QUGATE_MULTISIG_PROPOSAL_ACTIVE` | configureMultisig blocked while proposal is in progress |
+| -31 | `QUGATE_INVALID_PARAMS` | Generic invalid parameter (e.g. bad lockMode or zero delayEpochs) |
 
 ---
 
@@ -1345,6 +1400,7 @@ No QU can be permanently locked in the contract (assuming the owner retains acce
 | 25 | `QUGATE_LOG_TIME_LOCK_CONFIGURED` | configureTimeLock() called successfully |
 | 26 | `QUGATE_LOG_ADMIN_GATE_SET` | Admin gate assigned to a gate |
 | 27 | `QUGATE_LOG_ADMIN_GATE_CLEARED` | Admin gate removed from a gate |
+| 28 | `QUGATE_LOG_ADMIN_APPROVAL_USED` | Admin gate approval consumed for a config change |
 
 ### Failure Events (high range)
 
@@ -1396,7 +1452,7 @@ g++ -std=c++17 -I. contract_qugate.cpp -lgtest -lgtest_main -o qugate_tests
 ./qugate_tests
 ```
 
-The test suite (`contract_qugate.cpp`) contains 50+ unit tests covering:
+The test suite (`contract_qugate.cpp`) contains 73 unit tests covering:
 - All 9 gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, oracle trigger/distribution, heartbeat dead-man's switch, M-of-N multisig approval, epoch-based time lock)
 - Chain gates (hop fees, chain reserve, depth limits, cycle detection)
 - Versioned gate IDs and sendToGateVerified
@@ -1482,7 +1538,7 @@ See `TESTNET_RESULTS.md` for detailed results.
 
 2. **THRESHOLD mode is vulnerable to grief-by-dust.** An attacker can send many small amounts (above minSend) to slowly fill a threshold gate. This is a nuisance, not exploitable — the attacker loses QU on every send. The dust burn minimum mitigates the cheapest form of this attack.
 
-3. **getGatesByOwner is O(n) linear scan.** It iterates all gate slots to find gates by owner. At 4,096 slots this is acceptable; at higher X_MULTIPLIER values it may become slow. Limited to 16 results.
+3. **getGatesByOwner is O(n) linear scan.** It iterates all gate slots to find gates by owner. At 256 slots (X_MULTIPLIER=1) this is acceptable; at higher X_MULTIPLIER values it may become slow. Limited to 16 results.
 
 4. **END_EPOCH expiry iterates all gates.** The expiry check runs every epoch and scans all gate slots. At high capacity this adds per-epoch computation. Lazy expiry on interaction handles most cases, reducing the practical load, but the full scan remains as a safety net.
 
@@ -1504,11 +1560,11 @@ See `TESTNET_RESULTS.md` for detailed results.
 
 | File | Description |
 |------|-------------|
-| `QuGate.h` | Contract source code (QPI-compliant, ~5500 lines) |
-| `contract_qugate.cpp` | Unit test suite (70 tests, Google Test, Allman brace style) |
+| `QuGate.h` | Contract source code (QPI-compliant, ~6700 lines) |
+| `contract_qugate.cpp` | Unit test suite (73 tests, Google Test, Allman brace style) |
 | `README.md` | Technical reference (this file) |
 | `TESTNET_RESULTS.md` | Testnet verification results |
-| `tests/` | Python integration test scripts (17 scripts, require live testnet node) |
+| `tests/` | Python integration test scripts (18 scripts, require live testnet node) |
 | `tests/conftest.py` | Pytest config — skips integration tests when no node available |
 | `.github/workflows/` | CI: contract verification, style lint, integration tests |
 
@@ -1529,7 +1585,7 @@ QuGate is written to pass `qubic-contract-verify`. The `#ifndef CONTRACT_INDEX` 
 | No `double`, `float`, `typedef`, `union` | Not used |
 | No double underscores in identifiers | Not used |
 
-**Preprocessor guard**: The `#ifndef CONTRACT_INDEX` / `#define` / `#endif` block at the top of `QuGate.h` exists for testnet flexibility (allows overriding the contract index at compile time). `qubic-contract-verify` will flag this. **Remove the guard before mainnet submission** and replace with a plain `constexpr` or the assigned contract index.
+**Contract index**: The preprocessor guard was removed for contract-verify compliance. Testnet builds pass `-DCONTRACT_INDEX=26` via cmake flags instead.
 
 ---
 
