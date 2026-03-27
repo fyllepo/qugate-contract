@@ -147,6 +147,7 @@ constexpr sint64 QUGATE_INVALID_ADMIN_GATE        = -27; // adminGateId doesn't 
 constexpr sint64 QUGATE_INVALID_GATE_RECIPIENT    = -28; // recipientGateIds entry is invalid (bad slot/gen/inactive)
 constexpr sint64 QUGATE_INVALID_ADMIN_CYCLE       = -29; // adminGateId creates a circular admin chain (self or loop)
 constexpr sint64 QUGATE_MULTISIG_PROPOSAL_ACTIVE  = -30; // configureMultisig blocked while proposal is in progress
+constexpr sint64 QUGATE_INVALID_PARAMS            = -31; // Generic invalid parameter (e.g. bad lockMode or zero delayEpochs)
 
 // Log type constants (positive = success events, high numbers = actions)
 constexpr uint32 QUGATE_LOG_GATE_CREATED = 1;
