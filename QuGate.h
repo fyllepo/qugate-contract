@@ -140,6 +140,8 @@ constexpr sint64 QUGATE_MULTISIG_NO_ACTIVE_PROP  = -22; // no active proposal to
 constexpr sint64 QUGATE_TIME_LOCK_ALREADY_FIRED   = -23; // gate already unlocked and closed
 constexpr sint64 QUGATE_TIME_LOCK_NOT_CANCELLABLE = -24; // cancelTimeLock() called but cancellable=0
 constexpr sint64 QUGATE_TIME_LOCK_EPOCH_PAST      = -25; // unlockEpoch is in the past at creation
+constexpr uint8 QUGATE_TIME_LOCK_ABSOLUTE_EPOCH   = 0;
+constexpr uint8 QUGATE_TIME_LOCK_RELATIVE_EPOCHS  = 1;
 constexpr sint64 QUGATE_ADMIN_GATE_REQUIRED       = -26; // config change needs admin gate approval
 constexpr sint64 QUGATE_INVALID_ADMIN_GATE        = -27; // adminGateId doesn't exist or isn't MULTISIG mode
 constexpr sint64 QUGATE_INVALID_GATE_RECIPIENT    = -28; // recipientGateIds entry is invalid (bad slot/gen/inactive)
@@ -242,6 +244,8 @@ struct QUGATE_AdminApprovalState
 struct QUGATE_TimeLockConfig
 {
     uint32 unlockEpoch;    // epoch when funds release
+    uint32 delayEpochs;    // relative delay from first funding when lockMode == RELATIVE
+    uint8  lockMode;       // 0 = absolute epoch, 1 = relative epochs
     uint8  cancellable;    // 1 = owner can cancel and refund before unlock
     uint8  fired;          // 1 once funds have been released
     uint8  cancelled;      // 1 if cancelled by owner
@@ -514,7 +518,9 @@ public:
     struct configureTimeLock_input
     {
         uint64 gateId;
-        uint32 unlockEpoch;   // must be > current epoch
+        uint32 unlockEpoch;   // absolute mode: must be > current epoch
+        uint32 delayEpochs;   // relative mode: must be > 0
+        uint8  lockMode;      // 0 = absolute epoch, 1 = relative epochs
         uint8  cancellable;   // 1 = allow owner to cancel before unlock
     };
     struct configureTimeLock_output
@@ -657,6 +663,8 @@ public:
     {
         sint64 status;
         uint32 unlockEpoch;
+        uint32 delayEpochs;
+        uint8  lockMode;
         uint8  cancellable;
         uint8  fired;
         uint8  cancelled;
@@ -2732,16 +2740,25 @@ public:
 
         else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
         {
-            // TIME_LOCK mode: accumulate unless already fired
+            // TIME_LOCK mode: only accepts funds when configured; relative mode anchors unlock on first funding
             locals.gate = state.get()._gates.get(locals.slotIdx);
             locals.tlCfg = state.get()._timeLockConfigs.get(locals.slotIdx);
-            if (locals.tlCfg.fired == 1)
+            if (locals.tlCfg.active == 0 || locals.tlCfg.cancelled == 1)
+            {
+                qpi.transfer(qpi.invocator(), locals.amount);
+            }
+            else if (locals.tlCfg.fired == 1)
             {
                 // Gate has already fired — refund sender
                 qpi.transfer(qpi.invocator(), locals.amount);
             }
             else
             {
+                if (locals.tlCfg.lockMode == QUGATE_TIME_LOCK_RELATIVE_EPOCHS && locals.tlCfg.unlockEpoch == 0)
+                {
+                    locals.tlCfg.unlockEpoch = (uint32)qpi.epoch() + locals.tlCfg.delayEpochs;
+                    state.mut()._timeLockConfigs.set(locals.slotIdx, locals.tlCfg);
+                }
                 locals.gate.currentBalance += locals.amount;
                 state.mut()._gates.set(locals.slotIdx, locals.gate);
                 locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
@@ -3178,16 +3195,25 @@ public:
         }
         else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
         {
-            // TIME_LOCK mode: accumulate unless already fired
+            // TIME_LOCK mode: only accepts funds when configured; relative mode anchors unlock on first funding
             locals.gate = state.get()._gates.get(locals.slotIdx);
             locals.tlCfg = state.get()._timeLockConfigs.get(locals.slotIdx);
-            if (locals.tlCfg.fired == 1)
+            if (locals.tlCfg.active == 0 || locals.tlCfg.cancelled == 1)
+            {
+                qpi.transfer(qpi.invocator(), locals.amount);
+            }
+            else if (locals.tlCfg.fired == 1)
             {
                 // Gate has already fired — refund sender
                 qpi.transfer(qpi.invocator(), locals.amount);
             }
             else
             {
+                if (locals.tlCfg.lockMode == QUGATE_TIME_LOCK_RELATIVE_EPOCHS && locals.tlCfg.unlockEpoch == 0)
+                {
+                    locals.tlCfg.unlockEpoch = (uint32)qpi.epoch() + locals.tlCfg.delayEpochs;
+                    state.mut()._timeLockConfigs.set(locals.slotIdx, locals.tlCfg);
+                }
                 locals.gate.currentBalance += locals.amount;
                 state.mut()._gates.set(locals.slotIdx, locals.gate);
                 locals.logger._type = QUGATE_LOG_PAYMENT_FORWARDED;
@@ -3485,6 +3511,8 @@ public:
         if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
         {
             locals.tlZeroCfg.unlockEpoch = 0;
+            locals.tlZeroCfg.delayEpochs = 0;
+            locals.tlZeroCfg.lockMode = QUGATE_TIME_LOCK_ABSOLUTE_EPOCH;
             locals.tlZeroCfg.cancellable = 0;
             locals.tlZeroCfg.fired = 0;
             locals.tlZeroCfg.cancelled = 0;
@@ -4175,7 +4203,7 @@ public:
                     zeroAdminApproval.active = 0; zeroAdminApproval.validUntilEpoch = 0;
                     state.mut()._adminApprovalStates.set(locals.slotIdx, zeroAdminApproval);
                     QUGATE_TimeLockConfig zeroTl;
-                    zeroTl.unlockEpoch = 0; zeroTl.cancellable = 0; zeroTl.fired = 0; zeroTl.cancelled = 0; zeroTl.active = 0;
+                    zeroTl.unlockEpoch = 0; zeroTl.delayEpochs = 0; zeroTl.lockMode = QUGATE_TIME_LOCK_ABSOLUTE_EPOCH; zeroTl.cancellable = 0; zeroTl.fired = 0; zeroTl.cancelled = 0; zeroTl.active = 0;
                     state.mut()._timeLockConfigs.set(locals.slotIdx, zeroTl);
                 }
                 locals.gate.active = 0;
@@ -5304,16 +5332,45 @@ public:
         }
 
         // unlockEpoch must be in the future
-        if (input.unlockEpoch <= (uint32)qpi.epoch())
+        if (input.lockMode == QUGATE_TIME_LOCK_ABSOLUTE_EPOCH)
         {
-            output.status = QUGATE_TIME_LOCK_EPOCH_PAST;
+            if (input.unlockEpoch <= (uint32)qpi.epoch())
+            {
+                output.status = QUGATE_TIME_LOCK_EPOCH_PAST;
+                locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+        }
+        else if (input.lockMode == QUGATE_TIME_LOCK_RELATIVE_EPOCHS)
+        {
+            if (input.delayEpochs == 0)
+            {
+                output.status = QUGATE_INVALID_PARAMS;
+                locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+        }
+        else
+        {
+            output.status = QUGATE_INVALID_PARAMS;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
         }
 
         // Store config
-        locals.cfg.unlockEpoch = input.unlockEpoch;
+        if (input.lockMode == QUGATE_TIME_LOCK_ABSOLUTE_EPOCH)
+        {
+            locals.cfg.unlockEpoch = input.unlockEpoch;
+        }
+        else
+        {
+            locals.cfg.unlockEpoch = 0;
+        }
+        locals.cfg.delayEpochs = input.delayEpochs;
+        locals.cfg.lockMode = input.lockMode;
         locals.cfg.cancellable = input.cancellable;
         locals.cfg.fired = 0;
         locals.cfg.cancelled = 0;
@@ -5516,6 +5573,8 @@ public:
     {
         output.status = QUGATE_INVALID_GATE_ID;
         output.unlockEpoch = 0;
+        output.delayEpochs = 0;
+        output.lockMode = QUGATE_TIME_LOCK_ABSOLUTE_EPOCH;
         output.cancellable = 0;
         output.fired = 0;
         output.cancelled = 0;
@@ -5545,13 +5604,15 @@ public:
         locals.cfg = state.get()._timeLockConfigs.get(locals.slotIdx);
         output.status = QUGATE_SUCCESS;
         output.unlockEpoch = locals.cfg.unlockEpoch;
+        output.delayEpochs = locals.cfg.delayEpochs;
+        output.lockMode = locals.cfg.lockMode;
         output.cancellable = locals.cfg.cancellable;
         output.fired = locals.cfg.fired;
         output.cancelled = locals.cfg.cancelled;
         output.active = locals.cfg.active;
         output.currentBalance = (sint64)locals.gate.currentBalance;
         output.currentEpoch = (uint32)qpi.epoch();
-        if (locals.cfg.fired == 1 || (uint32)qpi.epoch() >= locals.cfg.unlockEpoch)
+        if (locals.cfg.fired == 1 || locals.cfg.unlockEpoch == 0 || (uint32)qpi.epoch() >= locals.cfg.unlockEpoch)
         {
             output.epochsRemaining = 0;
         }
@@ -6280,7 +6341,7 @@ public:
                     else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
                     {
                         QUGATE_TimeLockConfig zeroCfg;
-                        zeroCfg.unlockEpoch = 0; zeroCfg.cancellable = 0; zeroCfg.fired = 0; zeroCfg.cancelled = 0; zeroCfg.active = 0;
+                        zeroCfg.unlockEpoch = 0; zeroCfg.delayEpochs = 0; zeroCfg.lockMode = QUGATE_TIME_LOCK_ABSOLUTE_EPOCH; zeroCfg.cancellable = 0; zeroCfg.fired = 0; zeroCfg.cancelled = 0; zeroCfg.active = 0;
                         state.mut()._timeLockConfigs.set(locals.i, zeroCfg);
                     }
 
@@ -6564,6 +6625,12 @@ public:
 
             // Only process if active and not yet fired or cancelled
             if (locals.tlCfg.active == 0 || locals.tlCfg.fired == 1 || locals.tlCfg.cancelled == 1)
+            {
+                continue;
+            }
+
+            // Relative mode waits for first funding to anchor unlockEpoch.
+            if (locals.tlCfg.unlockEpoch == 0)
             {
                 continue;
             }

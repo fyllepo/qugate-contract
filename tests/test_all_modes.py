@@ -696,24 +696,25 @@ tl_gate = query_gate(tl_id)
 check("TIME_LOCK gate created", tl_gate['active'] == 1 and tl_gate['mode'] == MODE_TIME_LOCK,
       f"id={tl_id}, mode={tl_gate['mode']}")
 
-# configureTimeLock: unlockEpoch = current + 10, cancellable = 1
-cfg_tl = struct.pack('<IIB', tl_id & 0xFFFFFFFF, 210, 1)  # gateId(4), unlockEpoch(4), cancellable(1)
+# configureTimeLock: absolute lock, unlockEpoch = current + 10, cancellable = 1
+cfg_tl = struct.pack('<QII2B', tl_id, 210, 0, 0, 1)  # gateId(8), unlockEpoch(4), delayEpochs(4), lockMode(1), cancellable(1)
 send_tx(ADDR_A_KEY, PROC_CONFIGURE_TIME_LOCK, 0, cfg_tl)
 wait()
 
 # Query TIME_LOCK state
 tl_state_resp = requests.post(f"{RPC}/live/v1/querySmartContract", json={
-    'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_TIME_LOCK_STATE, 'inputSize': 4,
-    'requestData': base64.b64encode(struct.pack('<I', tl_id & 0xFFFFFFFF)).decode()
+    'contractIndex': CONTRACT_INDEX, 'inputType': FUNC_GET_TIME_LOCK_STATE, 'inputSize': 8,
+    'requestData': base64.b64encode(struct.pack('<Q', tl_id)).decode()
 }, timeout=5).json()
 tl_b = base64.b64decode(tl_state_resp['responseData'])
 tl_status = struct.unpack_from('<q', tl_b, 0)[0]
 tl_unlock = struct.unpack_from('<I', tl_b, 8)[0]
-tl_cancellable = tl_b[12]
-tl_active = tl_b[15]
+tl_lock_mode = tl_b[16]
+tl_cancellable = tl_b[17]
+tl_active = tl_b[20]
 check("configureTimeLock stored",
-      tl_status == 0 and tl_unlock == 210 and tl_cancellable == 1,
-      f"status={tl_status}, unlock={tl_unlock}, cancellable={tl_cancellable}")
+      tl_status == 0 and tl_unlock == 210 and tl_lock_mode == 0 and tl_cancellable == 1,
+      f"status={tl_status}, unlock={tl_unlock}, lockMode={tl_lock_mode}, cancellable={tl_cancellable}")
 check("TIME_LOCK active", tl_active == 1, f"active={tl_active}")
 
 # Fund the TIME_LOCK gate
