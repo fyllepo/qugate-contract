@@ -399,7 +399,7 @@ A TIME_LOCK gate holds incoming QU and releases the full balance to a designated
 | Absolute | `QUGATE_TIME_LOCK_ABSOLUTE_EPOCH` | 0 | Unlock at a specific epoch number (`unlockEpoch` must be > current epoch) |
 | Relative | `QUGATE_TIME_LOCK_RELATIVE_EPOCHS` | 1 | Unlock `delayEpochs` epochs after configuration (`delayEpochs` must be > 0) |
 
-In relative mode, the contract computes `unlockEpoch = currentEpoch + delayEpochs` at configuration time. After that, behaviour is identical to absolute mode.
+In relative mode, if the gate already holds funds at configuration time, the unlock epoch is anchored immediately: `unlockEpoch = currentEpoch + delayEpochs`. If the gate has no balance yet, `unlockEpoch` is set to 0 and anchored when funds first arrive. After anchoring, behaviour is identical to absolute mode.
 
 ### Parameters
 | Field | Description |
@@ -455,8 +455,13 @@ configureTimeLock(
 ```
 sendToGate(gateId: 1234, amount: 500000 QU)
 // Funds held in gate.currentBalance
+// Since gate had no balance at configure time, unlockEpoch is anchored now:
+//   unlockEpoch = currentEpoch + 8 (e.g. epoch 218 if current is 210)
 // getTimeLockState shows: epochsRemaining = 8
 ```
+
+> **Note:** If the gate already held funds when `configureTimeLock` was called, the
+> unlock epoch would have been anchored at configuration time instead of first funding.
 
 **Step 4: Wait (or cancel)**
 ```
