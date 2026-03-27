@@ -2382,17 +2382,37 @@ public:
             output.forwarded = locals.amountAfterFee;
         }
         else if (locals.gate.mode == QUGATE_MODE_HEARTBEAT
-                 || locals.gate.mode == QUGATE_MODE_MULTISIG
-                 || locals.gate.mode == QUGATE_MODE_TIME_LOCK)
+                 || locals.gate.mode == QUGATE_MODE_MULTISIG)
         {
             // Accumulate-on-arrival modes: funds held in currentBalance until mode-specific release
             // HEARTBEAT: released by epoch trigger after inactivity threshold
             // MULTISIG: released when guardians reach quorum
-            // TIME_LOCK: released at unlockEpoch
             locals.gate = state.get()._gates.get(input.slotIdx);
             locals.gate.currentBalance += locals.amountAfterFee;
             state.mut()._gates.set(input.slotIdx, locals.gate);
             output.forwarded = locals.amountAfterFee;
+        }
+        else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
+        {
+            // TIME_LOCK in chain: align with direct send semantics
+            locals.gate = state.get()._gates.get(input.slotIdx);
+            locals.tlCfg = state.get()._timeLockConfigs.get(input.slotIdx);
+            if (locals.tlCfg.active == 0 || locals.tlCfg.cancelled == 1 || locals.tlCfg.fired == 1)
+            {
+                qpi.transfer(qpi.invocator(), locals.amountAfterFee);
+                output.forwarded = 0;
+            }
+            else
+            {
+                if (locals.tlCfg.lockMode == QUGATE_TIME_LOCK_RELATIVE_EPOCHS && locals.tlCfg.unlockEpoch == 0)
+                {
+                    locals.tlCfg.unlockEpoch = (uint32)qpi.epoch() + locals.tlCfg.delayEpochs;
+                    state.mut()._timeLockConfigs.set(input.slotIdx, locals.tlCfg);
+                }
+                locals.gate.currentBalance += locals.amountAfterFee;
+                state.mut()._gates.set(input.slotIdx, locals.gate);
+                output.forwarded = locals.amountAfterFee;
+            }
         }
         // NOTE: CONDITIONAL mode as chain target requires SELF in allowedSenders — invocator here is the contract, not an external sender.
 
