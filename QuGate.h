@@ -969,6 +969,7 @@ public:
     struct routeToGate_locals
     {
         GateConfig gate;
+        QUGATE_TimeLockConfig tlCfg;
         sint64 amountAfterFee;
         QuGateLogger logger;
         processSplit_input splitIn;
