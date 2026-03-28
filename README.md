@@ -311,7 +311,7 @@ Send 500,000 QU to the gate address
 
 Any gate can be placed under MULTISIG governance by assigning an **admin gate**. When an admin gate is set, configuration changes (closeGate, updateGate, configureHeartbeat, configureMultisig, configureTimeLock, cancelTimeLock, setChain) require either the owner's signature **or** approval from the admin gate's MULTISIG quorum.
 
-Governance-only admin multisigs are still subject to the inactivity model. To keep them alive during quiet periods, fund their `maintenanceReserve` via `fundGate(..., reserveTarget = 2)`. If an admin gate expires or becomes unusable, the governed gate owner can still clear governance and recover control.
+Governance-only admin multisigs are still subject to the inactivity model. To keep them alive during quiet periods, fund their `idleReserve` via `fundGate(..., reserveTarget = 2)`. If an admin gate expires or becomes unusable, the governed gate owner can still clear governance and recover control.
 
 The `heartbeat()` procedure is intentionally excluded — it is a keep-alive signal that should always remain owner-only.
 
@@ -499,7 +499,7 @@ Each chain hop burns a `QUGATE_CHAIN_HOP_FEE` (1,000 QU). If the forwarded amoun
 
 Fund a gate's chain reserve via `fundGate` with `reserveTarget = 1`. The chain reserve is refunded to the owner on gate close or expiry.
 
-QuGate also supports a dedicated `maintenanceReserve` (`reserveTarget = 2`). Idle-gate upkeep is deducted from this reserve, not from the gate's operational `currentBalance`. This avoids punishing pass-through gates and governance-only admin multisigs that may not naturally hold funds.
+QuGate also supports a dedicated `idleReserve` (`reserveTarget = 2`). Idle-gate upkeep is deducted from this reserve, not from the gate's operational `currentBalance`. This avoids punishing pass-through gates and governance-only admin multisigs that may not naturally hold funds.
 
 ### Setting Up Chains
 
@@ -1195,7 +1195,7 @@ Default inactivity expiry: 50 epochs (approximately 1 year at current epoch leng
 
 ### Maintenance delinquency
 
-Idle gates are expected to maintain a funded `maintenanceReserve`. If a gate has no qualifying activity for `4` epochs and is not in an active hold state, the contract charges `25,000 QU` from that reserve. If the reserve cannot cover the fee:
+Idle gates are expected to maintain a funded `idleReserve`. If a gate has no qualifying activity for `4` epochs and is not in an active hold state, the contract charges `25,000 QU` from that reserve. If the reserve cannot cover the fee:
 
 - the gate is marked delinquent
 - a `4` epoch grace window begins
@@ -1217,7 +1217,7 @@ QuGate uses a hybrid fee model:
 - **Creation fees**: burned on successful gate creation
 - **Dust amounts**: burned when sends are below minimum
 - **Chain hop fees**: burned on each routed hop
-- **Inactivity maintenance**: charged from `maintenanceReserve` and split:
+- **Inactivity maintenance**: charged from `idleReserve` and split:
   - `80%` burned
   - `20%` routed through the standard dividend/shareholder distribution path
 
@@ -1274,7 +1274,7 @@ Without slot reuse, an attacker could create and close all gate slots to permane
 
 Creation, dust, and chain-hop fees still follow the original burn-first philosophy. The maintenance model adds reserve-backed upkeep so long-lived infrastructure pays its way without silently draining operational balances.
 
-Using a dedicated `maintenanceReserve` keeps the behavior predictable:
+Using a dedicated `idleReserve` keeps the behavior predictable:
 
 - pass-through gates do not lose working funds unexpectedly
 - governance-only admin multisigs can be explicitly provisioned
