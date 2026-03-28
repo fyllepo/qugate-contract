@@ -20,7 +20,7 @@
 //
 // Anti-Spam / Lifecycle:
 //   - Escalating creation fee: cost increases as capacity fills
-//   - Quarterly maintenance fee: active gates pay recurring upkeep
+//   - Inactivity reserve fee: idle gates consume reserve-backed upkeep
 //   - Gate expiry: inactive or delinquent gates auto-expire after grace conditions
 //   - Dust burn: sends below minimum are burned
 
@@ -60,7 +60,7 @@ constexpr uint64 QUGATE_MAX_RATIO = 10000;       // Max ratio per recipient (pre
 constexpr uint64 QUGATE_DEFAULT_CREATION_FEE = 100000;
 constexpr uint64 QUGATE_DEFAULT_MIN_SEND = 1000;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_FEE = 25000;
-constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS = 13;
+constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS = 4;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS = 4;
 constexpr uint64 QUGATE_MAINTENANCE_BURN_BPS = 8000;
 constexpr uint64 QUGATE_MAINTENANCE_DIVIDEND_BPS = 2000;
@@ -180,9 +180,9 @@ constexpr uint32 QUGATE_LOG_TIME_LOCK_CONFIGURED = 25; // time lock created
 constexpr uint32 QUGATE_LOG_ADMIN_GATE_SET       = 26; // admin gate assigned to a gate
 constexpr uint32 QUGATE_LOG_ADMIN_GATE_CLEARED   = 27; // admin gate removed from a gate
 constexpr uint32 QUGATE_LOG_ADMIN_APPROVAL_USED  = 28; // admin gate approval consumed for a config change
-constexpr uint32 QUGATE_LOG_MAINTENANCE_CHARGED  = 29; // recurring maintenance fee collected
-constexpr uint32 QUGATE_LOG_MAINTENANCE_DELINQUENT = 30; // gate could not pay maintenance
-constexpr uint32 QUGATE_LOG_MAINTENANCE_CURED    = 31; // delinquent gate paid maintenance later
+constexpr uint32 QUGATE_LOG_MAINTENANCE_CHARGED  = 29; // inactivity maintenance fee collected
+constexpr uint32 QUGATE_LOG_MAINTENANCE_DELINQUENT = 30; // idle gate could not pay inactivity maintenance
+constexpr uint32 QUGATE_LOG_MAINTENANCE_CURED    = 31; // delinquent gate became active again or paid maintenance later
 
 // Failure log types use high range
 constexpr uint32 QUGATE_LOG_FAIL_INVALID_GATE = 100;
@@ -316,8 +316,8 @@ public:
         sint64 chainNextGateId;   // Versioned gate ID of next gate in chain; -1 if this is a terminal gate
         sint64 chainReserve;      // QU reserve to pay hop fees when forwarded amount is insufficient
         uint8  chainDepth;        // This gate's position in its chain (0 = root/trigger, increments toward leaf)
-        sint64 maintenanceReserve; // QU reserve dedicated to recurring maintenance charges
-        uint16 nextMaintenanceEpoch; // Gate-specific due epoch for the next maintenance charge
+        sint64 maintenanceReserve; // QU reserve dedicated to idle-period maintenance charges
+        uint16 nextMaintenanceEpoch; // Gate-specific due epoch for the next inactivity charge
 
         // Admin gate fields — governance via MULTISIG quorum
         sint64 adminGateId;       // -1 = no admin gate (owner-only). Set to a MULTISIG gate ID for quorum-controlled config.
@@ -799,8 +799,8 @@ public:
 
         // Shareholder-adjustable parameters
         uint64 _creationFee;        // base creation fee
-        uint64 _maintenanceFee;     // quarterly maintenance charge
-        uint64 _maintenanceIntervalEpochs;
+        uint64 _maintenanceFee;     // inactivity maintenance charge
+        uint64 _maintenanceIntervalEpochs; // idle-window / recurring inactivity cadence
         uint64 _maintenanceGraceEpochs;
         uint64 _minSendAmount;
         uint64 _expiryEpochs;      // epochs of inactivity before auto-close
@@ -1179,6 +1179,8 @@ public:
         uint64 maintenanceDistributed;
         uint64 maintenanceAmountPerShare;
         uint8  maintenanceChargedThisEpoch;
+        uint8  recentlyActive;
+        uint8  activeHold;
         // Heartbeat processing
         QUGATE_HeartbeatConfig inhCfg;
         sint64 inhBalance;
@@ -2206,6 +2208,14 @@ public:
             }
             state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
 
+            locals.gate = state.get()._gates.get(input.slotIdx);
+            locals.gate.lastActivityEpoch = qpi.epoch();
+            if (state.get()._maintenanceIntervalEpochs > 0)
+            {
+                locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+            }
+            state.mut()._gates.set(input.slotIdx, locals.gate);
+
             locals.logger._contractIndex = CONTRACT_INDEX;
             locals.logger._type = QUGATE_LOG_MULTISIG_VOTE;
             locals.logger.gateId = input.gateId;
@@ -2214,7 +2224,6 @@ public:
             LOG_INFO(locals.logger);
 
             // Check threshold
-            locals.gate = state.get()._gates.get(input.slotIdx);
             sint64 releaseAmount = input.amount;
             if (locals.gate.recipientCount == 0
                 && locals.gate.chainNextGateId == -1
@@ -2366,6 +2375,10 @@ public:
         // Update totalReceived and activity for the chained gate
         locals.gate.totalReceived += locals.amountAfterFee;
         locals.gate.lastActivityEpoch = qpi.epoch();
+        if (state.get()._maintenanceIntervalEpochs > 0)
+        {
+            locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+        }
         state.mut()._gates.set(input.slotIdx, locals.gate);
 
         // Route through this gate's mode
@@ -2589,6 +2602,10 @@ public:
         // Update activity and track received
         locals.gate.lastActivityEpoch = qpi.epoch();
         locals.gate.totalReceived += locals.amount;
+        if (state.get()._maintenanceIntervalEpochs > 0)
+        {
+            locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+        }
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
         // Dispatch to mode-specific handler
@@ -3052,6 +3069,10 @@ public:
         // Update activity and track received
         locals.gate.lastActivityEpoch = qpi.epoch();
         locals.gate.totalReceived += locals.amount;
+        if (state.get()._maintenanceIntervalEpochs > 0)
+        {
+            locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+        }
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
         // Dispatch to mode-specific handler
@@ -3881,6 +3902,10 @@ public:
 
         // Update last activity epoch
         locals.gate.lastActivityEpoch = qpi.epoch();
+        if (state.get()._maintenanceIntervalEpochs > 0)
+        {
+            locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+        }
 
         // Update configuration (mode stays the same)
         locals.gate.recipientCount = input.recipientCount;
@@ -4962,6 +4987,10 @@ public:
 
         // Update gate activity
         locals.gate.lastActivityEpoch = qpi.epoch();
+        if (state.get()._maintenanceIntervalEpochs > 0)
+        {
+            locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+        }
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
         if (locals.adminApprovalUsed == 1)
@@ -5069,6 +5098,10 @@ public:
 
         // Update gate activity
         locals.gate.lastActivityEpoch = qpi.epoch();
+        if (state.get()._maintenanceIntervalEpochs > 0)
+        {
+            locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+        }
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
         output.epochRecorded = locals.cfg.lastHeartbeatEpoch;
@@ -5318,6 +5351,10 @@ public:
 
         // Update gate activity
         locals.gate.lastActivityEpoch = qpi.epoch();
+        if (state.get()._maintenanceIntervalEpochs > 0)
+        {
+            locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+        }
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
         if (locals.adminApprovalUsed == 1)
@@ -5533,6 +5570,10 @@ public:
 
         // Update gate activity
         locals.gate.lastActivityEpoch = qpi.epoch();
+        if (state.get()._maintenanceIntervalEpochs > 0)
+        {
+            locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+        }
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
         if (locals.adminApprovalUsed == 1)
@@ -6432,7 +6473,7 @@ public:
 
     END_EPOCH_WITH_LOCALS()
     {
-        // Quarterly maintenance charging and delinquency tracking
+        // Inactivity maintenance charging and delinquency tracking
         for (locals.i = 0; locals.i < state.get()._gateCount; locals.i++)
         {
             locals.gate = state.get()._gates.get(locals.i);
@@ -6473,49 +6514,76 @@ public:
             }
 
             locals.delinquentEpoch = state.get()._maintenanceDelinquentEpochs.get(locals.i);
-            locals.maintenanceChargedThisEpoch = 0;
+            locals.recentlyActive = 0;
+            locals.activeHold = 0;
+            if (state.get()._maintenanceIntervalEpochs > 0
+                && qpi.epoch() - locals.gate.lastActivityEpoch < state.get()._maintenanceIntervalEpochs)
+            {
+                locals.recentlyActive = 1;
+            }
+
+            if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
+            {
+                if (locals.inhCfg.active == 1 && locals.inhCfg.triggered == 0)
+                {
+                    locals.activeHold = 1;
+                }
+            }
+            else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
+            {
+                if (locals.tlCfg.active == 1
+                    && locals.tlCfg.fired == 0
+                    && locals.tlCfg.cancelled == 0
+                    && locals.gate.currentBalance > 0)
+                {
+                    locals.activeHold = 1;
+                }
+            }
+            else if (locals.gate.mode == QUGATE_MODE_THRESHOLD)
+            {
+                if (locals.gate.currentBalance > 0)
+                {
+                    locals.activeHold = 1;
+                }
+            }
+            else if (locals.gate.mode == QUGATE_MODE_MULTISIG)
+            {
+                if (locals.gate.currentBalance > 0 || locals.msigCfg.proposalActive == 1)
+                {
+                    locals.activeHold = 1;
+                }
+            }
+            else if (locals.gate.mode == QUGATE_MODE_ORACLE)
+            {
+                if (locals.gate.currentBalance > 0)
+                {
+                    locals.activeHold = 1;
+                }
+            }
+
+            if (locals.recentlyActive == 1 || locals.activeHold == 1)
+            {
+                if (state.get()._maintenanceIntervalEpochs > 0)
+                {
+                    locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+                    state.mut()._gates.set(locals.i, locals.gate);
+                }
+                if (locals.delinquentEpoch > 0)
+                {
+                    state.mut()._maintenanceDelinquentEpochs.set(locals.i, 0);
+                }
+                continue;
+            }
 
             if (locals.gate.nextMaintenanceEpoch == 0 && state.get()._maintenanceIntervalEpochs > 0)
             {
                 locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
                 state.mut()._gates.set(locals.i, locals.gate);
+                continue;
             }
 
-            // Allow a delinquent gate to cure as soon as it can pay again.
-            if (locals.delinquentEpoch > 0
-                && locals.gate.maintenanceReserve >= (sint64)state.get()._maintenanceFee)
-            {
-                locals.maintenanceBurnAmount = (state.get()._maintenanceFee * QUGATE_MAINTENANCE_BURN_BPS) / 10000ULL;
-                locals.maintenanceDividendAmount = state.get()._maintenanceFee - locals.maintenanceBurnAmount;
-
-                locals.gate.maintenanceReserve -= state.get()._maintenanceFee;
-                if (state.get()._maintenanceIntervalEpochs > 0)
-                {
-                    locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
-                }
-                state.mut()._gates.set(locals.i, locals.gate);
-                state.mut()._maintenanceDelinquentEpochs.set(locals.i, 0);
-                state.mut()._totalMaintenanceCharged += state.get()._maintenanceFee;
-                locals.maintenanceChargedThisEpoch = 1;
-
-                qpi.burn(locals.maintenanceBurnAmount);
-                state.mut()._totalBurned += locals.maintenanceBurnAmount;
-                state.mut()._totalMaintenanceBurned += locals.maintenanceBurnAmount;
-
-                state.mut()._earnedMaintenanceDividends += locals.maintenanceDividendAmount;
-                state.mut()._totalMaintenanceDividends += locals.maintenanceDividendAmount;
-
-                locals.logger._contractIndex = CONTRACT_INDEX;
-                locals.logger._type = QUGATE_LOG_MAINTENANCE_CURED;
-                locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
-                locals.logger.sender = locals.gate.owner;
-                locals.logger.amount = state.get()._maintenanceFee;
-                LOG_INFO(locals.logger);
-            }
-
-            // Charge maintenance when this gate reaches its own due epoch.
-            if (locals.maintenanceChargedThisEpoch == 0
-                && state.get()._maintenanceIntervalEpochs > 0
+            // Charge inactivity maintenance when an idle gate reaches its own due epoch.
+            if (state.get()._maintenanceIntervalEpochs > 0
                 && qpi.epoch() > 0
                 && locals.gate.nextMaintenanceEpoch > 0
                 && qpi.epoch() >= locals.gate.nextMaintenanceEpoch)
@@ -6539,7 +6607,7 @@ public:
                     state.mut()._totalMaintenanceDividends += locals.maintenanceDividendAmount;
 
                     locals.logger._contractIndex = CONTRACT_INDEX;
-                    locals.logger._type = QUGATE_LOG_MAINTENANCE_CHARGED;
+                    locals.logger._type = (locals.delinquentEpoch > 0 ? QUGATE_LOG_MAINTENANCE_CURED : QUGATE_LOG_MAINTENANCE_CHARGED);
                     locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
                     locals.logger.sender = locals.gate.owner;
                     locals.logger.amount = state.get()._maintenanceFee;
