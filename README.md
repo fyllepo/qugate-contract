@@ -1,6 +1,6 @@
-# QuGate — A Deflationary Network Primitive for Qubic
+# QuGate — A Payment Automation Primitive for Qubic
 
-QuGate is a **network primitive** — shared, permissionless payment routing infrastructure for the Qubic network. One shared contract that the entire ecosystem can use, instead of every project building its own payment logic. All fees burned. Purely deflationary.
+QuGate is a **network primitive** — shared, permissionless payment routing infrastructure for the Qubic network. One shared contract that the entire ecosystem can use, instead of every project building its own payment logic. Creation, dust, and chain-hop fees are burned. Active gates also maintain a quarterly upkeep reserve, with upkeep split between burn and dividends.
 
 **Status**: Local testnet verified. Preparing for mainnet proposal.
 **Author**: fyllepo (Discord: phileepphilop)
@@ -48,6 +48,9 @@ Gate-to-gate forwarding can happen in two ways:
 | `QUGATE_MAX_RECIPIENTS` | 8 | Max recipients per gate |
 | `QUGATE_MAX_RATIO` | 10,000 | Max ratio value per recipient |
 | `QUGATE_DEFAULT_CREATION_FEE` | 100,000 QU | Initial base creation fee |
+| `QUGATE_DEFAULT_MAINTENANCE_FEE` | 25,000 QU | Quarterly maintenance fee per active gate |
+| `QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS` | 13 | Epoch cadence for maintenance billing |
+| `QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS` | 4 | Grace epochs before delinquent gates expire |
 | `QUGATE_DEFAULT_MIN_SEND` | 1,000 QU | Initial minimum send amount |
 | `QUGATE_FEE_ESCALATION_STEP` | 1,024 | Active gates per fee multiplier step |
 | `QUGATE_DEFAULT_EXPIRY_EPOCHS` | 50 | Epochs of inactivity before auto-close |
@@ -308,6 +311,8 @@ Send 500,000 QU to the gate address
 
 Any gate can be placed under MULTISIG governance by assigning an **admin gate**. When an admin gate is set, configuration changes (closeGate, updateGate, configureHeartbeat, configureMultisig, configureTimeLock, cancelTimeLock, setChain) require either the owner's signature **or** approval from the admin gate's MULTISIG quorum.
 
+Governance-only admin multisigs are still subject to the maintenance model. To keep them alive long-term, fund their `maintenanceReserve` via `fundGate(..., reserveTarget = 2)`. If an admin gate expires or becomes unusable, the governed gate owner can still clear governance and recover control.
+
 The `heartbeat()` procedure is intentionally excluded — it is a keep-alive signal that should always remain owner-only.
 
 ### How it works
@@ -493,6 +498,8 @@ Gates can be linked into chains (max 3 hops) for multi-stage payment pipelines. 
 Each chain hop burns a `QUGATE_CHAIN_HOP_FEE` (1,000 QU). If the forwarded amount exceeds the hop fee, the fee is deducted from the amount. If the forwarded amount is too small to cover the hop fee, the gate's `chainReserve` pays instead. If neither can cover the fee, the funds are stranded in `currentBalance`.
 
 Fund a gate's chain reserve via `fundGate` with `reserveTarget = 1`. The chain reserve is refunded to the owner on gate close or expiry.
+
+QuGate also supports a dedicated `maintenanceReserve` (`reserveTarget = 2`). Quarterly upkeep is deducted from this reserve, not from the gate's operational `currentBalance`. This avoids punishing pass-through gates and governance-only admin multisigs that may not naturally hold funds.
 
 ### Setting Up Chains
 
@@ -1161,25 +1168,41 @@ Use `getFees()` to query the current escalated fee before creating a gate.
 
 ### Gate Expiry
 
-Gates with no activity for `_expiryEpochs` epochs are expired via two complementary mechanisms:
+Gates can expire for two reasons:
 
-1. **Lazy expiry on interaction** (primary): When any procedure (`sendToGate`, `sendToGateVerified`, `updateGate`, `closeGate`, `fundGate`, `setChain`) touches a gate, it checks whether the gate has exceeded its inactivity window. If so, the gate is expired inline — balances (current, oracle reserve, chain reserve) are refunded to the owner, the slot is freed, and the caller is refunded. The `getGate` function also reports expired gates as `active=0` without mutating state.
+1. inactivity for `_expiryEpochs` epochs
+2. unpaid maintenance after the delinquency grace window
+
+The contract still uses two complementary mechanisms:
+
+1. **Lazy expiry on interaction** (primary): When any procedure (`sendToGate`, `sendToGateVerified`, `updateGate`, `closeGate`, `fundGate`, `setChain`) touches a gate, it checks whether the gate has exceeded its inactivity window. If so, the gate is expired inline — balances (current, oracle reserve, chain reserve, maintenance reserve) are refunded to the owner, the slot is freed, and the caller is refunded. The `getGate` function also reports expired gates as `active=0` without mutating state.
 
 2. **END_EPOCH sweep** (safety net): The `END_EPOCH` handler still scans all gates each epoch. This catches gates that nobody interacts with. At scale, most expiries happen lazily, reducing `END_EPOCH` processing load.
 
-The expiry check uses:
+The inactivity expiry check uses:
 
 ```
 if (epoch() - lastActivityEpoch >= expiryEpochs)  →  expire
 ```
 
 Expired gates:
-- Have any held balance (current, oracle reserve, chain reserve) refunded to the owner
+- Have any held balance (current, oracle reserve, chain reserve, maintenance reserve) refunded to the owner
 - Are marked inactive
 - Have their slot pushed onto the free-list
 - Have their generation counter incremented (invalidates old gate IDs)
 
-Default expiry: 50 epochs (approximately 1 year at current epoch length). Set to 0 to disable expiry entirely. Shareholder-adjustable.
+Default inactivity expiry: 50 epochs (approximately 1 year at current epoch length). Set to 0 to disable inactivity expiry entirely. Shareholder-adjustable.
+
+### Maintenance delinquency
+
+Active gates are expected to maintain a funded `maintenanceReserve`. Every `13` epochs, the contract charges `25,000 QU` from that reserve. If the reserve cannot cover the fee:
+
+- the gate is marked delinquent
+- a `4` epoch grace window begins
+- if the reserve is funded before grace ends, the gate cures and continues normally
+- if not, the gate expires and reserves/balances are refunded to the owner
+
+This makes maintenance predictable and reserve-backed instead of silently draining operational balances.
 
 ### Dust Burn
 
@@ -1189,14 +1212,23 @@ Sends below `_minSendAmount` (default: 1,000 QU) are burned via `qpi.burn()` and
 
 ## Fee Economics
 
-QuGate is purely deflationary. All fees are burned via `qpi.burn()`:
+QuGate uses a hybrid fee model:
 
-- **Creation fees**: Burned on successful gate creation
-- **Dust amounts**: Burned when sends are below minimum
+- **Creation fees**: burned on successful gate creation
+- **Dust amounts**: burned when sends are below minimum
+- **Chain hop fees**: burned on each routed hop
+- **Quarterly maintenance**: charged from `maintenanceReserve` and split:
+  - `80%` burned
+  - `20%` routed through the standard dividend/shareholder distribution path
 
-No QU accumulates in the contract balance. No one profits from fees. The burned QU is permanently removed from circulation.
+The contract tracks cumulative:
 
-The `totalBurned` state variable tracks cumulative QU burned and is queryable via `getGateCount()`.
+- burned QU
+- maintenance charged
+- maintenance burned
+- maintenance dividends earned and distributed
+
+These values are queryable via `getGateCount()`.
 
 ---
 
@@ -1238,9 +1270,16 @@ A gate's mode is set at creation and cannot be changed via `updateGate`. This pr
 
 Without slot reuse, an attacker could create and close all gate slots to permanently exhaust capacity. The free-list ensures closed gate slots are recycled. Combined with escalating fees, this makes the contract resilient to slot exhaustion attacks.
 
-### Why burn, not revenue?
+### Why maintenance reserve plus dividends?
 
-Accumulating fees in the contract would create a honeypot and complicate governance (who gets the revenue?). Burning is simpler, more secure, and benefits all QU holders equally through deflation.
+Creation, dust, and chain-hop fees still follow the original burn-first philosophy. The maintenance model adds reserve-backed upkeep so long-lived infrastructure pays its way without silently draining operational balances.
+
+Using a dedicated `maintenanceReserve` keeps the behavior predictable:
+
+- pass-through gates do not lose working funds unexpectedly
+- governance-only admin multisigs can be explicitly provisioned
+- delinquency is visible and recoverable
+- expiry remains a cleanup backstop rather than the only lifecycle pressure
 
 ### Why tick entropy for RANDOM?
 
@@ -1250,9 +1289,9 @@ Accumulating fees in the contract would create a honeypot and complicate governa
 
 ## Security Model
 
-### Deflationary Design
+### Burn-First Design
 
-All fees (creation fees, dust burns, chain hop fees) are destroyed via `qpi.burn()`. No QU accumulates in the contract. No rent-seeking, no honeypot.
+Creation fees, dust burns, and chain hop fees are destroyed via `qpi.burn()`. Maintenance is reserve-backed and uses an `80% burn / 20% dividends` split, keeping the contract mostly deflationary while supporting sustainable long-lived infrastructure.
 
 ### No Rug-Pull
 

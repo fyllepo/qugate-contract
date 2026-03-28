@@ -18,11 +18,11 @@
 //   TIME_LOCK   - Funds locked until a target epoch, then released
 //                 Unlock configured via configureTimeLock (recipientCount=0 at creation)
 //
-// Anti-Spam:
+// Anti-Spam / Lifecycle:
 //   - Escalating creation fee: cost increases as capacity fills
-//   - Gate expiry: inactive gates auto-close after N epochs
+//   - Quarterly maintenance fee: active gates pay recurring upkeep
+//   - Gate expiry: inactive or delinquent gates auto-expire after grace conditions
 //   - Dust burn: sends below minimum are burned
-//   - All fees are deflationary (burned, not accumulated)
 
 //
 // Architecture:
@@ -40,8 +40,8 @@
 //   funds, the forwarded amount is passed to the next gate in the chain (routeToGate). Each hop
 //   burns QUGATE_CHAIN_HOP_FEE QU as an anti-spam measure.
 //
-//   All fees (creation, dust, chain hops) are burned via qpi.burn(). No QU accumulates in the
-//   contract. The contract is purely deflationary.
+//   Creation, dust, and chain-hop fees are burned via qpi.burn(). Maintenance fees are split
+//   between burn and dividend/distribution paths during END_EPOCH.
 //
 
 using namespace QPI;
@@ -59,6 +59,11 @@ constexpr uint64 QUGATE_MAX_RATIO = 10000;       // Max ratio per recipient (pre
 // Default fees — initial values, changeable via shareholder vote
 constexpr uint64 QUGATE_DEFAULT_CREATION_FEE = 100000;
 constexpr uint64 QUGATE_DEFAULT_MIN_SEND = 1000;
+constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_FEE = 25000;
+constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS = 13;
+constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS = 4;
+constexpr uint64 QUGATE_MAINTENANCE_BURN_BPS = 8000;
+constexpr uint64 QUGATE_MAINTENANCE_DIVIDEND_BPS = 2000;
 
 // Escalating fee: fee = baseFee * (1 + QPI::div(activeGates, FEE_ESCALATION_STEP))
 constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
@@ -175,6 +180,9 @@ constexpr uint32 QUGATE_LOG_TIME_LOCK_CONFIGURED = 25; // time lock created
 constexpr uint32 QUGATE_LOG_ADMIN_GATE_SET       = 26; // admin gate assigned to a gate
 constexpr uint32 QUGATE_LOG_ADMIN_GATE_CLEARED   = 27; // admin gate removed from a gate
 constexpr uint32 QUGATE_LOG_ADMIN_APPROVAL_USED  = 28; // admin gate approval consumed for a config change
+constexpr uint32 QUGATE_LOG_MAINTENANCE_CHARGED  = 29; // recurring maintenance fee collected
+constexpr uint32 QUGATE_LOG_MAINTENANCE_DELINQUENT = 30; // gate could not pay maintenance
+constexpr uint32 QUGATE_LOG_MAINTENANCE_CURED    = 31; // delinquent gate paid maintenance later
 
 // Failure log types use high range
 constexpr uint32 QUGATE_LOG_FAIL_INVALID_GATE = 100;
@@ -308,6 +316,8 @@ public:
         sint64 chainNextGateId;   // Versioned gate ID of next gate in chain; -1 if this is a terminal gate
         sint64 chainReserve;      // QU reserve to pay hop fees when forwarded amount is insufficient
         uint8  chainDepth;        // This gate's position in its chain (0 = root/trigger, increments toward leaf)
+        sint64 maintenanceReserve; // QU reserve dedicated to recurring maintenance charges
+        uint16 nextMaintenanceEpoch; // Gate-specific due epoch for the next maintenance charge
 
         // Admin gate fields — governance via MULTISIG quorum
         sint64 adminGateId;       // -1 = no admin gate (owner-only). Set to a MULTISIG gate ID for quorum-controlled config.
@@ -403,11 +413,11 @@ public:
         sint64 status;          //
     };
 
-    // Adds invocationReward to a gate reserve. reserveTarget: 0=oracleReserve, 1=chainReserve.
+    // Adds invocationReward to a gate reserve. reserveTarget: 0=oracleReserve, 1=chainReserve, 2=maintenanceReserve.
     struct fundGate_input
     {
         uint64 gateId;
-        uint8  reserveTarget;  // 0 = oracleReserve, 1 = chainReserve
+        uint8  reserveTarget;  // 0 = oracleReserve, 1 = chainReserve, 2 = maintenanceReserve
     };
     struct fundGate_output
     {
@@ -568,11 +578,11 @@ public:
         Array<id, 8> guardians;    // Guardian public keys from the admin gate's QUGATE_MultisigConfig
     };
 
-    // Withdraw from a gate's oracleReserve or chainReserve without closing. Owner only (or admin gate).
+    // Withdraw from a gate's oracleReserve, chainReserve, or maintenanceReserve without closing. Owner only (or admin gate).
     struct withdrawReserve_input
     {
         uint64 gateId;
-        uint8  reserveTarget;  // 0 = oracleReserve, 1 = chainReserve
+        uint8  reserveTarget;  // 0 = oracleReserve, 1 = chainReserve, 2 = maintenanceReserve
         uint64 amount;         // 0 = withdraw all
     };
     struct withdrawReserve_output
@@ -624,6 +634,8 @@ public:
         sint64 chainNextGateId;
         sint64 chainReserve;
         uint8  chainDepth;
+        sint64 maintenanceReserve;
+        uint16 nextMaintenanceEpoch;
         sint64 adminGateId;
         uint8  hasAdminGate;
         Array<sint64, 8> recipientGateIds;
@@ -708,6 +720,8 @@ public:
         sint64 chainNextGateId;
         sint64 chainReserve;
         uint8  chainDepth;
+        sint64 maintenanceReserve;
+        uint16 nextMaintenanceEpoch;
         sint64 adminGateId;    // -1 if no admin gate
         uint8  hasAdminGate;   // 1 if governed by admin gate
 
@@ -723,6 +737,10 @@ public:
         uint64 totalGates;
         uint64 activeGates;
         uint64 totalBurned;     //
+        uint64 totalMaintenanceCharged;
+        uint64 totalMaintenanceBurned;
+        uint64 totalMaintenanceDividends;
+        uint64 distributedMaintenanceDividends;
     };
 
     struct getGatesByOwner_input
@@ -753,6 +771,9 @@ public:
     {
         uint64 creationFee;         // base fee
         uint64 currentCreationFee;  // actual fee right now (after escalation)
+        uint64 maintenanceFee;
+        uint64 maintenanceIntervalEpochs;
+        uint64 maintenanceGraceEpochs;
         uint64 minSendAmount;
         uint64 expiryEpochs;       //
     };
@@ -778,8 +799,17 @@ public:
 
         // Shareholder-adjustable parameters
         uint64 _creationFee;        // base creation fee
+        uint64 _maintenanceFee;     // quarterly maintenance charge
+        uint64 _maintenanceIntervalEpochs;
+        uint64 _maintenanceGraceEpochs;
         uint64 _minSendAmount;
         uint64 _expiryEpochs;      // epochs of inactivity before auto-close
+        uint64 _totalMaintenanceCharged;
+        uint64 _totalMaintenanceBurned;
+        uint64 _totalMaintenanceDividends;
+        uint64 _earnedMaintenanceDividends;
+        uint64 _distributedMaintenanceDividends;
+        Array<uint16, QUGATE_MAX_GATES> _maintenanceDelinquentEpochs;
 
         // O(1) oracle callback lookup. Maintained by BEGIN_EPOCH and all close paths.
         // O(1) reverse lookup: oracleSubscriptionId → slot index
@@ -1141,6 +1171,13 @@ public:
         uint64 i;
         QuGateLogger logger;
         GateConfig gate;
+        uint8  maintenanceEligible;
+        uint16 delinquentEpoch;
+        uint64 maintenanceBurnAmount;
+        uint64 maintenanceDividendAmount;
+        uint64 maintenanceDistributed;
+        uint64 maintenanceAmountPerShare;
+        uint8  maintenanceChargedThisEpoch;
         // Heartbeat processing
         QUGATE_HeartbeatConfig inhCfg;
         sint64 inhBalance;
@@ -1255,6 +1292,12 @@ public:
         QUGATE_MultisigConfig adminCheckMs;
         QUGATE_AdminApprovalState adminCheckApproval;
         uint8 adminApprovalUsed;
+    };
+
+    struct END_TICK_locals
+    {
+        uint64 availableMaintenanceDividends;
+        uint64 maintenanceDividendPerShare;
     };
 
     struct getGatesByMode_locals
@@ -1546,6 +1589,15 @@ public:
         locals.newGate.chainNextGateId = -1;
         locals.newGate.chainReserve = 0;
         locals.newGate.chainDepth = 0;
+        locals.newGate.maintenanceReserve = 0;
+        if (state.get()._maintenanceIntervalEpochs > 0)
+        {
+            locals.newGate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+        }
+        else
+        {
+            locals.newGate.nextMaintenanceEpoch = 0;
+        }
 
         // Admin gate fields
         locals.newGate.adminGateId = -1;
@@ -2496,6 +2548,13 @@ public:
                     locals.gate.chainReserve = 0;
                 }
             }
+            if (locals.gate.maintenanceReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.maintenanceReserve) >= 0) // [QG-01]
+                {
+                    locals.gate.maintenanceReserve = 0;
+                }
+            }
             locals.gate.active = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
             state.mut()._activeGates -= 1;
@@ -2937,6 +2996,13 @@ public:
                 if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-02]
                 {
                     locals.gate.chainReserve = 0;
+                }
+            }
+            if (locals.gate.maintenanceReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.maintenanceReserve) >= 0) // [QG-02]
+                {
+                    locals.gate.maintenanceReserve = 0;
                 }
             }
             locals.gate.active = 0;
@@ -3439,6 +3505,13 @@ public:
                     locals.gate.chainReserve = 0;
                 }
             }
+            if (locals.gate.maintenanceReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.maintenanceReserve) >= 0) // [QG-03]
+                {
+                    locals.gate.maintenanceReserve = 0;
+                }
+            }
             locals.gate.active = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
             state.mut()._activeGates -= 1;
@@ -3485,6 +3558,13 @@ public:
             if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-06]
             {
                 locals.gate.chainReserve = 0;
+            }
+        }
+        if (locals.gate.maintenanceReserve > 0)
+        {
+            if (qpi.transfer(locals.gate.owner, locals.gate.maintenanceReserve) >= 0) // [QG-06]
+            {
+                locals.gate.maintenanceReserve = 0;
             }
         }
 
@@ -3684,6 +3764,11 @@ public:
             {
                 qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
                 locals.gate.chainReserve = 0;
+            }
+            if (locals.gate.maintenanceReserve > 0)
+            {
+                qpi.transfer(locals.gate.owner, locals.gate.maintenanceReserve);
+                locals.gate.maintenanceReserve = 0;
             }
             locals.gate.active = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
@@ -3948,6 +4033,13 @@ public:
                     locals.gate.chainReserve = 0;
                 }
             }
+            if (locals.gate.maintenanceReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.maintenanceReserve) >= 0) // [QG-04]
+                {
+                    locals.gate.maintenanceReserve = 0;
+                }
+            }
             locals.gate.active = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
             state.mut()._activeGates -= 1;
@@ -3998,6 +4090,10 @@ public:
                 return;
             }
             locals.gate.chainReserve += locals.invReward;
+        }
+        else if (input.reserveTarget == 2)
+        {
+            locals.gate.maintenanceReserve += locals.invReward;
         }
         else
         {
@@ -4194,6 +4290,13 @@ public:
                         locals.gate.oracleReserve = 0;
                     }
                 }
+                if (locals.gate.maintenanceReserve > 0)
+                {
+                    if (qpi.transfer(locals.gate.owner, locals.gate.maintenanceReserve) >= 0) // [QG-13]
+                    {
+                        locals.gate.maintenanceReserve = 0;
+                    }
+                }
                 if (locals.gate.oracleSubscriptionId >= 0)
                 {
                     state.mut()._subscriptionToSlot.removeByKey(locals.gate.oracleSubscriptionId);
@@ -4282,6 +4385,8 @@ public:
         output.chainNextGateId = locals.gate.chainNextGateId;
         output.chainReserve = locals.gate.chainReserve;
         output.chainDepth = locals.gate.chainDepth;
+        output.maintenanceReserve = locals.gate.maintenanceReserve;
+        output.nextMaintenanceEpoch = locals.gate.nextMaintenanceEpoch;
         output.adminGateId = locals.gate.adminGateId;
         output.hasAdminGate = locals.gate.hasAdminGate;
 
@@ -4304,6 +4409,10 @@ public:
         output.totalGates = state.get()._gateCount;
         output.activeGates = state.get()._activeGates;
         output.totalBurned = state.get()._totalBurned;         //
+        output.totalMaintenanceCharged = state.get()._totalMaintenanceCharged;
+        output.totalMaintenanceBurned = state.get()._totalMaintenanceBurned;
+        output.totalMaintenanceDividends = state.get()._totalMaintenanceDividends;
+        output.distributedMaintenanceDividends = state.get()._distributedMaintenanceDividends;
     }
 
     PUBLIC_FUNCTION_WITH_LOCALS(getGatesByOwner)
@@ -4349,6 +4458,8 @@ public:
                 locals.entry.chainNextGateId = -1;
                 locals.entry.chainReserve = 0;
                 locals.entry.chainDepth = 0;
+                locals.entry.maintenanceReserve = 0;
+                locals.entry.nextMaintenanceEpoch = 0;
                 locals.entry.allowedSenderCount = 0;
                 locals.entry.adminGateId = -1;
                 locals.entry.hasAdminGate = 0;
@@ -4379,6 +4490,8 @@ public:
                 locals.entry.chainNextGateId = locals.gate.chainNextGateId;
                 locals.entry.chainReserve = locals.gate.chainReserve;
                 locals.entry.chainDepth = locals.gate.chainDepth;
+                locals.entry.maintenanceReserve = locals.gate.maintenanceReserve;
+                locals.entry.nextMaintenanceEpoch = locals.gate.nextMaintenanceEpoch;
                 locals.entry.allowedSenderCount = locals.gate.allowedSenderCount;
                 locals.entry.adminGateId = locals.gate.adminGateId;
                 locals.entry.hasAdminGate = locals.gate.hasAdminGate;
@@ -4401,6 +4514,9 @@ public:
     {
         output.creationFee = state.get()._creationFee;
         output.currentCreationFee = state.get()._creationFee * (1 + QPI::div(state.get()._activeGates, QUGATE_FEE_ESCALATION_STEP));
+        output.maintenanceFee = state.get()._maintenanceFee;
+        output.maintenanceIntervalEpochs = state.get()._maintenanceIntervalEpochs;
+        output.maintenanceGraceEpochs = state.get()._maintenanceGraceEpochs;
         output.minSendAmount = state.get()._minSendAmount;
         output.expiryEpochs = state.get()._expiryEpochs;
     }
@@ -4520,6 +4636,13 @@ public:
                 if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-05]
                 {
                     locals.gate.chainReserve = 0;
+                }
+            }
+            if (locals.gate.maintenanceReserve > 0)
+            {
+                if (qpi.transfer(locals.gate.owner, locals.gate.maintenanceReserve) >= 0) // [QG-05]
+                {
+                    locals.gate.maintenanceReserve = 0;
                 }
             }
             locals.gate.active = 0;
@@ -6052,6 +6175,29 @@ public:
                 output.withdrawn = toWithdraw;
             }
         }
+        else if (input.reserveTarget == 2)
+        {
+            sint64 available = locals.gate.maintenanceReserve;
+            if (available <= 0)
+            {
+                output.status = QUGATE_SUCCESS;
+                output.withdrawn = 0;
+                return;
+            }
+
+            uint64 toWithdraw = (uint64)available;
+            if (input.amount != 0 && input.amount < toWithdraw)
+            {
+                toWithdraw = input.amount;
+            }
+
+            if (qpi.transfer(qpi.invocator(), toWithdraw) >= 0)
+            {
+                locals.gate.maintenanceReserve -= (sint64)toWithdraw;
+                state.mut()._gates.set(locals.slotIdx, locals.gate);
+                output.withdrawn = toWithdraw;
+            }
+        }
         else
         {
             output.status = QUGATE_INVALID_MODE;
@@ -6125,6 +6271,8 @@ public:
         output.chainNextGateId = locals.gate.chainNextGateId;
         output.chainReserve = locals.gate.chainReserve;
         output.chainDepth = locals.gate.chainDepth;
+        output.maintenanceReserve = locals.gate.maintenanceReserve;
+        output.nextMaintenanceEpoch = locals.gate.nextMaintenanceEpoch;
         output.adminGateId = locals.gate.adminGateId;
         output.hasAdminGate = locals.gate.hasAdminGate;
 
@@ -6214,13 +6362,22 @@ public:
         state.mut()._freeCount = 0;
         state.mut()._totalBurned = 0;                           //
         state.mut()._creationFee = QUGATE_DEFAULT_CREATION_FEE;  //
+        state.mut()._maintenanceFee = QUGATE_DEFAULT_MAINTENANCE_FEE;
+        state.mut()._maintenanceIntervalEpochs = QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS;
+        state.mut()._maintenanceGraceEpochs = QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS;
         state.mut()._minSendAmount = QUGATE_DEFAULT_MIN_SEND;    //
         state.mut()._expiryEpochs = QUGATE_DEFAULT_EXPIRY_EPOCHS; //
+        state.mut()._totalMaintenanceCharged = 0;
+        state.mut()._totalMaintenanceBurned = 0;
+        state.mut()._totalMaintenanceDividends = 0;
+        state.mut()._earnedMaintenanceDividends = 0;
+        state.mut()._distributedMaintenanceDividends = 0;
 
         // Zero all generation counters
         for (uint64 i = 0; i < QUGATE_MAX_GATES; i++)
         {
             state.mut()._gateGenerations.set(i, 0);
+            state.mut()._maintenanceDelinquentEpochs.set(i, 0);
         }
     }
 
@@ -6274,10 +6431,137 @@ public:
 
     END_EPOCH_WITH_LOCALS()
     {
+        // Quarterly maintenance charging and delinquency tracking
+        for (locals.i = 0; locals.i < state.get()._gateCount; locals.i++)
+        {
+            locals.gate = state.get()._gates.get(locals.i);
+            if (locals.gate.active == 0)
+            {
+                continue;
+            }
+
+            locals.maintenanceEligible = 1;
+            if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
+            {
+                locals.inhCfg = state.get()._heartbeatConfigs.get(locals.i);
+                if (locals.inhCfg.active == 0)
+                {
+                    locals.maintenanceEligible = 0;
+                }
+            }
+            else if (locals.gate.mode == QUGATE_MODE_MULTISIG)
+            {
+                locals.msigCfg = state.get()._multisigConfigs.get(locals.i);
+                if (locals.msigCfg.guardianCount == 0 || locals.msigCfg.required == 0)
+                {
+                    locals.maintenanceEligible = 0;
+                }
+            }
+            else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
+            {
+                locals.tlCfg = state.get()._timeLockConfigs.get(locals.i);
+                if (locals.tlCfg.active == 0)
+                {
+                    locals.maintenanceEligible = 0;
+                }
+            }
+
+            if (locals.maintenanceEligible == 0 || state.get()._maintenanceFee == 0)
+            {
+                continue;
+            }
+
+            locals.delinquentEpoch = state.get()._maintenanceDelinquentEpochs.get(locals.i);
+            locals.maintenanceChargedThisEpoch = 0;
+
+            if (locals.gate.nextMaintenanceEpoch == 0 && state.get()._maintenanceIntervalEpochs > 0)
+            {
+                locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+                state.mut()._gates.set(locals.i, locals.gate);
+            }
+
+            // Allow a delinquent gate to cure as soon as it can pay again.
+            if (locals.delinquentEpoch > 0
+                && locals.gate.maintenanceReserve >= (sint64)state.get()._maintenanceFee)
+            {
+                locals.maintenanceBurnAmount = (state.get()._maintenanceFee * QUGATE_MAINTENANCE_BURN_BPS) / 10000ULL;
+                locals.maintenanceDividendAmount = state.get()._maintenanceFee - locals.maintenanceBurnAmount;
+
+                locals.gate.maintenanceReserve -= state.get()._maintenanceFee;
+                if (state.get()._maintenanceIntervalEpochs > 0)
+                {
+                    locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+                }
+                state.mut()._gates.set(locals.i, locals.gate);
+                state.mut()._maintenanceDelinquentEpochs.set(locals.i, 0);
+                state.mut()._totalMaintenanceCharged += state.get()._maintenanceFee;
+                locals.maintenanceChargedThisEpoch = 1;
+
+                qpi.burn(locals.maintenanceBurnAmount);
+                state.mut()._totalBurned += locals.maintenanceBurnAmount;
+                state.mut()._totalMaintenanceBurned += locals.maintenanceBurnAmount;
+
+                state.mut()._earnedMaintenanceDividends += locals.maintenanceDividendAmount;
+                state.mut()._totalMaintenanceDividends += locals.maintenanceDividendAmount;
+
+                locals.logger._contractIndex = CONTRACT_INDEX;
+                locals.logger._type = QUGATE_LOG_MAINTENANCE_CURED;
+                locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+                locals.logger.sender = locals.gate.owner;
+                locals.logger.amount = state.get()._maintenanceFee;
+                LOG_INFO(locals.logger);
+            }
+
+            // Charge maintenance when this gate reaches its own due epoch.
+            if (locals.maintenanceChargedThisEpoch == 0
+                && state.get()._maintenanceIntervalEpochs > 0
+                && qpi.epoch() > 0
+                && locals.gate.nextMaintenanceEpoch > 0
+                && qpi.epoch() >= locals.gate.nextMaintenanceEpoch)
+            {
+                if (locals.gate.maintenanceReserve >= (sint64)state.get()._maintenanceFee)
+                {
+                    locals.maintenanceBurnAmount = (state.get()._maintenanceFee * QUGATE_MAINTENANCE_BURN_BPS) / 10000ULL;
+                    locals.maintenanceDividendAmount = state.get()._maintenanceFee - locals.maintenanceBurnAmount;
+
+                    locals.gate.maintenanceReserve -= state.get()._maintenanceFee;
+                    locals.gate.nextMaintenanceEpoch = qpi.epoch() + (uint16)state.get()._maintenanceIntervalEpochs;
+                    state.mut()._gates.set(locals.i, locals.gate);
+                    state.mut()._maintenanceDelinquentEpochs.set(locals.i, 0);
+                    state.mut()._totalMaintenanceCharged += state.get()._maintenanceFee;
+
+                    qpi.burn(locals.maintenanceBurnAmount);
+                    state.mut()._totalBurned += locals.maintenanceBurnAmount;
+                    state.mut()._totalMaintenanceBurned += locals.maintenanceBurnAmount;
+
+                    state.mut()._earnedMaintenanceDividends += locals.maintenanceDividendAmount;
+                    state.mut()._totalMaintenanceDividends += locals.maintenanceDividendAmount;
+
+                    locals.logger._contractIndex = CONTRACT_INDEX;
+                    locals.logger._type = QUGATE_LOG_MAINTENANCE_CHARGED;
+                    locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+                    locals.logger.sender = locals.gate.owner;
+                    locals.logger.amount = state.get()._maintenanceFee;
+                    LOG_INFO(locals.logger);
+                }
+                else if (locals.delinquentEpoch == 0)
+                {
+                    state.mut()._maintenanceDelinquentEpochs.set(locals.i, qpi.epoch());
+                    locals.logger._contractIndex = CONTRACT_INDEX;
+                    locals.logger._type = QUGATE_LOG_MAINTENANCE_DELINQUENT;
+                    locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+                    locals.logger.sender = locals.gate.owner;
+                    locals.logger.amount = state.get()._maintenanceFee;
+                    LOG_INFO(locals.logger);
+                }
+            }
+        }
+
         // Expire inactive gates
         for (locals.i = 0; locals.i < state.get()._gateCount; locals.i++)
         {
             locals.gate = state.get()._gates.get(locals.i);
+            locals.delinquentEpoch = state.get()._maintenanceDelinquentEpochs.get(locals.i);
 
             // active==1 guard prevents double-close / activeGates underflow (intentional)
             if (locals.gate.active == 1 && state.get()._expiryEpochs > 0)
@@ -6286,7 +6570,7 @@ public:
                 if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
                 {
                     locals.tlCfg = state.get()._timeLockConfigs.get(locals.i);
-                    if (locals.tlCfg.active == 1 && locals.tlCfg.fired == 0 && locals.tlCfg.cancelled == 0)
+                    if (locals.delinquentEpoch == 0 && locals.tlCfg.active == 1 && locals.tlCfg.fired == 0 && locals.tlCfg.cancelled == 0)
                     {
                         continue;
                     }
@@ -6294,17 +6578,19 @@ public:
                 if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
                 {
                     locals.inhCfg = state.get()._heartbeatConfigs.get(locals.i);
-                    if (locals.inhCfg.active == 1 && locals.inhCfg.triggered == 0)
+                    if (locals.delinquentEpoch == 0 && locals.inhCfg.active == 1 && locals.inhCfg.triggered == 0)
                     {
                         continue;
                     }
                 }
-                if (locals.gate.mode == QUGATE_MODE_MULTISIG && locals.gate.currentBalance > 0)
+                if (locals.delinquentEpoch == 0 && locals.gate.mode == QUGATE_MODE_MULTISIG && locals.gate.currentBalance > 0)
                 {
                     continue;
                 }
 
-                if (qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs)
+                if ((locals.delinquentEpoch > 0 && state.get()._maintenanceGraceEpochs > 0
+                     && qpi.epoch() - locals.delinquentEpoch >= state.get()._maintenanceGraceEpochs)
+                    || (qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs))
                 {
                     // Refund any held balance (THRESHOLD / ORACLE mode)
                     if (locals.gate.currentBalance > 0)
@@ -6337,6 +6623,13 @@ public:
                         if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-14]
                         {
                             locals.gate.chainReserve = 0;
+                        }
+                    }
+                    if (locals.gate.maintenanceReserve > 0)
+                    {
+                        if (qpi.transfer(locals.gate.owner, locals.gate.maintenanceReserve) >= 0) // [QG-14]
+                        {
+                            locals.gate.maintenanceReserve = 0;
                         }
                     }
 
@@ -6378,6 +6671,7 @@ public:
                     locals.gate.active = 0;
                     state.mut()._gates.set(locals.i, locals.gate);
                     state.mut()._activeGates -= 1;
+                    state.mut()._maintenanceDelinquentEpochs.set(locals.i, 0);
 
                     // Push slot onto free-list
                     state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
@@ -6738,8 +7032,21 @@ public:
     BEGIN_TICK()
     {
     }
-    END_TICK()
+    END_TICK_WITH_LOCALS()
     {
+        locals.availableMaintenanceDividends =
+            (state.get()._earnedMaintenanceDividends > state.get()._distributedMaintenanceDividends)
+                ? (state.get()._earnedMaintenanceDividends - state.get()._distributedMaintenanceDividends)
+                : 0;
+
+        locals.maintenanceDividendPerShare = div(locals.availableMaintenanceDividends, (uint64)NUMBER_OF_COMPUTORS);
+        if (locals.maintenanceDividendPerShare > 0)
+        {
+            if (qpi.distributeDividends(locals.maintenanceDividendPerShare))
+            {
+                state.mut()._distributedMaintenanceDividends += locals.maintenanceDividendPerShare * NUMBER_OF_COMPUTORS;
+            }
+        }
     }
 
 };
