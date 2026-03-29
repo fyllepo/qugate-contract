@@ -638,12 +638,16 @@ public:
         uint16 nextIdleChargeEpoch;
         sint64 adminGateId;
         uint8  hasAdminGate;
+        uint8  idleDelinquent;
+        uint16 idleGraceRemainingEpochs;
+        uint8  idleExpiryOverdue;
         Array<sint64, 8> recipientGateIds;
     };
     struct getGateBySlot_locals
     {
         GateConfig gate;
         uint64 i;
+        uint16 delinquentEpoch;
     };
 
     struct getLatestExecution_input
@@ -724,6 +728,9 @@ public:
         uint16 nextIdleChargeEpoch;
         sint64 adminGateId;    // -1 if no admin gate
         uint8  hasAdminGate;   // 1 if governed by admin gate
+        uint8  idleDelinquent; // 1 if gate has missed idle-period funding
+        uint16 idleGraceRemainingEpochs; // epochs left before delinquent gate should expire
+        uint8  idleExpiryOverdue; // 1 if idle grace has already been exhausted
 
         // Gate-as-recipient
         Array<sint64, 8> recipientGateIds;
@@ -1150,6 +1157,7 @@ public:
         uint64 i;
         uint64 slotIdx;
         uint64 encodedGen;
+        uint16 delinquentEpoch;
     };
 
     struct getGateBatch_locals                           //
@@ -1160,6 +1168,7 @@ public:
         getGate_output entry;
         uint64 slotIdx;
         uint64 encodedGen;
+        uint16 delinquentEpoch;
     };
 
     struct getGatesByOwner_locals
@@ -4415,6 +4424,21 @@ public:
         output.nextIdleChargeEpoch = locals.gate.nextIdleChargeEpoch;
         output.adminGateId = locals.gate.adminGateId;
         output.hasAdminGate = locals.gate.hasAdminGate;
+        locals.delinquentEpoch = state.get()._idleDelinquentEpochs.get(locals.slotIdx);
+        output.idleDelinquent = (locals.delinquentEpoch > 0 ? 1 : 0);
+        output.idleGraceRemainingEpochs = 0;
+        output.idleExpiryOverdue = 0;
+        if (locals.delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0)
+        {
+            if (qpi.epoch() - locals.delinquentEpoch >= state.get()._idleGraceEpochs)
+            {
+                output.idleExpiryOverdue = 1;
+            }
+            else
+            {
+                output.idleGraceRemainingEpochs = (uint16)(state.get()._idleGraceEpochs - (qpi.epoch() - locals.delinquentEpoch));
+            }
+        }
 
         // Gate-as-recipient
         for (locals.i = 0; locals.i < 8; locals.i++)
@@ -4423,8 +4447,10 @@ public:
         }
 
         // Report as inactive if expired (function can't mutate state)
-        if (state.get()._expiryEpochs > 0
-            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs)
+        if ((locals.delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0
+             && qpi.epoch() - locals.delinquentEpoch >= state.get()._idleGraceEpochs)
+            || (state.get()._expiryEpochs > 0
+                && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs))
         {
             output.active = 0;
         }
@@ -4489,6 +4515,9 @@ public:
                 locals.entry.allowedSenderCount = 0;
                 locals.entry.adminGateId = -1;
                 locals.entry.hasAdminGate = 0;
+                locals.entry.idleDelinquent = 0;
+                locals.entry.idleGraceRemainingEpochs = 0;
+                locals.entry.idleExpiryOverdue = 0;
                 for (locals.j = 0; locals.j < QUGATE_MAX_RECIPIENTS; locals.j++)
                 {
                     locals.entry.recipients.set(locals.j, id::zero());
@@ -4521,6 +4550,22 @@ public:
                 locals.entry.allowedSenderCount = locals.gate.allowedSenderCount;
                 locals.entry.adminGateId = locals.gate.adminGateId;
                 locals.entry.hasAdminGate = locals.gate.hasAdminGate;
+                locals.delinquentEpoch = state.get()._idleDelinquentEpochs.get(locals.slotIdx);
+                locals.entry.idleDelinquent = (locals.delinquentEpoch > 0 ? 1 : 0);
+                locals.entry.idleGraceRemainingEpochs = 0;
+                locals.entry.idleExpiryOverdue = 0;
+                if (locals.delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0)
+                {
+                    if (qpi.epoch() - locals.delinquentEpoch >= state.get()._idleGraceEpochs)
+                    {
+                        locals.entry.idleExpiryOverdue = 1;
+                        locals.entry.active = 0;
+                    }
+                    else
+                    {
+                        locals.entry.idleGraceRemainingEpochs = (uint16)(state.get()._idleGraceEpochs - (qpi.epoch() - locals.delinquentEpoch));
+                    }
+                }
 
                 for (locals.j = 0; locals.j < QUGATE_MAX_RECIPIENTS; locals.j++)
                 {
@@ -4528,6 +4573,12 @@ public:
                     locals.entry.ratios.set(locals.j, locals.gate.ratios.get(locals.j));
                     locals.entry.allowedSenders.set(locals.j, locals.gate.allowedSenders.get(locals.j));
                     locals.entry.recipientGateIds.set(locals.j, locals.gate.recipientGateIds.get(locals.j));
+                }
+
+                if (state.get()._expiryEpochs > 0
+                    && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs)
+                {
+                    locals.entry.active = 0;
                 }
 
                 output.gates.set(locals.i, locals.entry);
@@ -6317,6 +6368,22 @@ public:
         output.nextIdleChargeEpoch = locals.gate.nextIdleChargeEpoch;
         output.adminGateId = locals.gate.adminGateId;
         output.hasAdminGate = locals.gate.hasAdminGate;
+        locals.delinquentEpoch = state.get()._idleDelinquentEpochs.get(input.slotIndex);
+        output.idleDelinquent = (locals.delinquentEpoch > 0 ? 1 : 0);
+        output.idleGraceRemainingEpochs = 0;
+        output.idleExpiryOverdue = 0;
+        if (locals.delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0)
+        {
+            if (qpi.epoch() - locals.delinquentEpoch >= state.get()._idleGraceEpochs)
+            {
+                output.idleExpiryOverdue = 1;
+                output.active = 0;
+            }
+            else
+            {
+                output.idleGraceRemainingEpochs = (uint16)(state.get()._idleGraceEpochs - (qpi.epoch() - locals.delinquentEpoch));
+            }
+        }
 
         for (locals.i = 0; locals.i < 8; locals.i++)
         {
@@ -6324,6 +6391,12 @@ public:
             output.ratios.set(locals.i, locals.gate.ratios.get(locals.i));
             output.allowedSenders.set(locals.i, locals.gate.allowedSenders.get(locals.i));
             output.recipientGateIds.set(locals.i, locals.gate.recipientGateIds.get(locals.i));
+        }
+
+        if (state.get()._expiryEpochs > 0
+            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs)
+        {
+            output.active = 0;
         }
     }
 
