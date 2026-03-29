@@ -3456,7 +3456,7 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator())
+        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
         {
             uint8 adminAuth = 0;
             if (locals.gate.hasAdminGate)
@@ -3722,7 +3722,7 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator())
+        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
         {
             uint8 adminAuth = 0;
             if (locals.gate.hasAdminGate)
@@ -4112,18 +4112,7 @@ public:
         }
         else if (input.reserveTarget == 1)
         {
-            // Chain reserve — gate must have a chain link
-            if (locals.gate.chainNextGateId == -1)
-            {
-                if (locals.invReward > 0)
-                {
-                    qpi.transfer(qpi.invocator(), locals.invReward);
-                }
-                output.result = QUGATE_INVALID_CHAIN;
-                locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
-                LOG_WARNING(locals.logger);
-                return;
-            }
+            // Chain reserve — used by routeToGate for chain hops and gate-as-recipient hops
             locals.gate.chainReserve += locals.invReward;
         }
         else if (input.reserveTarget == 2)
@@ -4635,7 +4624,7 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator())
+        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
         {
             uint8 adminAuth = 0;
             if (locals.gate.hasAdminGate)
@@ -4913,7 +4902,7 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator())
+        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
         {
             uint8 adminAuth = 0;
             if (locals.gate.hasAdminGate)
@@ -5249,7 +5238,7 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator())
+        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
         {
             uint8 adminAuth = 0;
             if (locals.gate.hasAdminGate)
@@ -5508,7 +5497,7 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator())
+        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
         {
             uint8 adminAuth = 0;
             if (locals.gate.hasAdminGate)
@@ -5680,7 +5669,7 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator())
+        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
         {
             uint8 adminAuth = 0;
             if (locals.gate.hasAdminGate)
@@ -5915,9 +5904,10 @@ public:
 
         // Authorization
         locals.adminApprovalUsed = 0;
-        if (qpi.invocator() != locals.gate.owner)
+        if (qpi.invocator() != locals.gate.owner || locals.gate.hasAdminGate)
         {
-            // Non-owner: always needs admin gate approval
+            // Once an admin gate is set, any change to admin governance requires
+            // an active approval window from that admin gate.
             if (!locals.gate.hasAdminGate)
             {
                 output.status = QUGATE_UNAUTHORIZED;
@@ -5960,7 +5950,8 @@ public:
                 return;
             }
         }
-        // Owner always authorized (can set or clear admin gate)
+        // If no admin gate is set, the owner may set one directly.
+        // Once an admin gate is set, changing or clearing it requires approval.
 
         // Clear admin gate
         if (input.adminGateId == -1)
@@ -6238,15 +6229,6 @@ public:
         }
         else if (input.reserveTarget == 1)
         {
-            // chainReserve — gate must have a chain link
-            if (locals.gate.chainNextGateId == -1)
-            {
-                output.status = QUGATE_INVALID_CHAIN;
-                locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
-                LOG_WARNING(locals.logger);
-                return;
-            }
-
             sint64 available = locals.gate.chainReserve;
             if (available <= 0)
             {
