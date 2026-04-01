@@ -5915,6 +5915,40 @@ public:
                 LOG_WARNING(locals.logger);
                 return;
             }
+            // Special case: the owner may always clear a dead admin gate reference.
+            // This prevents permanent lockout if the referenced admin gate has expired,
+            // been closed, become stale, or is no longer MULTISIG.
+            if (qpi.invocator() == locals.gate.owner && input.adminGateId == -1)
+            {
+                locals.adminSlot = (uint64)(locals.gate.adminGateId) & QUGATE_GATE_ID_SLOT_MASK;
+                locals.adminEncodedGen = (uint64)(locals.gate.adminGateId) >> QUGATE_GATE_ID_SLOT_BITS;
+                locals.adminApproved = 0;
+                if (locals.gate.adminGateId <= 0
+                    || locals.adminSlot >= state.get()._gateCount
+                    || locals.adminEncodedGen == 0
+                    || state.get()._gateGenerations.get(locals.adminSlot) != (uint16)(locals.adminEncodedGen - 1))
+                {
+                    locals.adminApproved = 1;
+                }
+                else
+                {
+                    locals.adminGate = state.get()._gates.get(locals.adminSlot);
+                    if (locals.adminGate.active == 0 || locals.adminGate.mode != QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminApproved = 1;
+                    }
+                }
+                if (locals.adminApproved == 1)
+                {
+                    locals.gate.adminGateId = -1;
+                    locals.gate.hasAdminGate = 0;
+                    state.mut()._gates.set(locals.slotIdx, locals.gate);
+                    output.status = QUGATE_SUCCESS;
+                    locals.logger._type = QUGATE_LOG_ADMIN_GATE_CLEARED;
+                    LOG_INFO(locals.logger);
+                    return;
+                }
+            }
             // Check admin gate approval
             locals.adminSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
             locals.adminApprovalSlot = locals.adminSlot;

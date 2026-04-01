@@ -311,6 +311,8 @@ Send 500,000 QU to the gate address
 
 Any gate can be placed under MULTISIG governance by assigning an **admin gate**. When an admin gate is set, configuration changes (closeGate, updateGate, configureHeartbeat, configureMultisig, configureTimeLock, cancelTimeLock, setChain) require either the owner's signature **or** approval from the admin gate's MULTISIG quorum.
 
+Admin gates should be chosen with the same care as any other signing authority. Guardians cannot transfer gate ownership, but they can control most meaningful configuration changes, including replacing recipients, changing chain routing, replacing the admin gate itself, or closing the gate once approval is active.
+
 Governance-only admin multisigs are still subject to the inactivity model. To keep them alive during quiet periods, fund their `idleReserve` via `fundGate(..., reserveTarget = 2)`. If an admin gate expires or becomes unusable, the governed gate owner can still clear governance and recover control.
 
 The `heartbeat()` procedure is intentionally excluded — it is a keep-alive signal that should always remain owner-only.
@@ -322,7 +324,9 @@ The `heartbeat()` procedure is intentionally excluded — it is a keep-alive sig
 3. From that point, config changes on the governed gate require either:
    - The owner calling the procedure directly, **or**
    - The admin gate's MULTISIG quorum reaching approval in the current epoch
-4. To remove governance, call `setAdminGate(gateId, -1)` — requires admin gate approval if one is set
+4. To remove governance, call `setAdminGate(gateId, -1)`:
+   - If the current admin gate is active, clearing it requires that admin gate's approval window
+   - If the current admin gate has expired, been closed, or is otherwise no longer a valid active MULTISIG gate, the owner may clear it directly
 
 ### Procedures
 - `setAdminGate(gateId, adminGateId)` — owner-only if no admin gate set; requires admin gate approval if already set
@@ -973,7 +977,7 @@ Read-only query for TIME_LOCK gate state.
 
 #### setAdminGate (Input Type 21)
 
-Sets or clears the admin gate on a gate. When setting, the admin gate must exist and be MULTISIG mode. Owner-only if no admin gate is currently set; requires admin gate approval if one is already set.
+Sets or clears the admin gate on a gate. When setting, the admin gate must exist and be MULTISIG mode. Owner-only if no admin gate is currently set; requires admin gate approval if one is already set, except that the owner may directly clear an expired, closed, stale, or otherwise invalid current admin gate.
 
 **Input**:
 
@@ -984,7 +988,7 @@ Sets or clears the admin gate on a gate. When setting, the admin gate must exist
 
 **Output**: `status` (sint64)
 
-**Validation**: Target gate must be active. Admin gate (if not -1) must exist, be active, and be MULTISIG mode. Returns `QUGATE_INVALID_ADMIN_GATE` (-27) on invalid admin gate. Returns `QUGATE_ADMIN_GATE_REQUIRED` (-26) if admin gate is set and caller lacks approval.
+**Validation**: Target gate must be active. Admin gate (if not -1) must exist, be active, and be MULTISIG mode. Returns `QUGATE_INVALID_ADMIN_GATE` (-27) on invalid admin gate. Returns `QUGATE_ADMIN_GATE_REQUIRED` (-26) if an active admin gate is set and caller lacks approval. If the current admin gate has expired, been closed, become stale, or is no longer an active MULTISIG gate, the owner may clear it with `adminGateId=-1`.
 
 #### getAdminGate (Input Type 22)
 
