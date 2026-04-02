@@ -34,7 +34,7 @@ QuGate is a **network primitive** — shared, permissionless payment routing inf
 
 ## Overview
 
-QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of nine mode slots (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK — slot 5 ORACLE is reserved pending oracle infrastructure). Gates are composable: the output of one gate can be forwarded into another, enabling multi-stage payment pipelines without writing custom contracts.
+QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of eight active modes (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK — slot 5 is reserved). Gates are composable: the output of one gate can be forwarded into another, enabling multi-stage payment pipelines without writing custom contracts.
 
 Gate-to-gate forwarding can happen in two ways:
 1. **Manual forwarding**: An external actor (client app, bot) calls sendToGate on the next gate.
@@ -66,7 +66,7 @@ Gate-to-gate forwarding can happen in two ways:
 | THRESHOLD | `QUGATE_MODE_THRESHOLD` | 2 | Accumulate until threshold reached, then forward |
 | RANDOM | `QUGATE_MODE_RANDOM` | 3 | Probabilistic selection per payment |
 | CONDITIONAL | `QUGATE_MODE_CONDITIONAL` | 4 | Sender-restricted forwarding (whitelist) |
-| ORACLE | `QUGATE_MODE_ORACLE` | 5 | **Reserved** — pending oracle infrastructure. `createGate` returns `QUGATE_UNSUPPORTED_MODE`. |
+| _(reserved)_ | `QUGATE_MODE_ORACLE` | 5 | **Reserved** — `createGate` returns `QUGATE_UNSUPPORTED_MODE` |
 | HEARTBEAT | `QUGATE_MODE_HEARTBEAT` | 6 | Dead-man's switch: distribute if owner goes silent |
 | MULTISIG | `QUGATE_MODE_MULTISIG` | 7 | M-of-N guardian approval before funds release |
 | TIME_LOCK | `QUGATE_MODE_TIME_LOCK` | 8 | Holds funds until a target epoch, then releases to recipient |
@@ -122,9 +122,9 @@ When the sender is authorized, the full amount is forwarded to recipient 0.
 
 **Validation**: `allowedSenderCount` must be <= 8.
 
-### QUGATE_MODE_ORACLE (5) — Reserved
+### Mode Slot 5 — Reserved
 
-Mode slot 5 is reserved for oracle-triggered distribution. It is not yet available — `createGate` with `mode=5` returns `QUGATE_UNSUPPORTED_MODE`. The slot will be activated when Qubic oracle infrastructure is ready. Oracle-related fields in gate structs (oracleId, oracleCurrency1/2, oracleCondition, oracleTriggerMode, oracleThreshold, oracleReserve, oracleSubscriptionId) are present in the wire format but unused.
+Mode slot 5 is reserved. `createGate` with `mode=5` returns `QUGATE_UNSUPPORTED_MODE`. Oracle-related fields in gate structs (oracleId, oracleCurrency1/2, oracleCondition, oracleTriggerMode, oracleThreshold, oracleReserve, oracleSubscriptionId) are present in the wire format but unused.
 
 ---
 
@@ -578,7 +578,7 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 | 7 | getGatesByOwner | PUBLIC_FUNCTION | List gate IDs owned by an address |
 | 8 | getGateBatch | PUBLIC_FUNCTION | Batch query up to 32 gates by ID |
 | 9 | getFees | PUBLIC_FUNCTION | Query current fee parameters |
-| 10 | fundGate | PUBLIC_PROCEDURE | Add QU to chain reserve (or oracle reserve, when available) |
+| 10 | fundGate | PUBLIC_PROCEDURE | Add QU to chain reserve or idle reserve |
 | 11 | setChain | PUBLIC_PROCEDURE | Set or clear a chain link (owner only) |
 | 12 | sendToGateVerified | PUBLIC_PROCEDURE | Like sendToGate, but verifies gate owner before routing |
 | 13 | configureHeartbeat | PUBLIC_PROCEDURE | Configure HEARTBEAT gate params and beneficiaries |
@@ -591,7 +591,7 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 | 20 | getTimeLockState | PUBLIC_FUNCTION | Query TIME_LOCK gate state and epochs remaining |
 | 21 | setAdminGate | PUBLIC_PROCEDURE | Set or clear admin gate (MULTISIG governance) on any gate |
 | 22 | getAdminGate | PUBLIC_FUNCTION | Query admin gate configuration for a gate |
-| 23 | withdrawReserve | PUBLIC_PROCEDURE | Withdraw from chain reserve (or oracle reserve, when available) without closing (owner only) |
+| 23 | withdrawReserve | PUBLIC_PROCEDURE | Withdraw from chain reserve or idle reserve without closing (owner only) |
 | 24 | getGatesByMode | PUBLIC_FUNCTION | Query up to 16 active gates matching a given mode |
 | 25 | getGateBySlot | PUBLIC_FUNCTION | Query a gate by raw slot index (returns versioned gate ID + full state) |
 | 26 | getLatestExecution | PUBLIC_FUNCTION | Query the latest execution metadata for a gate (outcome, recipient, tick) |
@@ -774,14 +774,14 @@ Performs a linear scan of all gate slots. Returns up to 16 gates.
 
 #### fundGate (Input Type 10)
 
-Adds QU to a gate's chain reserve (or oracle reserve, when available). Anyone can fund a gate.
+Adds QU to a gate's chain reserve or idle reserve. Anyone can fund a gate.
 
 **Input**:
 
 | Field | Type | Size | Description |
 |-------|------|------|-------------|
 | gateId | sint64 | 8 | Target gate ID |
-| reserveTarget | uint8 | 1 | 0 = oracleReserve (reserved), 1 = chainReserve, 2 = idleReserve |
+| reserveTarget | uint8 | 1 | 0 = reserved, 1 = chainReserve, 2 = idleReserve |
 
 **Output**:
 
@@ -789,7 +789,7 @@ Adds QU to a gate's chain reserve (or oracle reserve, when available). Anyone ca
 |-------|------|-------------|
 | result | sint64 | 0 on success, negative on error |
 
-**Behaviour**: Validates the gate exists and is active. For `reserveTarget=0`, the gate must be ORACLE mode. For `reserveTarget=1`, the gate must have a chain link (`chainNextGateId != -1`). Attached QU is deposited into the specified reserve.
+**Behaviour**: Validates the gate exists and is active. `reserveTarget=0` is reserved (oracle mode not yet available). For `reserveTarget=1`, the gate must have a chain link (`chainNextGateId != -1`). Attached QU is deposited into the specified reserve.
 
 #### setChain (Input Type 11)
 
@@ -1248,7 +1248,7 @@ Until the shareholder infrastructure is wired, fees are set during `INITIALIZE` 
 
 ### Why 9 modes?
 
-Eight active modes cover the most common payment routing and custody patterns observed in blockchain applications: proportional splitting (revenue share), rotation (load balancing/fairness), accumulation (crowdfunding/escrow), randomization (lottery/raffle), access control (whitelisting), heartbeat-based inheritance (dead-man's switch), M-of-N multisig approval (DAO treasury, joint accounts), and epoch-based time locks (vesting, escrow). Mode slot 5 (ORACLE) is reserved for oracle-triggered distribution, pending oracle infrastructure. Together they can be composed to handle most real-world payment flows without custom contracts.
+Eight active modes cover the most common payment routing and custody patterns observed in blockchain applications: proportional splitting (revenue share), rotation (load balancing/fairness), accumulation (crowdfunding/escrow), randomization (lottery/raffle), access control (whitelisting), heartbeat-based inheritance (dead-man's switch), M-of-N multisig approval (DAO treasury, joint accounts), and epoch-based time locks (vesting, escrow). Mode slot 5 is reserved. Together they can be composed to handle most real-world payment flows without custom contracts.
 
 ### Why 8 max recipients?
 
@@ -1377,7 +1377,7 @@ No QU can be permanently locked in the contract (assuming the owner retains acce
 | -10 | `QUGATE_INVALID_THRESHOLD` | Threshold is 0 for THRESHOLD mode |
 | -11 | `QUGATE_INVALID_SENDER_COUNT` | allowedSenderCount exceeds QUGATE_MAX_RECIPIENTS |
 | -12 | `QUGATE_CONDITIONAL_REJECTED` | Sender not in allowed list (funds bounced) |
-| -13 | `QUGATE_INVALID_ORACLE_CONFIG` | Reserved (invalid oracle config — mode not yet available) |
+| -13 | `QUGATE_INVALID_ORACLE_CONFIG` | Reserved (mode slot 5 not yet available) |
 | -14 | `QUGATE_INVALID_CHAIN` | Chain target invalid, depth exceeded, or cycle detected |
 | -15 | `QUGATE_OWNER_MISMATCH` | gate.owner != expectedOwner in sendToGateVerified |
 | -16 | `QUGATE_HEARTBEAT_TRIGGERED` | heartbeat() called after gate already triggered |
@@ -1414,9 +1414,9 @@ No QU can be permanently locked in the contract (assuming the owner retains acce
 | 6 | `QUGATE_LOG_DUST_BURNED` | Dust amount burned |
 | 7 | `QUGATE_LOG_FEE_CHANGED` | Fee parameter changed (future) |
 | 8 | `QUGATE_LOG_GATE_EXPIRED` | Gate auto-closed due to inactivity |
-| 9 | `QUGATE_LOG_ORACLE_TRIGGERED` | Reserved (oracle condition met) |
-| 10 | `QUGATE_LOG_ORACLE_EXHAUSTED` | Reserved (oracle reserve insufficient) |
-| 11 | `QUGATE_LOG_ORACLE_SUBSCRIBED` | Reserved (oracle subscription established) |
+| 9 | `QUGATE_LOG_ORACLE_TRIGGERED` | Reserved |
+| 10 | `QUGATE_LOG_ORACLE_EXHAUSTED` | Reserved |
+| 11 | `QUGATE_LOG_ORACLE_SUBSCRIBED` | Reserved |
 | 12 | `QUGATE_LOG_CHAIN_HOP` | Chain hop executed — funds routed to next gate |
 | 13 | `QUGATE_LOG_CHAIN_CYCLE` | Chain cycle detected or max depth exceeded |
 | 14 | `QUGATE_LOG_CHAIN_HOP_INSUFFICIENT` | Hop fee not payable; funds stranded in currentBalance |

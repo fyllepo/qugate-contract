@@ -14,7 +14,7 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 | THRESHOLD | 2 | Accumulate until target, then release |
 | RANDOM | 3 | Select one recipient per payment (tick entropy, not cryptographic) |
 | CONDITIONAL | 4 | Only forward from whitelisted senders |
-| ORACLE | 5 | Oracle-triggered distribution |
+| _(reserved)_ | 5 | Reserved — oracle mode pending infrastructure |
 | HEARTBEAT | 6 | Dead-man's switch — distribute if no ping for N epochs |
 | MULTISIG | 7 | M-of-N guardian approval before release |
 | TIME_LOCK | 8 | Hold until unlock epoch |
@@ -23,7 +23,7 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 - **Versioned gate IDs**: `gateId = ((generation+1) << 20) | slotIndex`. Prevents stale ID reuse.
 - **Gate-as-Recipient**: `recipientGateIds[8]` array — recipients can be other gates. `-1` = wallet, `>= 0` = gate ID. Routed internally via `routeToGate()`.
 - **Deferred routing pattern**: Mode processors can't call `routeToGate` directly (circular struct). They populate `deferredGateSlots/deferredGateAmounts` in output. Callers dispatch.
-- **Chain forwarding**: `chainNextGateId` forwards remaining balance after distribution. Max 3 hops. ORACLE excluded (has own callback). All other modes supported.
+- **Chain forwarding**: `chainNextGateId` forwards remaining balance after distribution. Max 3 hops. All active modes supported.
 - **Transfer-first**: All `qpi.transfer()` calls check `>= 0` before mutating state. Tagged `[QG-01]` through `[QG-17]`.
 - **invReward capture**: Every procedure captures `qpi.invocationReward()` into `locals.invReward` at entry.
 
