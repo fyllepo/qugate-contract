@@ -994,7 +994,6 @@ public:
         processConditional_input condIn;
         processConditional_output condOut;
         processConditional_locals condLocals;
-        QUGATE_TimeLockConfig tlCfg;
     };
 
     struct processMultisigVote_input { uint64 slotIdx; uint64 gateId; sint64 amount; };
