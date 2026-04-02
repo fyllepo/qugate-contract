@@ -2941,8 +2941,10 @@ public:
                     currentChainGateId = locals.nextChainGate.chainNextGateId;
                     hop += 1;
                 }
-                // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance
-                if (chainAmount > 0)
+                // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance.
+                // Natural termination at a terminal gate leaves currentChainGateId == -1
+                // and must not be treated as delivery failure.
+                if (chainAmount > 0 && currentChainGateId != -1)
                 {
                     locals.gate = state.get()._gates.get(locals.slotIdx);
                     locals.gate.currentBalance += (uint64)chainAmount;
@@ -3407,8 +3409,10 @@ public:
                     currentChainGateId = locals.nextChainGate.chainNextGateId;
                     hop += 1;
                 }
-                // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance
-                if (chainAmount > 0)
+                // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance.
+                // Natural termination at a terminal gate leaves currentChainGateId == -1
+                // and must not be treated as delivery failure.
+                if (chainAmount > 0 && currentChainGateId != -1)
                 {
                     locals.gate = state.get()._gates.get(locals.slotIdx);
                     locals.gate.currentBalance += (uint64)chainAmount;
@@ -6968,8 +6972,10 @@ public:
                             currentChainGateId = nextGate.chainNextGateId;
                             hop++;
                         }
-                        // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance
-                        if (chainAmount > 0)
+                        // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance.
+                        // Natural termination at a terminal gate leaves currentChainGateId == -1
+                        // and must not be treated as delivery failure.
+                        if (chainAmount > 0 && currentChainGateId != -1)
                         {
                             locals.gate = state.get()._gates.get(locals.i);
                             locals.gate.currentBalance += (uint64)chainAmount;
