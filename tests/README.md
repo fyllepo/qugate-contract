@@ -32,7 +32,7 @@ End-to-end tests that run against a live Qubic Core-Lite testnet node. Each scri
 | `test_gate_lifecycle.py` | Full lifecycle: create → send → update → close |
 | `test_gate_chaining.py` | Multi-gate pipeline composability (manual forwarding) |
 | `test_multi_sender.py` | Multiple senders to same gate |
-| `test_oracle.py` | ORACLE mode: creation, fundGate, condition logic, ONCE/RECURRING |
+| `test_oracle.py` | ORACLE mode (reserved): verifies `createGate` returns `QUGATE_UNSUPPORTED_MODE` |
 | `test_chain.py` | Chain gates: automatic forwarding, hop fees, depth limits |
 | `test_testnet.py` | End-to-end testnet smoke test |
 | `test_verified.py` | sendToGateVerified: owner check, mismatch refund |

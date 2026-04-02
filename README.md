@@ -34,7 +34,7 @@ QuGate is a **network primitive** — shared, permissionless payment routing inf
 
 ## Overview
 
-QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of nine modes (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, ORACLE, HEARTBEAT, MULTISIG, TIME_LOCK). Gates are composable: the output of one gate can be forwarded into another, enabling multi-stage payment pipelines without writing custom contracts.
+QuGate introduces **gates** — configurable routing nodes that automatically forward QU payments according to predefined rules. Each gate supports one of nine mode slots (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK — slot 5 ORACLE is reserved pending oracle infrastructure). Gates are composable: the output of one gate can be forwarded into another, enabling multi-stage payment pipelines without writing custom contracts.
 
 Gate-to-gate forwarding can happen in two ways:
 1. **Manual forwarding**: An external actor (client app, bot) calls sendToGate on the next gate.
@@ -66,7 +66,7 @@ Gate-to-gate forwarding can happen in two ways:
 | THRESHOLD | `QUGATE_MODE_THRESHOLD` | 2 | Accumulate until threshold reached, then forward |
 | RANDOM | `QUGATE_MODE_RANDOM` | 3 | Probabilistic selection per payment |
 | CONDITIONAL | `QUGATE_MODE_CONDITIONAL` | 4 | Sender-restricted forwarding (whitelist) |
-| ORACLE | `QUGATE_MODE_ORACLE` | 5 | Oracle-triggered distribution on price/time condition |
+| ORACLE | `QUGATE_MODE_ORACLE` | 5 | **Reserved** — pending oracle infrastructure. `createGate` returns `QUGATE_UNSUPPORTED_MODE`. |
 | HEARTBEAT | `QUGATE_MODE_HEARTBEAT` | 6 | Dead-man's switch: distribute if owner goes silent |
 | MULTISIG | `QUGATE_MODE_MULTISIG` | 7 | M-of-N guardian approval before funds release |
 | TIME_LOCK | `QUGATE_MODE_TIME_LOCK` | 8 | Holds funds until a target epoch, then releases to recipient |
@@ -122,17 +122,9 @@ When the sender is authorized, the full amount is forwarded to recipient 0.
 
 **Validation**: `allowedSenderCount` must be <= 8.
 
-### QUGATE_MODE_ORACLE (5) — Oracle-Triggered Distribution
+### QUGATE_MODE_ORACLE (5) — Reserved
 
-Accumulates incoming QU in `currentBalance`. An oracle subscription fires each epoch; when the configured condition (price above/below, or time-after) is met, the entire balance is distributed to recipients via SPLIT ratios.
-
-**Condition types**: `PRICE_ABOVE` (0), `PRICE_BELOW` (1), `TIME_AFTER` (2). Threshold is a price ratio scaled by 1e6, or a unix timestamp for `TIME_AFTER`.
-
-**Trigger modes**: `ONCE` (0) — gate auto-closes after first trigger. `RECURRING` (1) — gate resets and continues accumulating.
-
-**Oracle reserve**: The gate maintains an `oracleReserve` (QU) to pay the per-epoch subscription fee (10,000 QU). When the reserve is exhausted, the subscription lapses until re-funded via `fundGate`. Excess QU sent at creation (above the creation fee) is deposited into the oracle reserve.
-
-**Validation**: `oracleCondition` must be 0-2. `oracleThreshold` must be > 0. `oracleTriggerMode` must be 0 or 1.
+Mode slot 5 is reserved for oracle-triggered distribution. It is not yet available — `createGate` with `mode=5` returns `QUGATE_UNSUPPORTED_MODE`. The slot will be activated when Qubic oracle infrastructure is ready. Oracle-related fields in gate structs (oracleId, oracleCurrency1/2, oracleCondition, oracleTriggerMode, oracleThreshold, oracleReserve, oracleSubscriptionId) are present in the wire format but unused.
 
 ---
 
@@ -542,7 +534,7 @@ Jackpot Pool (THRESHOLD 10M QU)
 
 ### Deferred routing pattern
 
-Mode processors (processSplit, etc.) cannot call `routeToGate` directly (circular struct dependency). Instead, they populate deferred output fields. The caller (`sendToGate`, `sendToGateVerified`, `OraclePriceNotification`) dispatches the deferred routing after the mode processor returns.
+Mode processors (processSplit, etc.) cannot call `routeToGate` directly (circular struct dependency). Instead, they populate deferred output fields. The caller (`sendToGate`, `sendToGateVerified`) dispatches the deferred routing after the mode processor returns.
 
 ### Interaction with chain forwarding
 
@@ -586,7 +578,7 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 | 7 | getGatesByOwner | PUBLIC_FUNCTION | List gate IDs owned by an address |
 | 8 | getGateBatch | PUBLIC_FUNCTION | Batch query up to 32 gates by ID |
 | 9 | getFees | PUBLIC_FUNCTION | Query current fee parameters |
-| 10 | fundGate | PUBLIC_PROCEDURE | Add QU to oracle or chain reserve |
+| 10 | fundGate | PUBLIC_PROCEDURE | Add QU to chain reserve (or oracle reserve, when available) |
 | 11 | setChain | PUBLIC_PROCEDURE | Set or clear a chain link (owner only) |
 | 12 | sendToGateVerified | PUBLIC_PROCEDURE | Like sendToGate, but verifies gate owner before routing |
 | 13 | configureHeartbeat | PUBLIC_PROCEDURE | Configure HEARTBEAT gate params and beneficiaries |
@@ -599,7 +591,7 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 | 20 | getTimeLockState | PUBLIC_FUNCTION | Query TIME_LOCK gate state and epochs remaining |
 | 21 | setAdminGate | PUBLIC_PROCEDURE | Set or clear admin gate (MULTISIG governance) on any gate |
 | 22 | getAdminGate | PUBLIC_FUNCTION | Query admin gate configuration for a gate |
-| 23 | withdrawReserve | PUBLIC_PROCEDURE | Withdraw from oracle or chain reserve without closing (owner only) |
+| 23 | withdrawReserve | PUBLIC_PROCEDURE | Withdraw from chain reserve (or oracle reserve, when available) without closing (owner only) |
 | 24 | getGatesByMode | PUBLIC_FUNCTION | Query up to 16 active gates matching a given mode |
 | 25 | getGateBySlot | PUBLIC_FUNCTION | Query a gate by raw slot index (returns versioned gate ID + full state) |
 | 26 | getLatestExecution | PUBLIC_FUNCTION | Query the latest execution metadata for a gate (outcome, recipient, tick) |
@@ -718,7 +710,7 @@ Returns full gate configuration and statistics.
 | owner | id | Gate owner public key |
 | totalReceived | uint64 | Cumulative QU received |
 | totalForwarded | uint64 | Cumulative QU forwarded |
-| currentBalance | uint64 | Held balance (THRESHOLD/ORACLE mode) |
+| currentBalance | uint64 | Held balance (THRESHOLD mode) |
 | threshold | uint64 | Threshold amount |
 | createdEpoch | uint16 | Epoch when gate was created |
 | lastActivityEpoch | uint16 | Epoch of last send/update |
@@ -726,8 +718,8 @@ Returns full gate configuration and statistics.
 | ratios | Array\<uint64, 8\> | Recipient ratios |
 | allowedSenders | Array\<id, 8\> | Allowed sender addresses (CONDITIONAL mode) |
 | allowedSenderCount | uint8 | Number of allowed senders |
-| oracleReserve | sint64 | QU remaining in oracle subscription reserve |
-| oracleSubscriptionId | sint32 | Current oracle subscription ID (-1 if not subscribed) |
+| oracleReserve | sint64 | Reserved (oracle subscription reserve, unused) |
+| oracleSubscriptionId | sint32 | Reserved (oracle subscription ID, unused) |
 | chainNextGateId | sint64 | Versioned gate ID of next gate in chain (-1 if no chain) |
 | chainReserve | sint64 | QU remaining in chain hop fee reserve |
 | chainDepth | uint8 | This gate's position in its chain (0 = root) |
@@ -782,14 +774,14 @@ Performs a linear scan of all gate slots. Returns up to 16 gates.
 
 #### fundGate (Input Type 10)
 
-Adds QU to a gate's oracle reserve or chain reserve. Anyone can fund a gate.
+Adds QU to a gate's chain reserve (or oracle reserve, when available). Anyone can fund a gate.
 
 **Input**:
 
 | Field | Type | Size | Description |
 |-------|------|------|-------------|
 | gateId | sint64 | 8 | Target gate ID |
-| reserveTarget | uint8 | 1 | 0 = oracleReserve, 1 = chainReserve |
+| reserveTarget | uint8 | 1 | 0 = oracleReserve (reserved), 1 = chainReserve, 2 = idleReserve |
 
 **Output**:
 
@@ -1058,12 +1050,12 @@ Offset  Size   Field
 328     8      threshold (uint64)
 336     256    allowedSenders[8] (8 x 32-byte pubkeys)
 592     1      allowedSenderCount (uint8)
-600     32     oracleId (id)
-632     32     oracleCurrency1 (id)
-664     32     oracleCurrency2 (id)
-696     1      oracleCondition (uint8)
-697     1      oracleTriggerMode (uint8)
-704     8      oracleThreshold (sint64)
+600     32     oracleId (id) [reserved]
+632     32     oracleCurrency1 (id) [reserved]
+664     32     oracleCurrency2 (id) [reserved]
+696     1      oracleCondition (uint8) [reserved]
+697     1      oracleTriggerMode (uint8) [reserved]
+704     8      oracleThreshold (sint64) [reserved]
 712     8      chainNextGateId (sint64, -1 = no chain)
 720     64     recipientGateIds[8] (8 x sint64, -1 = wallet)
 ```
@@ -1116,20 +1108,20 @@ createdEpoch        uint16              Creation epoch
 lastActivityEpoch   uint16              Last send/update/create epoch
 totalReceived       uint64              Cumulative QU received
 totalForwarded      uint64              Cumulative QU forwarded
-currentBalance      uint64              Held balance (THRESHOLD/ORACLE mode)
+currentBalance      uint64              Held balance (THRESHOLD mode)
 threshold           uint64              Threshold amount
 roundRobinIndex     uint64              Next recipient index (ROUND_ROBIN)
 recipients          Array<id, 8>        Recipient addresses (256 bytes)
 ratios              Array<uint64, 8>    Ratios (64 bytes)
 allowedSenders      Array<id, 8>        Allowed senders (256 bytes)
-oracleId            id (32 bytes)       Oracle provider identity (ORACLE mode)
-oracleCurrency1     id (32 bytes)       First currency of price pair (ORACLE mode)
-oracleCurrency2     id (32 bytes)       Second currency of price pair (ORACLE mode)
-oracleCondition     uint8               Trigger condition type (ORACLE mode)
-oracleTriggerMode   uint8               ONCE (0) or RECURRING (1) (ORACLE mode)
-oracleThreshold     sint64              Price ratio * 1e6 or timestamp (ORACLE mode)
-oracleReserve       sint64              QU reserve for subscription fees (ORACLE mode)
-oracleSubscriptionId sint32             Subscription ID; -1 if not subscribed (ORACLE mode)
+oracleId            id (32 bytes)       [reserved] Oracle provider identity
+oracleCurrency1     id (32 bytes)       [reserved] First currency of price pair
+oracleCurrency2     id (32 bytes)       [reserved] Second currency of price pair
+oracleCondition     uint8               [reserved] Trigger condition type
+oracleTriggerMode   uint8               [reserved] ONCE (0) or RECURRING (1)
+oracleThreshold     sint64              [reserved] Price ratio * 1e6 or timestamp
+oracleReserve       sint64              [reserved] QU reserve for subscription fees
+oracleSubscriptionId sint32             [reserved] Subscription ID; -1 if not subscribed
 chainNextGateId     sint64              Next gate in chain; -1 if terminal
 chainReserve        sint64              QU reserve for hop fees
 chainDepth          uint8               Position in chain (0 = root)
@@ -1179,7 +1171,7 @@ Gates can expire for two reasons:
 
 The contract still uses two complementary mechanisms:
 
-1. **Lazy expiry on interaction** (primary): When any procedure (`sendToGate`, `sendToGateVerified`, `updateGate`, `closeGate`, `fundGate`, `setChain`) touches a gate, it checks whether the gate has exceeded its inactivity window. If so, the gate is expired inline — balances (current, oracle reserve, chain reserve, maintenance reserve) are refunded to the owner, the slot is freed, and the caller is refunded. The `getGate` function also reports expired gates as `active=0` without mutating state.
+1. **Lazy expiry on interaction** (primary): When any procedure (`sendToGate`, `sendToGateVerified`, `updateGate`, `closeGate`, `fundGate`, `setChain`) touches a gate, it checks whether the gate has exceeded its inactivity window. If so, the gate is expired inline — balances (current, chain reserve, maintenance reserve) are refunded to the owner, the slot is freed, and the caller is refunded. The `getGate` function also reports expired gates as `active=0` without mutating state.
 
 2. **END_EPOCH sweep** (safety net): The `END_EPOCH` handler still scans all gates each epoch. This catches gates that nobody interacts with. At scale, most expiries happen lazily, reducing `END_EPOCH` processing load.
 
@@ -1190,7 +1182,7 @@ if (epoch() - lastActivityEpoch >= expiryEpochs)  →  expire
 ```
 
 Expired gates:
-- Have any held balance (current, oracle reserve, chain reserve, maintenance reserve) refunded to the owner
+- Have any held balance (current, chain reserve, maintenance reserve) refunded to the owner
 - Are marked inactive
 - Have their slot pushed onto the free-list
 - Have their generation counter incremented (invalidates old gate IDs)
@@ -1256,7 +1248,7 @@ Until the shareholder infrastructure is wired, fees are set during `INITIALIZE` 
 
 ### Why 9 modes?
 
-These nine modes cover the most common payment routing and custody patterns observed in blockchain applications: proportional splitting (revenue share), rotation (load balancing/fairness), accumulation (crowdfunding/escrow), randomization (lottery/raffle), access control (whitelisting), oracle-triggered distribution (conditional release), heartbeat-based inheritance (dead-man's switch), M-of-N multisig approval (DAO treasury, joint accounts), and epoch-based time locks (vesting, escrow). Together they can be composed to handle most real-world payment flows without custom contracts.
+Eight active modes cover the most common payment routing and custody patterns observed in blockchain applications: proportional splitting (revenue share), rotation (load balancing/fairness), accumulation (crowdfunding/escrow), randomization (lottery/raffle), access control (whitelisting), heartbeat-based inheritance (dead-man's switch), M-of-N multisig approval (DAO treasury, joint accounts), and epoch-based time locks (vesting, escrow). Mode slot 5 (ORACLE) is reserved for oracle-triggered distribution, pending oracle infrastructure. Together they can be composed to handle most real-world payment flows without custom contracts.
 
 ### Why 8 max recipients?
 
@@ -1299,7 +1291,7 @@ Creation fees, dust burns, and chain hop fees are destroyed via `qpi.burn()`. In
 
 ### No Rug-Pull
 
-Oracle gates with a non-zero `currentBalance` cannot have their recipients changed via `updateGate`. This prevents an owner from redirecting accumulated funds to a different address after senders have deposited.
+THRESHOLD gates with a non-zero `currentBalance` cannot have their recipients changed via `updateGate`. This prevents an owner from redirecting accumulated funds to a different address after senders have deposited.
 
 ### Versioned Gate IDs
 
@@ -1313,13 +1305,9 @@ Chain links are validated at creation and update time. The contract walks forwar
 
 RANDOM mode uses `mod(totalReceived + tick(), recipientCount)` as entropy. Both `totalReceived` and `tick()` are publicly observable before transaction submission, making recipient selection predictable to a determined observer. Not suitable for use cases requiring cryptographic randomness.
 
-### TIME_AFTER Oracle Requirement
-
-The `TIME_AFTER` condition type (oracle condition 2) interprets the oracle reply's `numerator` field as a tick-derived timestamp. This requires a Price oracle whose reply encodes time in the numerator — not all oracles do this. Verify oracle compatibility before configuring `TIME_AFTER` gates.
-
 ### activeGates Underflow Guard
 
-The `active == 1` check before decrementing `_activeGates` in `closeGate`, `END_EPOCH`, and oracle ONCE-mode auto-close prevents underflow from double-close scenarios.
+The `active == 1` check before decrementing `_activeGates` in `closeGate` and `END_EPOCH` prevents underflow from double-close scenarios.
 
 ### Transfer-First State Updates [QG-01..QG-17]
 
@@ -1361,15 +1349,11 @@ When updateGate reduces recipientCount, the roundRobinIndex is automatically res
 
 Incomplete proposals (fewer than M votes) automatically reset after proposalExpiryEpochs. Funds remain in the gate and a new proposal can begin. Guardian votes are tracked via a bitmap — each guardian can only vote once per proposal.
 
-### Oracle Reserve Exhaustion
-
-When an ORACLE gate's oracleReserve drops below the per-epoch subscription fee, the oracle subscription lapses. Accumulated funds remain in currentBalance. The owner can re-fund via fundGate or withdraw via withdrawReserve. No funds are lost.
-
 ### Fund Recovery
 
 The owner can always recover funds via:
-- closeGate: refunds currentBalance, oracleReserve, chainReserve to owner
-- withdrawReserve: retrieves oracle or chain reserves without closing
+- closeGate: refunds currentBalance, chainReserve, maintenanceReserve to owner
+- withdrawReserve: retrieves chain or idle reserves without closing
 - cancelTimeLock: refunds TIME_LOCK balance (if cancellable)
 
 No QU can be permanently locked in the contract (assuming the owner retains access).
@@ -1393,7 +1377,7 @@ No QU can be permanently locked in the contract (assuming the owner retains acce
 | -10 | `QUGATE_INVALID_THRESHOLD` | Threshold is 0 for THRESHOLD mode |
 | -11 | `QUGATE_INVALID_SENDER_COUNT` | allowedSenderCount exceeds QUGATE_MAX_RECIPIENTS |
 | -12 | `QUGATE_CONDITIONAL_REJECTED` | Sender not in allowed list (funds bounced) |
-| -13 | `QUGATE_INVALID_ORACLE_CONFIG` | Invalid oracle condition, threshold, or trigger mode |
+| -13 | `QUGATE_INVALID_ORACLE_CONFIG` | Reserved (invalid oracle config — mode not yet available) |
 | -14 | `QUGATE_INVALID_CHAIN` | Chain target invalid, depth exceeded, or cycle detected |
 | -15 | `QUGATE_OWNER_MISMATCH` | gate.owner != expectedOwner in sendToGateVerified |
 | -16 | `QUGATE_HEARTBEAT_TRIGGERED` | heartbeat() called after gate already triggered |
@@ -1412,6 +1396,7 @@ No QU can be permanently locked in the contract (assuming the owner retains acce
 | -29 | `QUGATE_INVALID_ADMIN_CYCLE` | adminGateId creates a circular admin chain (self or loop) |
 | -30 | `QUGATE_MULTISIG_PROPOSAL_ACTIVE` | configureMultisig blocked while proposal is in progress |
 | -31 | `QUGATE_INVALID_PARAMS` | Generic invalid parameter (e.g. bad lockMode or zero delayEpochs) |
+| -32 | `QUGATE_UNSUPPORTED_MODE` | Mode is reserved and not yet available (e.g. ORACLE mode 5) |
 
 ---
 
@@ -1429,9 +1414,9 @@ No QU can be permanently locked in the contract (assuming the owner retains acce
 | 6 | `QUGATE_LOG_DUST_BURNED` | Dust amount burned |
 | 7 | `QUGATE_LOG_FEE_CHANGED` | Fee parameter changed (future) |
 | 8 | `QUGATE_LOG_GATE_EXPIRED` | Gate auto-closed due to inactivity |
-| 9 | `QUGATE_LOG_ORACLE_TRIGGERED` | Oracle condition met; accumulated balance distributed |
-| 10 | `QUGATE_LOG_ORACLE_EXHAUSTED` | Oracle reserve insufficient for subscription fee |
-| 11 | `QUGATE_LOG_ORACLE_SUBSCRIBED` | Oracle subscription established for this epoch |
+| 9 | `QUGATE_LOG_ORACLE_TRIGGERED` | Reserved (oracle condition met) |
+| 10 | `QUGATE_LOG_ORACLE_EXHAUSTED` | Reserved (oracle reserve insufficient) |
+| 11 | `QUGATE_LOG_ORACLE_SUBSCRIBED` | Reserved (oracle subscription established) |
 | 12 | `QUGATE_LOG_CHAIN_HOP` | Chain hop executed — funds routed to next gate |
 | 13 | `QUGATE_LOG_CHAIN_CYCLE` | Chain cycle detected or max depth exceeded |
 | 14 | `QUGATE_LOG_CHAIN_HOP_INSUFFICIENT` | Hop fee not payable; funds stranded in currentBalance |
@@ -1501,7 +1486,7 @@ g++ -std=c++17 -I. contract_qugate.cpp -lgtest -lgtest_main -o qugate_tests
 ```
 
 The test suite (`contract_qugate.cpp`) contains 73 unit tests covering:
-- All 9 gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, oracle trigger/distribution, heartbeat dead-man's switch, M-of-N multisig approval, epoch-based time lock)
+- All 8 active gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, heartbeat dead-man's switch, M-of-N multisig approval, epoch-based time lock)
 - Chain gates (hop fees, chain reserve, depth limits, cycle detection)
 - Versioned gate IDs and sendToGateVerified
 - Anti-spam features (escalating fees at 0/1024/2048 gates, dust burn, fee overpayment refund, gate expiry with balance refund, activity epoch tracking)
@@ -1569,7 +1554,7 @@ python3 tests/test_attack_vectors.py   # Security edge cases
 ### Testnet Results
 
 Tested on Qubic Core-Lite v1.283.0 (local testnet, 2026-03-22):
-- All 9 modes verified with real contract execution (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, ORACLE, HEARTBEAT, MULTISIG, TIME_LOCK)
+- All 8 active modes verified with real contract execution (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK)
 - 50-gate stress test: 50/50 creates, sends across all modes, slot reuse verified
 - 7 attack vectors tested (unauthorized close, sends to non-existent/closed gates, double close, zero sends, slot reuse)
 - Node stable on Hetzner AX42 (64GB RAM, Ryzen 7 PRO 8700GE), QuGate at index 26
@@ -1620,7 +1605,7 @@ See `TESTNET_RESULTS.md` for detailed results.
 
 ## QPI Compliance
 
-QuGate is written to pass `qubic-contract-verify`. The `#ifndef CONTRACT_INDEX` preprocessor guard was removed; testnet builds pass the index via cmake flags (`-DCONTRACT_INDEX=26`). The oracle template syntax (`OracleNotificationInput<OI::Price>`) is flagged by the verifier (v0.3.0-beta limitation — does not support templates).
+QuGate is written to pass `qubic-contract-verify`. The `#ifndef CONTRACT_INDEX` preprocessor guard was removed; testnet builds pass the index via cmake flags (`-DCONTRACT_INDEX=26`).
 
 | Requirement | Status |
 |-------------|--------|

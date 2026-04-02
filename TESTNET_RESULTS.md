@@ -51,9 +51,9 @@
 | 24 | Attack: zero-amount send (no burn) | ✅ |
 | 25 | Attack: slot reuse — stale ID invalid after recycle | ✅ |
 
-## Note on Oracle, Chain, and Verified Sends
+## Note on Chain, Verified Sends, and Oracle
 
-Oracle mode (QUGATE_MODE_ORACLE=5), chain gates, versioned gate IDs, and sendToGateVerified were added after the initial testnet run. Oracle features require live oracle infrastructure. Chain gates and sendToGateVerified are covered in unit tests.
+Chain gates, versioned gate IDs, and sendToGateVerified were added after the initial testnet run and are covered in unit tests. Oracle mode (slot 5) is reserved pending oracle infrastructure — `createGate` with `mode=5` returns `QUGATE_UNSUPPORTED_MODE`.
 
 ---
 
