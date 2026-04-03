@@ -18,7 +18,6 @@ It currently covers well:
 - ROUND_ROBIN
 - THRESHOLD
 - CONDITIONAL
-- ORACLE
 - fee escalation / dust / expiry / free-list basics
 - chain routing basics
 
