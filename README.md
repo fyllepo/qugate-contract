@@ -2,7 +2,7 @@
 
 QuGate is a **network primitive** — shared, permissionless payment routing infrastructure for the Qubic network. One shared contract that the entire ecosystem can use, instead of every project building its own payment logic. Creation, dust, and chain-hop fees are burned. Idle gates maintain a reserve-backed inactivity budget, with upkeep split between burn and dividends.
 
-**Status**: Local testnet verified. Preparing for mainnet proposal.
+**Status**: Testnet verified. 128/128 integration scenarios passing. Preparing for mainnet proposal.
 **Author**: fyllepo (Discord: phileepphilop)
 **Repository**: [github.com/fyllepo/qugate-contract](https://github.com/fyllepo/qugate-contract)
 
@@ -1553,13 +1553,15 @@ python3 tests/test_attack_vectors.py   # Security edge cases
 
 ### Testnet Results
 
-Tested on Qubic Core-Lite v1.283.0 (local testnet, 2026-03-22):
-- All 8 active modes verified with real contract execution (SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK)
-- 50-gate stress test: 50/50 creates, sends across all modes, slot reuse verified
-- 7 attack vectors tested (unauthorized close, sends to non-existent/closed gates, double close, zero sends, slot reuse)
-- Node stable on Hetzner AX42 (64GB RAM, Ryzen 7 PRO 8700GE), QuGate at index 26
-- HTTP RPC responsive under external traffic with 503 race condition fix applied
-- 4+ hours continuous operation, zero memory growth
+Tested on Qubic Core-Lite v1.283.0 (local testnet, 2026-04-03):
+- **128/128 integration scenarios passing** across 8 parallel wallet lanes
+- All 8 active gate modes verified: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK
+- Full governance lifecycle: admin gate attachment, approval windows, governed mutations, expiry recovery
+- Complete lifecycle coverage: idle charging, delinquency, expiry, stale-ID rejection, slot reuse
+- Capacity tests: 8-recipient splits, zero-ratio skip, large-amount precision, gate-as-recipient mix
+- Concurrency tests: parallel senders to same gate, fee escalation, maintenance charge accounting
+- Attack/edge cases: unauthorized close, send-to-closed, dust burn, chain depth limit, double close, slot reuse
+- Node stable throughout entire multi-hour run on fresh state
 
 See `TESTNET_RESULTS.md` for detailed results.
 
