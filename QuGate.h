@@ -1374,9 +1374,9 @@ public:
         }
 
         // Validate mode
-        if (input.mode > QUGATE_MODE_TIME_LOCK)
+        if (input.mode > QUGATE_MODE_TIME_LOCK || input.mode == QUGATE_MODE_ORACLE)
         {
-            // Refund all
+            // Refund all — mode 5 (ORACLE) is reserved pending infrastructure
             qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_INVALID_MODE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
