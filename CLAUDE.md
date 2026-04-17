@@ -1,7 +1,7 @@
 # QuGate Contract — Agent Instructions
 
 ## Project
-QuGate is a Qubic blockchain smart contract — a programmable payment routing primitive with 9 gate modes. Single file: `QuGate.h` (~5800 lines).
+QuGate is a Qubic blockchain smart contract — a programmable payment routing primitive with 8 active gate modes (slot 5 reserved). Single file: `QuGate.h`.
 
 ## Contract Index
 **26** — hardcoded in the core-lite build at `contract_def.h`. NOT in QuGate.h (removed for contract-verify compliance). Testnet builds pass `-DCONTRACT_INDEX=26` via cmake.
@@ -24,15 +24,18 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 - **Gate-as-Recipient**: `recipientGateIds[8]` array — recipients can be other gates. `-1` = wallet, `>= 0` = gate ID. Routed internally via `routeToGate()`.
 - **Deferred routing pattern**: Mode processors can't call `routeToGate` directly (circular struct). They populate `deferredGateSlots/deferredGateAmounts` in output. Callers dispatch.
 - **Chain forwarding**: `chainNextGateId` forwards remaining balance after distribution. Max 3 hops. All active modes supported.
+- **Unified reserve**: Single `reserve` field per gate covers both chain hop fees and idle maintenance. Excess creation fee auto-seeds it. `fundGate(gateId)` tops it up.
 - **Transfer-first**: All `qpi.transfer()` calls check `>= 0` before mutating state. Tagged `[QG-01]` through `[QG-17]`.
 - **invReward capture**: Every procedure captures `qpi.invocationReward()` into `locals.invReward` at entry.
 
 ## Struct Sizes (must match demo encoders)
 | Struct | Size | Key offset |
 |--------|------|------------|
-| `createGate_input` | 784 bytes | `recipientGateIds` at 720 |
-| `updateGate_input` | 672 bytes | `recipientGateIds` at 608 |
-| `getGate_output` | 784 bytes | `recipientGateIds` at 720 |
+| `createGate_input` | 672 bytes | `chainNextGateId` at 600, `recipientGateIds` at 608 |
+| `updateGate_input` | 672 bytes | `recipientGateIds` at 608 (unchanged) |
+| `getGate_output` | 776 bytes | `reserve` at 680, `recipientGateIds` at 712 |
+| `fundGate_input` | 8 bytes | just `gateId` (no reserveTarget) |
+| `withdrawReserve_input` | 16 bytes | `gateId` at 0, `amount` at 8 (no reserveTarget) |
 
 ## Error Codes
 | Code | Constant | Added |
@@ -54,7 +57,7 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 ## Testing
 - `contract_qugate.cpp` — 70 unit tests (Google Test, Allman style)
 - `tests/` — 17 Python integration tests (require live testnet node at 127.0.0.1:41841)
-- CI: style lint ✅, integration tests skip in CI ✅, contract-verify allows oracle template failure
+- CI: style lint ✅, integration tests skip in CI ✅
 - Guard rails: `scripts/contract_guard.py` checks harness constant drift, public-function/private-procedure misuse, and warns on large locals hotspots
 
 ## Refactor Guard Rails

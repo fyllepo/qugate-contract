@@ -10,7 +10,7 @@
 //   THRESHOLD   - Accumulate until amount reached, then forward
 //   RANDOM      - Select one recipient per payment using tick-based entropy
 //   CONDITIONAL - Only forward if sender matches whitelist, else bounce
-//   ORACLE      - Oracle-triggered distribution based on price/time conditions
+//   ORACLE      - Reserved (pending oracle infrastructure)
 //   HEARTBEAT   - Dead-man's switch; distributes if not pinged within N epochs
 //                 Recipients configured via configureHeartbeat (recipientCount=0 at creation)
 //   MULTISIG    - M-of-N guardian approval before funds release
@@ -30,11 +30,6 @@
 //   internally). External callers use versioned gate IDs:
 //     gateId = ((generation + 1) << QUGATE_GATE_ID_SLOT_BITS) | slotIndex
 //   The generation counter increments each time a slot is recycled, making stale IDs invalid.
-//
-//   Oracle gates (QUGATE_MODE_ORACLE) subscribe to a Qubic price oracle at the start of each
-//   epoch (BEGIN_EPOCH). The oracle callback (OraclePriceNotification) fires once per configured
-//   interval; when the trigger condition is met, accumulated funds are distributed and optionally
-//   forwarded via chain gates.
 //
 //   Chain gates link up to QUGATE_MAX_CHAIN_DEPTH gates in sequence. After a gate distributes
 //   funds, the forwarded amount is passed to the next gate in the chain (routeToGate). Each hop
@@ -97,19 +92,6 @@ constexpr uint8 QUGATE_EXEC_HELD      = 2;
 constexpr uint8 QUGATE_EXEC_REFUNDED  = 3;
 constexpr uint8 QUGATE_EXEC_BURNED    = 4;
 constexpr uint8 QUGATE_EXEC_REJECTED  = 5;
-
-// Oracle condition types
-constexpr uint8 QUGATE_ORACLE_COND_PRICE_ABOVE = 0;
-constexpr uint8 QUGATE_ORACLE_COND_PRICE_BELOW = 1;
-constexpr uint8 QUGATE_ORACLE_COND_TIME_AFTER  = 2;
-
-// Oracle trigger modes
-constexpr uint8 QUGATE_ORACLE_TRIGGER_ONCE      = 0;
-constexpr uint8 QUGATE_ORACLE_TRIGGER_RECURRING = 1;
-
-// Oracle fees and periods
-constexpr sint64 QUGATE_ORACLE_SUBSCRIPTION_FEE = 10000; // QU per epoch (1-min interval)
-constexpr uint32 QUGATE_ORACLE_NOTIFY_PERIOD_MS = 60000; // 1 minute
 
 // Chain gate constants
 constexpr uint8  QUGATE_MAX_CHAIN_DEPTH            = 3;
@@ -295,28 +277,19 @@ public:
         uint16 lastActivityEpoch;   // Network epoch of last sendToGate or updateGate call; used for expiry
         uint64 totalReceived;       // Cumulative QU received by this gate across all sendToGate calls
         uint64 totalForwarded;      // Cumulative QU forwarded to recipients (excludes dust burns)
-        uint64 currentBalance;      // Held balance awaiting release: THRESHOLD mode accumulates here; ORACLE mode accumulates here between oracle triggers
+        uint64 currentBalance;      // Held balance awaiting release: THRESHOLD mode accumulates here
         uint64 threshold;           // Release threshold for THRESHOLD mode; 0 for other modes
         uint64 roundRobinIndex;     // Next recipient index for ROUND_ROBIN mode; wraps at recipientCount
         Array<id, 8> recipients;     // Recipient public keys; indices beyond recipientCount are zeroed
-        Array<uint64, 8> ratios;         // Ratio per recipient for SPLIT and ORACLE modes; others may zero these
+        Array<uint64, 8> ratios;         // Ratio per recipient for SPLIT mode; others may zero these
         Array<id, 8> allowedSenders; // Whitelist for CONDITIONAL mode; indices beyond allowedSenderCount are zeroed
-
-        // Oracle mode fields — only populated when mode == QUGATE_MODE_ORACLE
-        id     oracleId;               // Oracle provider identity (e.g. Price::getBinanceOracleId())
-        id     oracleCurrency1;        // First currency of the price pair query
-        id     oracleCurrency2;        // Second currency of the price pair query
-        uint8  oracleCondition;        // Trigger condition type: QUGATE_ORACLE_COND_PRICE_ABOVE/BELOW/TIME_AFTER
-        uint8  oracleTriggerMode;      // QUGATE_ORACLE_TRIGGER_ONCE (auto-close) or RECURRING (reset and continue)
-        sint64 oracleThreshold;        // Trigger threshold: price ratio scaled by 1e6, or numerator value for TIME_AFTER
-        sint64 oracleReserve;          // QU reserve to fund per-epoch oracle subscription fee (QUGATE_ORACLE_SUBSCRIPTION_FEE)
-        sint32 oracleSubscriptionId;   // Subscription ID returned by SUBSCRIBE_ORACLE; -1 if not subscribed
 
         // Chain gate fields — only active when chainNextGateId != -1
         sint64 chainNextGateId;   // Versioned gate ID of next gate in chain; -1 if this is a terminal gate
-        sint64 chainReserve;      // QU reserve to pay hop fees when forwarded amount is insufficient
         uint8  chainDepth;        // This gate's position in its chain (0 = root/trigger, increments toward leaf)
-        sint64 idleReserve; // QU reserve dedicated to idle-period maintenance charges
+
+        // Unified reserve — covers chain hop fees and idle maintenance
+        sint64 reserve;            // QU reserve for hop fees and inactivity maintenance; auto-seeded from excess creation fee
         uint16 nextIdleChargeEpoch; // Gate-specific due epoch for the next inactivity charge
 
         // Admin gate fields — governance via MULTISIG quorum
@@ -352,14 +325,6 @@ public:
         uint64 threshold;
         Array<id, 8> allowedSenders;
         uint8 allowedSenderCount;
-
-        // Oracle mode fields
-        id     oracleId;
-        id     oracleCurrency1;
-        id     oracleCurrency2;
-        uint8  oracleCondition;
-        uint8  oracleTriggerMode;
-        sint64 oracleThreshold;
 
         // Chain gate fields
         sint64 chainNextGateId;   // -1 for no chain
@@ -413,11 +378,10 @@ public:
         sint64 status;          //
     };
 
-    // Adds invocationReward to a gate reserve. reserveTarget: 0=oracleReserve, 1=chainReserve, 2=idleReserve.
+    // Adds invocationReward to a gate's unified reserve.
     struct fundGate_input
     {
         uint64 gateId;
-        uint8  reserveTarget;  // 0 = oracleReserve, 1 = chainReserve, 2 = idleReserve
     };
     struct fundGate_output
     {
@@ -578,11 +542,10 @@ public:
         Array<id, 8> guardians;    // Guardian public keys from the admin gate's QUGATE_MultisigConfig
     };
 
-    // Withdraw from a gate's oracleReserve, chainReserve, or idleReserve without closing. Owner only (or admin gate).
+    // Withdraw from a gate's unified reserve without closing. Owner only (or admin gate).
     struct withdrawReserve_input
     {
         uint64 gateId;
-        uint8  reserveTarget;  // 0 = oracleReserve, 1 = chainReserve, 2 = idleReserve
         uint64 amount;         // 0 = withdraw all
     };
     struct withdrawReserve_output
@@ -629,12 +592,9 @@ public:
         Array<uint64, 8> ratios;
         Array<id, 8> allowedSenders;
         uint8 allowedSenderCount;
-        sint64 oracleReserve;
-        sint32 oracleSubscriptionId;
         sint64 chainNextGateId;
-        sint64 chainReserve;
         uint8  chainDepth;
-        sint64 idleReserve;
+        sint64 reserve;
         uint16 nextIdleChargeEpoch;
         sint64 adminGateId;
         uint8  hasAdminGate;
@@ -716,15 +676,10 @@ public:
         Array<id, 8> allowedSenders;
         uint8 allowedSenderCount;
 
-        // Oracle mode fields
-        sint64 oracleReserve;
-        sint32 oracleSubscriptionId;
-
         // Chain gate fields
         sint64 chainNextGateId;
-        sint64 chainReserve;
         uint8  chainDepth;
-        sint64 idleReserve;
+        sint64 reserve;            // unified reserve (hop fees + idle maintenance)
         uint16 nextIdleChargeEpoch;
         sint64 adminGateId;    // -1 if no admin gate
         uint8  hasAdminGate;   // 1 if governed by admin gate
@@ -817,10 +772,6 @@ public:
         uint64 _earnedMaintenanceDividends;
         uint64 _distributedMaintenanceDividends;
         Array<uint16, QUGATE_MAX_GATES> _idleDelinquentEpochs;
-
-        // O(1) oracle callback lookup. Maintained by BEGIN_EPOCH and all close paths.
-        // O(1) reverse lookup: oracleSubscriptionId → slot index
-        HashMap<sint32, uint64, QUGATE_MAX_GATES> _subscriptionToSlot;
 
         // Heartbeat mode state — indexed by gate slot (same index as _gates)
         // Beneficiaries are stored inline in QUGATE_HeartbeatConfig
@@ -1317,40 +1268,9 @@ public:
         uint64 i;
     };
 
-    // Oracle notification callback types
-    typedef OracleNotificationInput<OI::Price> OraclePriceNotification_input;
-    typedef NoData OraclePriceNotification_output;
-
-    struct OraclePriceNotification_locals
-    {
-        uint64 slotIdx;
-        GateConfig gate;
-        QuGateLogger logger;
-        uint8 conditionMet;
-        sint64 priceScaled;
-        sint64 splitAmount;
-        processSplit_input splitIn;
-        processSplit_output splitOut;
-        processSplit_locals splitLocals;
-        // Chain forwarding locals
-        routeToGate_input chainIn;
-        routeToGate_output chainOut;
-        routeToGate_locals chainLocals;
-        GateConfig nextChainGate;
-        // Gate-as-recipient deferred dispatch temps
-        uint8 savedDeferredCount;
-        uint8 savedDeferredHopCount;
-        uint8 deferredDispatchIdx;
-        Array<uint64, 8> savedDeferredSlots;
-        Array<sint64, 8> savedDeferredAmounts;
-    };
-
     struct BEGIN_EPOCH_locals
     {
         uint64 i;
-        GateConfig gate;
-        QuGateLogger logger;
-        sint32 subId;
     };
 
     struct configureHeartbeat_locals
@@ -1543,22 +1463,6 @@ public:
             return;
         }
 
-        // Validate ORACLE mode
-        // NOTE: TIME_AFTER (condition 2) requires an oracle whose reply.numerator encodes unix time
-        if (input.mode == QUGATE_MODE_ORACLE)
-        {
-            if (input.oracleCondition > QUGATE_ORACLE_COND_TIME_AFTER
-                || input.oracleThreshold <= 0
-                || input.oracleTriggerMode > QUGATE_ORACLE_TRIGGER_RECURRING)
-            {
-                qpi.transfer(qpi.invocator(), locals.invReward);
-                output.status = QUGATE_INVALID_ORACLE_CONFIG;
-                locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
-                LOG_WARNING(locals.logger);
-                return;
-            }
-        }
-
         // Build the gate config
         locals.newGate.owner = qpi.invocator();
         locals.newGate.mode = input.mode;
@@ -1573,35 +1477,10 @@ public:
         locals.newGate.threshold = input.threshold;
         locals.newGate.roundRobinIndex = 0;
 
-        // Oracle fields
-        if (input.mode == QUGATE_MODE_ORACLE)
-        {
-            locals.newGate.oracleId = input.oracleId;
-            locals.newGate.oracleCurrency1 = input.oracleCurrency1;
-            locals.newGate.oracleCurrency2 = input.oracleCurrency2;
-            locals.newGate.oracleCondition = input.oracleCondition;
-            locals.newGate.oracleTriggerMode = input.oracleTriggerMode;
-            locals.newGate.oracleThreshold = input.oracleThreshold;
-            locals.newGate.oracleReserve = 0; // set below from excess fee
-            locals.newGate.oracleSubscriptionId = -1;
-        }
-        else
-        {
-            locals.newGate.oracleId = id::zero();
-            locals.newGate.oracleCurrency1 = id::zero();
-            locals.newGate.oracleCurrency2 = id::zero();
-            locals.newGate.oracleCondition = 0;
-            locals.newGate.oracleTriggerMode = 0;
-            locals.newGate.oracleThreshold = 0;
-            locals.newGate.oracleReserve = 0;
-            locals.newGate.oracleSubscriptionId = -1;
-        }
-
         // Chain fields
         locals.newGate.chainNextGateId = -1;
-        locals.newGate.chainReserve = 0;
         locals.newGate.chainDepth = 0;
-        locals.newGate.idleReserve = 0;
+        locals.newGate.reserve = 0; // seeded below from excess creation fee
         if (state.get()._idleWindowEpochs > 0)
         {
             locals.newGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
@@ -1832,18 +1711,11 @@ public:
         state.mut()._totalBurned += locals.currentFee;
         output.feePaid = locals.currentFee;
 
-        // Handle excess: for ORACLE mode, excess goes to oracleReserve; otherwise refund
+        // Excess creation fee seeds the unified reserve (no separate fundGate needed)
         if (locals.invReward > (sint64)locals.currentFee)
         {
-            if (input.mode == QUGATE_MODE_ORACLE)
-            {
-                locals.newGate.oracleReserve = locals.invReward - (sint64)locals.currentFee;
-                state.mut()._gates.set(locals.slotIdx, locals.newGate);
-            }
-            else
-            {
-                qpi.transfer(qpi.invocator(), locals.invReward - (sint64)locals.currentFee);
-            }
+            locals.newGate.reserve = locals.invReward - (sint64)locals.currentFee;
+            state.mut()._gates.set(locals.slotIdx, locals.newGate);
         }
 
         output.status = QUGATE_SUCCESS;
@@ -2326,7 +2198,7 @@ public:
     //
     // Hop fee priority:
     //   1. Deducted from forwarded amount if amount > QUGATE_CHAIN_HOP_FEE
-    //   2. Deducted from gate.chainReserve if amount <= QUGATE_CHAIN_HOP_FEE and reserve is sufficient
+    //   2. Deducted from gate.reserve if amount <= QUGATE_CHAIN_HOP_FEE and reserve is sufficient
     //   3. Funds stranded in gate.currentBalance if both are insufficient (QUGATE_LOG_CHAIN_HOP_INSUFFICIENT)
     //
     // input.hopCount is checked against QUGATE_MAX_CHAIN_DEPTH as a runtime safety guard.
@@ -2355,9 +2227,9 @@ public:
         locals.amountAfterFee = input.amount;
         if (input.amount <= QUGATE_CHAIN_HOP_FEE)
         {
-            if (locals.gate.chainReserve >= QUGATE_CHAIN_HOP_FEE)
+            if (locals.gate.reserve >= QUGATE_CHAIN_HOP_FEE)
             {
-                locals.gate.chainReserve -= QUGATE_CHAIN_HOP_FEE;
+                locals.gate.reserve -= QUGATE_CHAIN_HOP_FEE;
                 state.mut()._gates.set(input.slotIdx, locals.gate);
                 qpi.burn(QUGATE_CHAIN_HOP_FEE);
                 // amountAfterFee stays as input.amount (reserve paid the fee)
@@ -2450,7 +2322,7 @@ public:
         }
         else if (locals.gate.mode == QUGATE_MODE_ORACLE)
         {
-            // ORACLE mode in chain: accumulate into currentBalance
+            // ORACLE mode (reserved) in chain: accumulate into currentBalance
             locals.gate = state.get()._gates.get(input.slotIdx);
             locals.gate.currentBalance += locals.amountAfterFee;
             state.mut()._gates.set(input.slotIdx, locals.gate);
@@ -2557,25 +2429,11 @@ public:
                     locals.gate.currentBalance = 0;
                 }
             }
-            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            if (locals.gate.reserve > 0)
             {
-                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-01]
+                if (qpi.transfer(locals.gate.owner, locals.gate.reserve) >= 0) // [QG-01]
                 {
-                    locals.gate.oracleReserve = 0;
-                }
-            }
-            if (locals.gate.chainReserve > 0)
-            {
-                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-01]
-                {
-                    locals.gate.chainReserve = 0;
-                }
-            }
-            if (locals.gate.idleReserve > 0)
-            {
-                if (qpi.transfer(locals.gate.owner, locals.gate.idleReserve) >= 0) // [QG-01]
-                {
-                    locals.gate.idleReserve = 0;
+                    locals.gate.reserve = 0;
                 }
             }
             locals.gate.active = 0;
@@ -2768,7 +2626,7 @@ public:
         }
         else if (locals.gate.mode == QUGATE_MODE_ORACLE)
         {
-            // ORACLE mode: accumulate into currentBalance, oracle callback distributes
+            // ORACLE mode (reserved): accumulate into currentBalance
             locals.gate = state.get()._gates.get(locals.slotIdx);
             locals.gate.currentBalance += locals.amount;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
@@ -3013,25 +2871,11 @@ public:
                     locals.gate.currentBalance = 0;
                 }
             }
-            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            if (locals.gate.reserve > 0)
             {
-                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-02]
+                if (qpi.transfer(locals.gate.owner, locals.gate.reserve) >= 0) // [QG-02]
                 {
-                    locals.gate.oracleReserve = 0;
-                }
-            }
-            if (locals.gate.chainReserve > 0)
-            {
-                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-02]
-                {
-                    locals.gate.chainReserve = 0;
-                }
-            }
-            if (locals.gate.idleReserve > 0)
-            {
-                if (qpi.transfer(locals.gate.owner, locals.gate.idleReserve) >= 0) // [QG-02]
-                {
-                    locals.gate.idleReserve = 0;
+                    locals.gate.reserve = 0;
                 }
             }
             locals.gate.active = 0;
@@ -3237,7 +3081,7 @@ public:
         }
         else if (locals.gate.mode == QUGATE_MODE_ORACLE)
         {
-            // ORACLE mode: accumulate into currentBalance, oracle callback distributes
+            // ORACLE mode (reserved): accumulate into currentBalance
             locals.gate = state.get()._gates.get(locals.slotIdx);
             locals.gate.currentBalance += locals.amount;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
@@ -3526,25 +3370,11 @@ public:
                     locals.gate.currentBalance = 0;
                 }
             }
-            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            if (locals.gate.reserve > 0)
             {
-                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-03]
+                if (qpi.transfer(locals.gate.owner, locals.gate.reserve) >= 0) // [QG-03]
                 {
-                    locals.gate.oracleReserve = 0;
-                }
-            }
-            if (locals.gate.chainReserve > 0)
-            {
-                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-03]
-                {
-                    locals.gate.chainReserve = 0;
-                }
-            }
-            if (locals.gate.idleReserve > 0)
-            {
-                if (qpi.transfer(locals.gate.owner, locals.gate.idleReserve) >= 0) // [QG-03]
-                {
-                    locals.gate.idleReserve = 0;
+                    locals.gate.reserve = 0;
                 }
             }
             locals.gate.active = 0;
@@ -3560,7 +3390,7 @@ public:
             return;
         }
 
-        // Refund any held balance (THRESHOLD / ORACLE mode)
+        // Refund any held balance (THRESHOLD mode)
         if (locals.gate.currentBalance > 0)
         {
             if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-06]
@@ -3569,37 +3399,12 @@ public:
             }
         }
 
-        // Refund oracle reserve and unsubscribe
-        if (locals.gate.mode == QUGATE_MODE_ORACLE)
+        // Refund unified reserve
+        if (locals.gate.reserve > 0)
         {
-            if (locals.gate.oracleReserve > 0)
+            if (qpi.transfer(locals.gate.owner, locals.gate.reserve) >= 0) // [QG-06]
             {
-                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-06]
-                {
-                    locals.gate.oracleReserve = 0;
-                }
-            }
-            if (locals.gate.oracleSubscriptionId >= 0)
-            {
-                state.mut()._subscriptionToSlot.removeByKey(locals.gate.oracleSubscriptionId);
-                qpi.unsubscribeOracle(locals.gate.oracleSubscriptionId);
-                locals.gate.oracleSubscriptionId = -1;
-            }
-        }
-
-        // Refund chain reserve
-        if (locals.gate.chainReserve > 0)
-        {
-            if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-06]
-            {
-                locals.gate.chainReserve = 0;
-            }
-        }
-        if (locals.gate.idleReserve > 0)
-        {
-            if (qpi.transfer(locals.gate.owner, locals.gate.idleReserve) >= 0) // [QG-06]
-            {
-                locals.gate.idleReserve = 0;
+                locals.gate.reserve = 0;
             }
         }
 
@@ -3790,20 +3595,10 @@ public:
                 qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
                 locals.gate.currentBalance = 0;
             }
-            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            if (locals.gate.reserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.oracleReserve);
-                locals.gate.oracleReserve = 0;
-            }
-            if (locals.gate.chainReserve > 0)
-            {
-                qpi.transfer(locals.gate.owner, locals.gate.chainReserve);
-                locals.gate.chainReserve = 0;
-            }
-            if (locals.gate.idleReserve > 0)
-            {
-                qpi.transfer(locals.gate.owner, locals.gate.idleReserve);
-                locals.gate.idleReserve = 0;
+                qpi.transfer(locals.gate.owner, locals.gate.reserve);
+                locals.gate.reserve = 0;
             }
             locals.gate.active = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
@@ -3815,19 +3610,6 @@ public:
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
             LOG_INFO(locals.logger);
-            return;
-        }
-
-        // Oracle gates with pending balance cannot change recipients — prevents rug-pull of accumulated funds
-        if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.currentBalance > 0)
-        {
-            if (locals.invReward > 0)
-            {
-                qpi.transfer(qpi.invocator(), locals.invReward);
-            }
-            output.status = QUGATE_UNAUTHORIZED;
-            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
-            LOG_WARNING(locals.logger);
             return;
         }
 
@@ -4001,7 +3783,7 @@ public:
     }
 
     // =============================================
-    // fundGate — add QU to oracle gate reserve
+    // fundGate — add QU to gate's unified reserve
     // =============================================
 
     PUBLIC_PROCEDURE_WITH_LOCALS(fundGate)
@@ -4058,25 +3840,11 @@ public:
                     locals.gate.currentBalance = 0;
                 }
             }
-            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            if (locals.gate.reserve > 0)
             {
-                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-04]
+                if (qpi.transfer(locals.gate.owner, locals.gate.reserve) >= 0) // [QG-04]
                 {
-                    locals.gate.oracleReserve = 0;
-                }
-            }
-            if (locals.gate.chainReserve > 0)
-            {
-                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-04]
-                {
-                    locals.gate.chainReserve = 0;
-                }
-            }
-            if (locals.gate.idleReserve > 0)
-            {
-                if (qpi.transfer(locals.gate.owner, locals.gate.idleReserve) >= 0) // [QG-04]
-                {
-                    locals.gate.idleReserve = 0;
+                    locals.gate.reserve = 0;
                 }
             }
             locals.gate.active = 0;
@@ -4098,277 +3866,10 @@ public:
             return;
         }
 
-        if (input.reserveTarget == 0)
-        {
-            // Oracle reserve
-            if (locals.gate.mode != QUGATE_MODE_ORACLE)
-            {
-                if (locals.invReward > 0)
-                {
-                    qpi.transfer(qpi.invocator(), locals.invReward);
-                }
-                output.result = QUGATE_INVALID_ORACLE_CONFIG;
-                locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
-                LOG_WARNING(locals.logger);
-                return;
-            }
-            locals.gate.oracleReserve += locals.invReward;
-        }
-        else if (input.reserveTarget == 1)
-        {
-            // Chain reserve — used by routeToGate for chain hops and gate-as-recipient hops
-            locals.gate.chainReserve += locals.invReward;
-        }
-        else if (input.reserveTarget == 2)
-        {
-            locals.gate.idleReserve += locals.invReward;
-        }
-        else
-        {
-            // Invalid reserveTarget
-            if (locals.invReward > 0)
-            {
-                qpi.transfer(qpi.invocator(), locals.invReward);
-            }
-            output.result = QUGATE_INVALID_CHAIN;
-            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
-            LOG_WARNING(locals.logger);
-            return;
-        }
+        locals.gate.reserve += locals.invReward;
 
         state.mut()._gates.set(locals.slotIdx, locals.gate);
         output.result = QUGATE_SUCCESS;
-    }
-
-    // =============================================
-    // Oracle notification callback
-    // NOTE: Cannot be fully tested without a live node — condition logic tested in isolation
-    // =============================================
-
-    PRIVATE_PROCEDURE_WITH_LOCALS(OraclePriceNotification)
-    {
-        // Only process successful oracle replies
-        if (input.status != 3) // ORACLE_QUERY_STATUS_SUCCESS
-        {
-            return;
-        }
-
-        // O(1) lookup via HashMap
-        locals.slotIdx = QUGATE_MAX_GATES; // sentinel = not found
-        if (state.get()._subscriptionToSlot.contains(input.subscriptionId))
-        {
-            state.get()._subscriptionToSlot.get(input.subscriptionId, locals.slotIdx);
-        }
-        if (locals.slotIdx >= state.get()._gateCount)
-        {
-            return; // not found
-        }
-
-        locals.gate = state.get()._gates.get(locals.slotIdx);
-        if (locals.gate.active == 0 || locals.gate.mode != QUGATE_MODE_ORACLE)
-        {
-            return;
-        }
-        if (locals.gate.oracleSubscriptionId != input.subscriptionId)
-        {
-            return; // safety check
-        }
-
-        // Evaluate condition
-        locals.conditionMet = 0;
-        if (locals.gate.oracleCondition == QUGATE_ORACLE_COND_PRICE_ABOVE)
-        {
-            if (input.reply.denominator > 0)
-            {
-                locals.priceScaled = (sint64)QPI::div((uint64)(input.reply.numerator * 1000000), (uint64)input.reply.denominator);
-                if (locals.priceScaled > locals.gate.oracleThreshold)
-                {
-                    locals.conditionMet = 1;
-                }
-            }
-        }
-        else if (locals.gate.oracleCondition == QUGATE_ORACLE_COND_PRICE_BELOW)
-        {
-            if (input.reply.denominator > 0)
-            {
-                locals.priceScaled = (sint64)QPI::div((uint64)(input.reply.numerator * 1000000), (uint64)input.reply.denominator);
-                if (locals.priceScaled < locals.gate.oracleThreshold)
-                {
-                    locals.conditionMet = 1;
-                }
-            }
-        }
-        else if (locals.gate.oracleCondition == QUGATE_ORACLE_COND_TIME_AFTER)
-        {
-            // TIME_AFTER: treat oracle reply numerator as a timestamp-like value
-            if (input.reply.numerator > locals.gate.oracleThreshold)
-            {
-                locals.conditionMet = 1;
-            }
-        }
-
-        if (locals.conditionMet && locals.gate.currentBalance > 0)
-        {
-            // Store amount, zero balance, and write gate back BEFORE calling processSplit
-            locals.splitAmount = locals.gate.currentBalance;
-            locals.gate.currentBalance = 0;
-            state.mut()._gates.set(locals.slotIdx, locals.gate);
-
-            // Distribute using ratio-aware split
-            locals.splitIn.gateIdx = locals.slotIdx;
-            locals.splitIn.amount = locals.splitAmount;
-            processSplit(qpi, state, locals.splitIn, locals.splitOut, locals.splitLocals);
-
-            // Route deferred gate-recipients from split
-            for (uint8 _dg = 0; _dg < locals.splitOut.deferredCount; _dg++)
-            {
-                locals.chainIn.slotIdx = locals.splitOut.deferredGateSlots.get(_dg);
-                locals.chainIn.amount = locals.splitOut.deferredGateAmounts.get(_dg);
-                locals.chainIn.hopCount = 0;
-                routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                // Dispatch deferred gate-as-recipient routing from chain hop
-                locals.savedDeferredCount = locals.chainOut.deferredCount;
-                locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
-                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
-                {
-                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
-                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
-                }
-                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
-                {
-                    locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
-                    locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
-                    locals.chainIn.hopCount = locals.savedDeferredHopCount;
-                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                }
-            }
-
-            // Re-read gate after processSplit updated totalForwarded
-            locals.gate = state.get()._gates.get(locals.slotIdx);
-
-            // Log oracle triggered
-            locals.logger._contractIndex = CONTRACT_INDEX;
-            locals.logger._type = QUGATE_LOG_ORACLE_TRIGGERED;
-            locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.slotIdx) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.slotIdx;
-            locals.logger.sender = id::zero();
-            locals.logger.amount = locals.splitOut.forwarded;
-            LOG_INFO(locals.logger);
-
-            // Chain forwarding after oracle payout
-            if (locals.gate.chainNextGateId != -1)
-            {
-                sint64 chainAmount = locals.splitOut.forwarded;
-                sint64 currentChainGateId = locals.gate.chainNextGateId;
-                uint8 hop = 0;
-                while (hop < QUGATE_MAX_CHAIN_DEPTH && currentChainGateId != -1 && chainAmount > 0)
-                {
-                    uint64 nextSlot = (uint64)currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
-                    uint64 nextGen = (uint64)currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
-                    if (nextSlot >= state.get()._gateCount || nextGen == 0
-                        || state.get()._gateGenerations.get(nextSlot) != (uint16)(nextGen - 1))
-                    {
-                        break; // dead link
-                    }
-                    locals.chainIn.slotIdx = nextSlot;
-                    locals.chainIn.amount = chainAmount;
-                    locals.chainIn.hopCount = hop;
-                    routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                    chainAmount = locals.chainOut.forwarded;
-                    // Dispatch deferred gate-as-recipient routing from chain hop
-                    locals.savedDeferredCount = locals.chainOut.deferredCount;
-                    locals.savedDeferredHopCount = locals.chainOut.deferredHopCount;
-                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
-                    {
-                        locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateSlots.get(locals.deferredDispatchIdx));
-                        locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.chainOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
-                    }
-                    for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
-                    {
-                        locals.chainIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
-                        locals.chainIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
-                        locals.chainIn.hopCount = locals.savedDeferredHopCount;
-                        routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
-                    }
-                    // Read updated gate to get its chainNextGateId
-                    locals.nextChainGate = state.get()._gates.get(nextSlot);
-                    currentChainGateId = locals.nextChainGate.chainNextGateId;
-                    hop++;
-                }
-                // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance
-                if (chainAmount > 0)
-                {
-                    locals.gate = state.get()._gates.get(locals.slotIdx);
-                    locals.gate.currentBalance += (uint64)chainAmount;
-                    locals.gate.totalForwarded -= (uint64)chainAmount; // undo the premature forward count
-                    state.mut()._gates.set(locals.slotIdx, locals.gate);
-                    locals.logger._type = QUGATE_LOG_CHAIN_HOP_INSUFFICIENT;
-                    locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.slotIdx) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.slotIdx;
-                    locals.logger.amount = chainAmount;
-                    LOG_INFO(locals.logger);
-                }
-            }
-
-            // If ONCE mode, close gate after trigger (guard against double-close underflow)
-            if (locals.gate.oracleTriggerMode == QUGATE_ORACLE_TRIGGER_ONCE && locals.gate.active == 1)
-            {
-                if (locals.gate.oracleReserve > 0)
-                {
-                    if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-13]
-                    {
-                        locals.gate.oracleReserve = 0;
-                    }
-                }
-                if (locals.gate.idleReserve > 0)
-                {
-                    if (qpi.transfer(locals.gate.owner, locals.gate.idleReserve) >= 0) // [QG-13]
-                    {
-                        locals.gate.idleReserve = 0;
-                    }
-                }
-                if (locals.gate.oracleSubscriptionId >= 0)
-                {
-                    state.mut()._subscriptionToSlot.removeByKey(locals.gate.oracleSubscriptionId);
-                    qpi.unsubscribeOracle(locals.gate.oracleSubscriptionId);
-                    locals.gate.oracleSubscriptionId = -1;
-                }
-                // Defensive cleanup of auxiliary configs for recycled slot
-                {
-                    QUGATE_HeartbeatConfig zeroCfg;
-                    zeroCfg.active = 0; zeroCfg.triggered = 0; zeroCfg.thresholdEpochs = 0;
-                    zeroCfg.lastHeartbeatEpoch = 0; zeroCfg.payoutPercentPerEpoch = 0;
-                    zeroCfg.minimumBalance = 0; zeroCfg.triggerEpoch = 0; zeroCfg.beneficiaryCount = 0;
-                    for (uint8 _zi = 0; _zi < 8; _zi++)
-                    {
-                        zeroCfg.beneficiaryAddresses.set(_zi, id::zero());
-                        zeroCfg.beneficiaryShares.set(_zi, 0);
-                    }
-                    state.mut()._heartbeatConfigs.set(locals.slotIdx, zeroCfg);
-                    QUGATE_MultisigConfig zeroMs;
-                    for (uint8 _zi = 0; _zi < 8; _zi++)
-                    {
-                        zeroMs.guardians.set(_zi, id::zero());
-                    }
-                    zeroMs.guardianCount = 0; zeroMs.required = 0; zeroMs.proposalExpiryEpochs = 0; zeroMs.adminApprovalWindowEpochs = 0;
-                    zeroMs.approvalBitmap = 0; zeroMs.approvalCount = 0; zeroMs.proposalEpoch = 0; zeroMs.proposalActive = 0;
-                    state.mut()._multisigConfigs.set(locals.slotIdx, zeroMs);
-                    QUGATE_AdminApprovalState zeroAdminApproval;
-                    zeroAdminApproval.active = 0; zeroAdminApproval.validUntilEpoch = 0;
-                    state.mut()._adminApprovalStates.set(locals.slotIdx, zeroAdminApproval);
-                    QUGATE_TimeLockConfig zeroTl;
-                    zeroTl.unlockEpoch = 0; zeroTl.delayEpochs = 0; zeroTl.lockMode = QUGATE_TIME_LOCK_ABSOLUTE_EPOCH; zeroTl.cancellable = 0; zeroTl.fired = 0; zeroTl.cancelled = 0; zeroTl.active = 0;
-                    state.mut()._timeLockConfigs.set(locals.slotIdx, zeroTl);
-                }
-                locals.gate.active = 0;
-                state.mut()._activeGates -= 1;
-                state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
-                state.mut()._freeCount += 1;
-
-                // Increment generation so recycled slot gets a new gateId
-                state.mut()._gateGenerations.set(locals.slotIdx, state.get()._gateGenerations.get(locals.slotIdx) + 1);
-            }
-        }
-
-        state.mut()._gates.set(locals.slotIdx, locals.gate);
     }
 
     // =============================================
@@ -4399,7 +3900,7 @@ public:
         output.currentBalance = locals.gate.currentBalance;
         output.threshold = locals.gate.threshold;
         output.createdEpoch = locals.gate.createdEpoch;
-        output.lastActivityEpoch = locals.gate.lastActivityEpoch;  //
+        output.lastActivityEpoch = locals.gate.lastActivityEpoch;
 
         for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i++)
         {
@@ -4408,12 +3909,9 @@ public:
             output.allowedSenders.set(locals.i, locals.gate.allowedSenders.get(locals.i));
         }
         output.allowedSenderCount = locals.gate.allowedSenderCount;
-        output.oracleReserve = locals.gate.oracleReserve;
-        output.oracleSubscriptionId = locals.gate.oracleSubscriptionId;
         output.chainNextGateId = locals.gate.chainNextGateId;
-        output.chainReserve = locals.gate.chainReserve;
         output.chainDepth = locals.gate.chainDepth;
-        output.idleReserve = locals.gate.idleReserve;
+        output.reserve = locals.gate.reserve;
         output.nextIdleChargeEpoch = locals.gate.nextIdleChargeEpoch;
         output.adminGateId = locals.gate.adminGateId;
         output.hasAdminGate = locals.gate.hasAdminGate;
@@ -4498,12 +3996,9 @@ public:
                 locals.entry.threshold = 0;
                 locals.entry.createdEpoch = 0;
                 locals.entry.lastActivityEpoch = 0;
-                locals.entry.oracleReserve = 0;
-                locals.entry.oracleSubscriptionId = -1;
                 locals.entry.chainNextGateId = -1;
-                locals.entry.chainReserve = 0;
+                locals.entry.reserve = 0;
                 locals.entry.chainDepth = 0;
-                locals.entry.idleReserve = 0;
                 locals.entry.nextIdleChargeEpoch = 0;
                 locals.entry.allowedSenderCount = 0;
                 locals.entry.adminGateId = -1;
@@ -4533,12 +4028,9 @@ public:
                 locals.entry.threshold = locals.gate.threshold;
                 locals.entry.createdEpoch = locals.gate.createdEpoch;
                 locals.entry.lastActivityEpoch = locals.gate.lastActivityEpoch;
-                locals.entry.oracleReserve = locals.gate.oracleReserve;
-                locals.entry.oracleSubscriptionId = locals.gate.oracleSubscriptionId;
                 locals.entry.chainNextGateId = locals.gate.chainNextGateId;
-                locals.entry.chainReserve = locals.gate.chainReserve;
+                locals.entry.reserve = locals.gate.reserve;
                 locals.entry.chainDepth = locals.gate.chainDepth;
-                locals.entry.idleReserve = locals.gate.idleReserve;
                 locals.entry.nextIdleChargeEpoch = locals.gate.nextIdleChargeEpoch;
                 locals.entry.allowedSenderCount = locals.gate.allowedSenderCount;
                 locals.entry.adminGateId = locals.gate.adminGateId;
@@ -4694,25 +4186,11 @@ public:
                     locals.gate.currentBalance = 0;
                 }
             }
-            if (locals.gate.mode == QUGATE_MODE_ORACLE && locals.gate.oracleReserve > 0)
+            if (locals.gate.reserve > 0)
             {
-                if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-05]
+                if (qpi.transfer(locals.gate.owner, locals.gate.reserve) >= 0) // [QG-05]
                 {
-                    locals.gate.oracleReserve = 0;
-                }
-            }
-            if (locals.gate.chainReserve > 0)
-            {
-                if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-05]
-                {
-                    locals.gate.chainReserve = 0;
-                }
-            }
-            if (locals.gate.idleReserve > 0)
-            {
-                if (qpi.transfer(locals.gate.owner, locals.gate.idleReserve) >= 0) // [QG-05]
-                {
-                    locals.gate.idleReserve = 0;
+                    locals.gate.reserve = 0;
                 }
             }
             locals.gate.active = 0;
@@ -6148,7 +5626,7 @@ public:
     }
 
     // =============================================
-    // withdrawReserve — withdraw from oracleReserve or chainReserve
+    // withdrawReserve — withdraw from gate's unified reserve
     // =============================================
 
     PUBLIC_PROCEDURE_WITH_LOCALS(withdrawReserve)
@@ -6233,90 +5711,25 @@ public:
             return;
         }
 
-        if (input.reserveTarget == 0)
+        sint64 available = locals.gate.reserve;
+        if (available <= 0)
         {
-            // oracleReserve — gate must be ORACLE mode
-            if (locals.gate.mode != QUGATE_MODE_ORACLE)
-            {
-                output.status = QUGATE_INVALID_MODE;
-                locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
-                LOG_WARNING(locals.logger);
-                return;
-            }
-
-            sint64 available = locals.gate.oracleReserve;
-            if (available <= 0)
-            {
-                output.status = QUGATE_SUCCESS;
-                output.withdrawn = 0;
-                return;
-            }
-
-            uint64 toWithdraw = (uint64)available;
-            if (input.amount != 0 && input.amount < toWithdraw)
-            {
-                toWithdraw = input.amount;
-            }
-
-            if (qpi.transfer(qpi.invocator(), toWithdraw) >= 0) // [QG-19]
-            {
-                locals.gate.oracleReserve -= (sint64)toWithdraw;
-                state.mut()._gates.set(locals.slotIdx, locals.gate);
-                output.withdrawn = toWithdraw;
-            }
-        }
-        else if (input.reserveTarget == 1)
-        {
-            sint64 available = locals.gate.chainReserve;
-            if (available <= 0)
-            {
-                output.status = QUGATE_SUCCESS;
-                output.withdrawn = 0;
-                return;
-            }
-
-            uint64 toWithdraw = (uint64)available;
-            if (input.amount != 0 && input.amount < toWithdraw)
-            {
-                toWithdraw = input.amount;
-            }
-
-            if (qpi.transfer(qpi.invocator(), toWithdraw) >= 0) // [QG-20]
-            {
-                locals.gate.chainReserve -= (sint64)toWithdraw;
-                state.mut()._gates.set(locals.slotIdx, locals.gate);
-                output.withdrawn = toWithdraw;
-            }
-        }
-        else if (input.reserveTarget == 2)
-        {
-            sint64 available = locals.gate.idleReserve;
-            if (available <= 0)
-            {
-                output.status = QUGATE_SUCCESS;
-                output.withdrawn = 0;
-                return;
-            }
-
-            uint64 toWithdraw = (uint64)available;
-            if (input.amount != 0 && input.amount < toWithdraw)
-            {
-                toWithdraw = input.amount;
-            }
-
-            if (qpi.transfer(qpi.invocator(), toWithdraw) >= 0)
-            {
-                locals.gate.idleReserve -= (sint64)toWithdraw;
-                state.mut()._gates.set(locals.slotIdx, locals.gate);
-                output.withdrawn = toWithdraw;
-            }
-        }
-        else
-        {
-            output.status = QUGATE_INVALID_MODE;
-            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
-            LOG_WARNING(locals.logger);
+            output.status = QUGATE_SUCCESS;
+            output.withdrawn = 0;
             return;
+        }
+
+        uint64 toWithdraw = (uint64)available;
+        if (input.amount != 0 && input.amount < toWithdraw)
+        {
+            toWithdraw = input.amount;
+        }
+
+        if (qpi.transfer(qpi.invocator(), toWithdraw) >= 0) // [QG-19]
+        {
+            locals.gate.reserve -= (sint64)toWithdraw;
+            state.mut()._gates.set(locals.slotIdx, locals.gate);
+            output.withdrawn = toWithdraw;
         }
 
         if (locals.adminApprovalUsed == 1)
@@ -6379,12 +5792,9 @@ public:
         output.createdEpoch = locals.gate.createdEpoch;
         output.lastActivityEpoch = locals.gate.lastActivityEpoch;
         output.allowedSenderCount = locals.gate.allowedSenderCount;
-        output.oracleReserve = locals.gate.oracleReserve;
-        output.oracleSubscriptionId = locals.gate.oracleSubscriptionId;
         output.chainNextGateId = locals.gate.chainNextGateId;
-        output.chainReserve = locals.gate.chainReserve;
+        output.reserve = locals.gate.reserve;
         output.chainDepth = locals.gate.chainDepth;
-        output.idleReserve = locals.gate.idleReserve;
         output.nextIdleChargeEpoch = locals.gate.nextIdleChargeEpoch;
         output.adminGateId = locals.gate.adminGateId;
         output.hasAdminGate = locals.gate.hasAdminGate;
@@ -6483,7 +5893,6 @@ public:
         REGISTER_USER_FUNCTION(getGatesByMode, 24);
         REGISTER_USER_FUNCTION(getGateBySlot, 25);
         REGISTER_USER_FUNCTION(getLatestExecution, 26);
-        REGISTER_USER_PROCEDURE_NOTIFICATION(OraclePriceNotification);
     }
 
     // =============================================
@@ -6518,50 +5927,7 @@ public:
 
     BEGIN_EPOCH_WITH_LOCALS()
     {
-        // Subscribe oracle gates at the start of each epoch
-        for (locals.i = 0; locals.i < state.get()._gateCount; locals.i++)
-        {
-            locals.gate = state.get()._gates.get(locals.i);
-            if (locals.gate.active == 1 && locals.gate.mode == QUGATE_MODE_ORACLE)
-            {
-                if (locals.gate.oracleReserve >= QUGATE_ORACLE_SUBSCRIPTION_FEE)
-                {
-                    // Construct the Price oracle query
-                    OI::Price::OracleQuery query;
-                    query.oracle = locals.gate.oracleId;
-                    query.currency1 = locals.gate.oracleCurrency1;
-                    query.currency2 = locals.gate.oracleCurrency2;
-
-                    locals.subId = SUBSCRIBE_ORACLE(OI::Price, query, OraclePriceNotification,
-                        QUGATE_ORACLE_NOTIFY_PERIOD_MS, true);
-
-                    if (locals.subId >= 0)
-                    {
-                        locals.gate.oracleSubscriptionId = locals.subId;
-                        locals.gate.oracleReserve -= QUGATE_ORACLE_SUBSCRIPTION_FEE;
-                        state.mut()._gates.set(locals.i, locals.gate);
-                        state.mut()._subscriptionToSlot.set(locals.subId, locals.i);
-
-                        locals.logger._contractIndex = CONTRACT_INDEX;
-                        locals.logger._type = QUGATE_LOG_ORACLE_SUBSCRIBED;
-                        locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
-                        locals.logger.sender = locals.gate.owner;
-                        locals.logger.amount = QUGATE_ORACLE_SUBSCRIPTION_FEE;
-                        LOG_INFO(locals.logger);
-                    }
-                }
-                else
-                {
-                    // Oracle reserve exhausted — log and subscription lapses
-                    locals.logger._contractIndex = CONTRACT_INDEX;
-                    locals.logger._type = QUGATE_LOG_ORACLE_EXHAUSTED;
-                    locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
-                    locals.logger.sender = locals.gate.owner;
-                    locals.logger.amount = locals.gate.oracleReserve;
-                    LOG_INFO(locals.logger);
-                }
-            }
-        }
+        // No per-epoch processing needed (oracle subscriptions removed)
     }
 
     END_EPOCH_WITH_LOCALS()
@@ -6681,12 +6047,12 @@ public:
                 && locals.gate.nextIdleChargeEpoch > 0
                 && qpi.epoch() >= locals.gate.nextIdleChargeEpoch)
             {
-                if (locals.gate.idleReserve >= (sint64)state.get()._idleFee)
+                if (locals.gate.reserve >= (sint64)state.get()._idleFee)
                 {
                     locals.maintenanceBurnAmount = (state.get()._idleFee * QUGATE_MAINTENANCE_BURN_BPS) / 10000ULL;
                     locals.maintenanceDividendAmount = state.get()._idleFee - locals.maintenanceBurnAmount;
 
-                    locals.gate.idleReserve -= state.get()._idleFee;
+                    locals.gate.reserve -= state.get()._idleFee;
                     locals.gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
                     state.mut()._gates.set(locals.i, locals.gate);
                     state.mut()._idleDelinquentEpochs.set(locals.i, 0);
@@ -6754,7 +6120,7 @@ public:
                      && qpi.epoch() - locals.delinquentEpoch >= state.get()._idleGraceEpochs)
                     || (qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs))
                 {
-                    // Refund any held balance (THRESHOLD / ORACLE mode)
+                    // Refund any held balance (THRESHOLD mode)
                     if (locals.gate.currentBalance > 0)
                     {
                         if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-14]
@@ -6763,35 +6129,12 @@ public:
                         }
                     }
 
-                    // Refund oracle reserve on expiry
-                    if (locals.gate.mode == QUGATE_MODE_ORACLE)
+                    // Refund reserve on expiry
+                    if (locals.gate.reserve > 0)
                     {
-                        if (locals.gate.oracleReserve > 0)
+                        if (qpi.transfer(locals.gate.owner, locals.gate.reserve) >= 0) // [QG-14]
                         {
-                            if (qpi.transfer(locals.gate.owner, locals.gate.oracleReserve) >= 0) // [QG-14]
-                            {
-                                locals.gate.oracleReserve = 0;
-                            }
-                        }
-                        if (locals.gate.oracleSubscriptionId >= 0)
-                        {
-                            state.mut()._subscriptionToSlot.removeByKey(locals.gate.oracleSubscriptionId);
-                        }
-                    }
-
-                    // Refund chain reserve on expiry
-                    if (locals.gate.chainReserve > 0)
-                    {
-                        if (qpi.transfer(locals.gate.owner, locals.gate.chainReserve) >= 0) // [QG-14]
-                        {
-                            locals.gate.chainReserve = 0;
-                        }
-                    }
-                    if (locals.gate.idleReserve > 0)
-                    {
-                        if (qpi.transfer(locals.gate.owner, locals.gate.idleReserve) >= 0) // [QG-14]
-                        {
-                            locals.gate.idleReserve = 0;
+                            locals.gate.reserve = 0;
                         }
                     }
 

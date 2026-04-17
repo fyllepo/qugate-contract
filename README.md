@@ -124,7 +124,7 @@ When the sender is authorized, the full amount is forwarded to recipient 0.
 
 ### Mode Slot 5 — Reserved
 
-Mode slot 5 is reserved. `createGate` with `mode=5` returns `QUGATE_UNSUPPORTED_MODE`. Oracle-related fields in gate structs (oracleId, oracleCurrency1/2, oracleCondition, oracleTriggerMode, oracleThreshold, oracleReserve, oracleSubscriptionId) are present in the wire format but unused.
+Mode slot 5 is reserved. `createGate` with `mode=5` returns `QUGATE_UNSUPPORTED_MODE`. No oracle-related fields remain in the wire format — they were removed in v2.5 when reserves were unified.
 
 ---
 
@@ -305,7 +305,7 @@ Any gate can be placed under MULTISIG governance by assigning an **admin gate**.
 
 Admin gates should be chosen with the same care as any other signing authority. Guardians cannot transfer gate ownership, but they can control most meaningful configuration changes, including replacing recipients, changing chain routing, replacing the admin gate itself, or closing the gate once approval is active.
 
-Governance-only admin multisigs are still subject to the inactivity model. To keep them alive during quiet periods, fund their `idleReserve` via `fundGate(..., reserveTarget = 2)`. If an admin gate expires or becomes unusable, the governed gate owner can still clear governance and recover control.
+Governance-only admin multisigs are still subject to the inactivity model. To keep them alive during quiet periods, fund their `reserve` via `fundGate(gateId)`. If an admin gate expires or becomes unusable, the governed gate owner can still clear governance and recover control.
 
 The `heartbeat()` procedure is intentionally excluded — it is a keep-alive signal that should always remain owner-only.
 
@@ -491,11 +491,11 @@ Gates can be linked into chains (max 3 hops) for multi-stage payment pipelines. 
 
 ### Hop Fees and Reserves
 
-Each chain hop burns a `QUGATE_CHAIN_HOP_FEE` (1,000 QU). If the forwarded amount exceeds the hop fee, the fee is deducted from the amount. If the forwarded amount is too small to cover the hop fee, the gate's `chainReserve` pays instead. If neither can cover the fee, the funds are stranded in `currentBalance`.
+Each chain hop burns a `QUGATE_CHAIN_HOP_FEE` (1,000 QU). If the forwarded amount exceeds the hop fee, the fee is deducted from the amount. If the forwarded amount is too small to cover the hop fee, the gate's `reserve` pays instead. If neither can cover the fee, the funds are stranded in `currentBalance`.
 
-Fund a gate's chain reserve via `fundGate` with `reserveTarget = 1`. The chain reserve is refunded to the owner on gate close or expiry.
+Fund a gate's reserve via `fundGate(gateId)`. The reserve covers both chain hop fees and inactivity maintenance, and is refunded to the owner on gate close or expiry. Excess QU paid above the creation fee when calling `createGate` is automatically deposited into the new gate's reserve — overpay to pre-fund.
 
-QuGate also supports a dedicated `idleReserve` (`reserveTarget = 2`). Idle-gate upkeep is deducted from this reserve, not from the gate's operational `currentBalance`. This avoids punishing pass-through gates and governance-only admin multisigs that may not naturally hold funds.
+Inactivity maintenance is deducted from this reserve, not from the gate's operational `currentBalance`. This avoids punishing pass-through gates and governance-only admin multisigs that may not naturally hold funds.
 
 ### Setting Up Chains
 
@@ -578,7 +578,7 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 | 7 | getGatesByOwner | PUBLIC_FUNCTION | List gate IDs owned by an address |
 | 8 | getGateBatch | PUBLIC_FUNCTION | Batch query up to 32 gates by ID |
 | 9 | getFees | PUBLIC_FUNCTION | Query current fee parameters |
-| 10 | fundGate | PUBLIC_PROCEDURE | Add QU to chain reserve or idle reserve |
+| 10 | fundGate | PUBLIC_PROCEDURE | Add QU to a gate's unified reserve |
 | 11 | setChain | PUBLIC_PROCEDURE | Set or clear a chain link (owner only) |
 | 12 | sendToGateVerified | PUBLIC_PROCEDURE | Like sendToGate, but verifies gate owner before routing |
 | 13 | configureHeartbeat | PUBLIC_PROCEDURE | Configure HEARTBEAT gate params and beneficiaries |
@@ -591,7 +591,7 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 | 20 | getTimeLockState | PUBLIC_FUNCTION | Query TIME_LOCK gate state and epochs remaining |
 | 21 | setAdminGate | PUBLIC_PROCEDURE | Set or clear admin gate (MULTISIG governance) on any gate |
 | 22 | getAdminGate | PUBLIC_FUNCTION | Query admin gate configuration for a gate |
-| 23 | withdrawReserve | PUBLIC_PROCEDURE | Withdraw from chain reserve or idle reserve without closing (owner only) |
+| 23 | withdrawReserve | PUBLIC_PROCEDURE | Withdraw from a gate's unified reserve without closing (owner only) |
 | 24 | getGatesByMode | PUBLIC_FUNCTION | Query up to 16 active gates matching a given mode |
 | 25 | getGateBySlot | PUBLIC_FUNCTION | Query a gate by raw slot index (returns versioned gate ID + full state) |
 | 26 | getLatestExecution | PUBLIC_FUNCTION | Query the latest execution metadata for a gate (outcome, recipient, tick) |
@@ -617,6 +617,8 @@ Creates a new gate. Requires payment of the current escalated creation fee.
 | threshold | uint64 | 8 | Threshold amount (THRESHOLD mode) |
 | allowedSenders | Array\<id, 8\> | 256 | Allowed sender pubkeys (CONDITIONAL mode) |
 | allowedSenderCount | uint8 | 1 | Number of allowed senders (0-8) |
+| chainNextGateId | sint64 | 8 | Chain target gate ID (-1 = no chain) |
+| recipientGateIds | Array\<sint64, 8\> | 64 | Gate-as-recipient IDs (-1 = wallet) |
 
 **Output**:
 
@@ -626,9 +628,9 @@ Creates a new gate. Requires payment of the current escalated creation fee.
 | gateId | uint64 | Assigned gate ID (1-indexed) |
 | feePaid | uint64 | Actual fee burned (after escalation) |
 
-Wire size: ~600 bytes (input), 24 bytes (output). Exact padding depends on platform alignment.
+Wire size: see [createGate_input Layout](#creategate_input-layout) for exact byte offsets. 24 bytes (output).
 
-**Behaviour**: Validates all parameters. Burns the escalated creation fee. Refunds any overpayment. Allocates a slot from the free-list if available, otherwise from the end of the array. Mode is immutable after creation.
+**Behaviour**: Validates all parameters. Burns the escalated creation fee. Any excess QU above the fee is automatically deposited into the new gate's `reserve` (not refunded). Allocates a slot from the free-list if available, otherwise from the end of the array. Mode is immutable after creation.
 
 #### sendToGate (Input Type 2)
 
@@ -664,7 +666,7 @@ Closes a gate. Owner only.
 |-------|------|-------------|
 | status | sint64 | 0 on success, negative on error |
 
-**Behaviour**: Refunds any held balance (THRESHOLD mode) to the owner. Marks the gate inactive. Pushes the slot onto the free-list for reuse. Refunds any attached invocation reward.
+**Behaviour**: Refunds any held balance (THRESHOLD mode) and `reserve` to the owner. Marks the gate inactive. Pushes the slot onto the free-list for reuse. Refunds any attached invocation reward.
 
 #### updateGate (Input Type 4)
 
@@ -681,6 +683,7 @@ Modifies gate configuration. Owner only. Mode cannot be changed.
 | threshold | uint64 | 8 | New threshold |
 | allowedSenders | Array\<id, 8\> | 256 | New allowed senders |
 | allowedSenderCount | uint8 | 1 | New allowed sender count (0-8) |
+| recipientGateIds | Array\<sint64, 8\> | 64 | Gate-as-recipient IDs (-1 = wallet) |
 
 **Output**:
 
@@ -688,7 +691,7 @@ Modifies gate configuration. Owner only. Mode cannot be changed.
 |-------|------|-------------|
 | status | sint64 | 0 on success, negative on error |
 
-Wire size: ~608 bytes (input). 8 bytes larger than createGate due to gateId replacing mode.
+Wire size: see [updateGate_input Layout](#updategate_input-layout) for exact byte offsets.
 
 **Behaviour**: Validates parameters (same rules as createGate for the relevant mode). Zeros stale slots when recipient/sender count shrinks. Updates `lastActivityEpoch`. Refunds any attached invocation reward.
 
@@ -718,13 +721,16 @@ Returns full gate configuration and statistics.
 | ratios | Array\<uint64, 8\> | Recipient ratios |
 | allowedSenders | Array\<id, 8\> | Allowed sender addresses (CONDITIONAL mode) |
 | allowedSenderCount | uint8 | Number of allowed senders |
-| oracleReserve | sint64 | Reserved (oracle subscription reserve, unused) |
-| oracleSubscriptionId | sint32 | Reserved (oracle subscription ID, unused) |
 | chainNextGateId | sint64 | Versioned gate ID of next gate in chain (-1 if no chain) |
-| chainReserve | sint64 | QU remaining in chain hop fee reserve |
 | chainDepth | uint8 | This gate's position in its chain (0 = root) |
+| reserve | sint64 | Unified reserve (covers chain hop fees + inactivity maintenance) |
+| nextIdleChargeEpoch | uint16 | Next epoch when idle maintenance will be charged |
 | adminGateId | sint64 | Versioned gate ID of admin gate (-1 if no admin gate) |
 | hasAdminGate | uint8 | 1 if governed by an admin gate |
+| idleDelinquent | uint8 | 1 if gate has missed idle-period funding |
+| idleGraceRemainingEpochs | uint16 | Epochs remaining before delinquent gate expires |
+| idleExpiryOverdue | uint8 | 1 if idle grace has already been exhausted |
+| recipientGateIds | Array\<sint64, 8\> | Gate-as-recipient IDs (-1 = wallet, >= 0 = gate ID) |
 
 Returns `active=0` for invalid gate IDs.
 
@@ -774,14 +780,13 @@ Performs a linear scan of all gate slots. Returns up to 16 gates.
 
 #### fundGate (Input Type 10)
 
-Adds QU to a gate's chain reserve or idle reserve. Anyone can fund a gate.
+Adds invocationReward to a gate's unified reserve. Anyone can fund a gate.
 
 **Input**:
 
 | Field | Type | Size | Description |
 |-------|------|------|-------------|
 | gateId | sint64 | 8 | Target gate ID |
-| reserveTarget | uint8 | 1 | 0 = reserved, 1 = chainReserve, 2 = idleReserve |
 
 **Output**:
 
@@ -789,7 +794,7 @@ Adds QU to a gate's chain reserve or idle reserve. Anyone can fund a gate.
 |-------|------|-------------|
 | result | sint64 | 0 on success, negative on error |
 
-**Behaviour**: Validates the gate exists and is active. `reserveTarget=0` is reserved (oracle mode not yet available). For `reserveTarget=1`, the gate must have a chain link (`chainNextGateId != -1`). Attached QU is deposited into the specified reserve.
+**Behaviour**: Validates the gate exists and is active. Attached QU is deposited into the gate's `reserve`.
 
 #### setChain (Input Type 11)
 
@@ -1038,7 +1043,7 @@ Returns the most recent execution metadata for a gate — what happened the last
 
 All data is little-endian. Public keys (`id`) are 32 bytes. `Array<T, N>` is serialized as N contiguous elements with no length prefix.
 
-### createGate_input Layout (784 bytes)
+### createGate_input Layout
 
 ```
 Offset  Size   Field
@@ -1050,17 +1055,13 @@ Offset  Size   Field
 328     8      threshold (uint64)
 336     256    allowedSenders[8] (8 x 32-byte pubkeys)
 592     1      allowedSenderCount (uint8)
-600     32     oracleId (id) [reserved]
-632     32     oracleCurrency1 (id) [reserved]
-664     32     oracleCurrency2 (id) [reserved]
-696     1      oracleCondition (uint8) [reserved]
-697     1      oracleTriggerMode (uint8) [reserved]
-704     8      oracleThreshold (sint64) [reserved]
-712     8      chainNextGateId (sint64, -1 = no chain)
-720     64     recipientGateIds[8] (8 x sint64, -1 = wallet)
+600     8      chainNextGateId (sint64, -1 = no chain)
+608     64     recipientGateIds[8] (8 x sint64, -1 = wallet)
 ```
 
-### updateGate_input Layout (672 bytes)
+Oracle fields were removed in v2.5 when reserves were unified. Exact struct size depends on compiler alignment — check `encoding.service.ts` in the demo app for current byte offsets.
+
+### updateGate_input Layout
 
 ```
 Offset  Size   Field
@@ -1073,6 +1074,7 @@ Offset  Size   Field
         8      threshold (uint64)
         256    allowedSenders[8]
         1      allowedSenderCount (uint8)
+        64     recipientGateIds[8] (8 x sint64, -1 = wallet)
 +pad    ...    (trailing padding)
 ```
 
@@ -1096,7 +1098,7 @@ _minSendAmount  uint64                          Minimum send amount (adjustable)
 _expiryEpochs   uint64                          Inactivity epochs before expiry (adjustable)
 ```
 
-### GateConfig Structure (~400 bytes per gate)
+### GateConfig Structure (~280 bytes per gate)
 
 ```
 owner               id (32 bytes)       Gate creator
@@ -1114,16 +1116,8 @@ roundRobinIndex     uint64              Next recipient index (ROUND_ROBIN)
 recipients          Array<id, 8>        Recipient addresses (256 bytes)
 ratios              Array<uint64, 8>    Ratios (64 bytes)
 allowedSenders      Array<id, 8>        Allowed senders (256 bytes)
-oracleId            id (32 bytes)       [reserved] Oracle provider identity
-oracleCurrency1     id (32 bytes)       [reserved] First currency of price pair
-oracleCurrency2     id (32 bytes)       [reserved] Second currency of price pair
-oracleCondition     uint8               [reserved] Trigger condition type
-oracleTriggerMode   uint8               [reserved] ONCE (0) or RECURRING (1)
-oracleThreshold     sint64              [reserved] Price ratio * 1e6 or timestamp
-oracleReserve       sint64              [reserved] QU reserve for subscription fees
-oracleSubscriptionId sint32             [reserved] Subscription ID; -1 if not subscribed
 chainNextGateId     sint64              Next gate in chain; -1 if terminal
-chainReserve        sint64              QU reserve for hop fees
+reserve             sint64              Unified reserve (chain hop fees + maintenance)
 chainDepth          uint8               Position in chain (0 = root)
 adminGateId         sint64              MULTISIG gate ID for governance; -1 if none
 hasAdminGate        uint8               1 if adminGateId is set
@@ -1135,7 +1129,7 @@ Gate slots are reused via a stack-based free-list. When a gate is closed or expi
 
 This prevents a permanent denial-of-service where an attacker creates and closes gates to exhaust the 256-slot array (at X_MULTIPLIER=1).
 
-Total state size at X_MULTIPLIER=1: approximately 100 KB (256 gates x ~400 bytes + free-list overhead + metadata).
+Total state size at X_MULTIPLIER=1: approximately 75 KB (256 gates x ~280 bytes + free-list overhead + metadata).
 
 ---
 
@@ -1171,7 +1165,7 @@ Gates can expire for two reasons:
 
 The contract still uses two complementary mechanisms:
 
-1. **Lazy expiry on interaction** (primary): When any procedure (`sendToGate`, `sendToGateVerified`, `updateGate`, `closeGate`, `fundGate`, `setChain`) touches a gate, it checks whether the gate has exceeded its inactivity window. If so, the gate is expired inline — balances (current, chain reserve, maintenance reserve) are refunded to the owner, the slot is freed, and the caller is refunded. The `getGate` function also reports expired gates as `active=0` without mutating state.
+1. **Lazy expiry on interaction** (primary): When any procedure (`sendToGate`, `sendToGateVerified`, `updateGate`, `closeGate`, `fundGate`, `setChain`) touches a gate, it checks whether the gate has exceeded its inactivity window. If so, the gate is expired inline — balances (currentBalance and reserve) are refunded to the owner, the slot is freed, and the caller is refunded. The `getGate` function also reports expired gates as `active=0` without mutating state.
 
 2. **END_EPOCH sweep** (safety net): The `END_EPOCH` handler still scans all gates each epoch. This catches gates that nobody interacts with. At scale, most expiries happen lazily, reducing `END_EPOCH` processing load.
 
@@ -1182,7 +1176,7 @@ if (epoch() - lastActivityEpoch >= expiryEpochs)  →  expire
 ```
 
 Expired gates:
-- Have any held balance (current, chain reserve, maintenance reserve) refunded to the owner
+- Have any held balance (currentBalance and reserve) refunded to the owner
 - Are marked inactive
 - Have their slot pushed onto the free-list
 - Have their generation counter incremented (invalidates old gate IDs)
@@ -1191,7 +1185,7 @@ Default inactivity expiry: 50 epochs (approximately 1 year at current epoch leng
 
 ### Maintenance delinquency
 
-Idle gates are expected to maintain a funded `idleReserve`. If a gate has no qualifying activity for `4` epochs and is not in an active hold state, the contract charges `25,000 QU` from that reserve. If the reserve cannot cover the fee:
+Idle gates are expected to maintain a funded `reserve`. If a gate has no qualifying activity for `4` epochs and is not in an active hold state, the contract charges `25,000 QU` from the reserve. If the reserve cannot cover the fee:
 
 - the gate is marked delinquent
 - a `4` epoch grace window begins
@@ -1213,7 +1207,7 @@ QuGate uses a hybrid fee model:
 - **Creation fees**: burned on successful gate creation
 - **Dust amounts**: burned when sends are below minimum
 - **Chain hop fees**: burned on each routed hop
-- **Inactivity maintenance**: charged from `idleReserve` and split:
+- **Inactivity maintenance**: charged from `reserve` and split:
   - `80%` burned
   - `20%` routed through the standard dividend/shareholder distribution path
 
@@ -1252,7 +1246,7 @@ Eight active modes cover the most common payment routing and custody patterns ob
 
 ### Why 8 max recipients?
 
-8 recipients keeps per-gate state under 400 bytes while covering the vast majority of practical use cases (team payrolls, multi-way splits, worker pools). Larger recipient sets can be achieved by chaining SPLIT gates via intermediary forwarding (each hop requires a separate transaction).
+8 recipients keeps per-gate state under 300 bytes while covering the vast majority of practical use cases (team payrolls, multi-way splits, worker pools). Larger recipient sets can be achieved by chaining SPLIT gates via intermediary forwarding (each hop requires a separate transaction).
 
 ### Why ratio cap at 10,000?
 
@@ -1270,7 +1264,7 @@ Without slot reuse, an attacker could create and close all gate slots to permane
 
 Creation, dust, and chain-hop fees still follow the original burn-first philosophy. The maintenance model adds reserve-backed upkeep so long-lived infrastructure pays its way without silently draining operational balances.
 
-Using a dedicated `idleReserve` keeps the behavior predictable:
+Using a unified `reserve` keeps the behavior predictable:
 
 - pass-through gates do not lose working funds unexpectedly
 - governance-only admin multisigs can be explicitly provisioned
@@ -1352,8 +1346,8 @@ Incomplete proposals (fewer than M votes) automatically reset after proposalExpi
 ### Fund Recovery
 
 The owner can always recover funds via:
-- closeGate: refunds currentBalance, chainReserve, maintenanceReserve to owner
-- withdrawReserve: retrieves chain or idle reserves without closing
+- closeGate: refunds currentBalance and reserve to owner
+- withdrawReserve: retrieves reserve funds without closing
 - cancelTimeLock: refunds TIME_LOCK balance (if cancellable)
 
 No QU can be permanently locked in the contract (assuming the owner retains access).
@@ -1489,7 +1483,7 @@ The test suite (`contract_qugate.cpp`) contains 73 unit tests covering:
 - All 8 active gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, heartbeat dead-man's switch, M-of-N multisig approval, epoch-based time lock)
 - Chain gates (hop fees, chain reserve, depth limits, cycle detection)
 - Versioned gate IDs and sendToGateVerified
-- Anti-spam features (escalating fees at 0/1024/2048 gates, dust burn, fee overpayment refund, gate expiry with balance refund, activity epoch tracking)
+- Anti-spam features (escalating fees at 0/1024/2048 gates, dust burn, excess fee to reserve, gate expiry with balance refund, activity epoch tracking)
 - Error cases (invalid gate ID, unauthorized close/update, insufficient fee, invalid mode/ratio/threshold/sender count)
 - Free-list slot reuse
 - totalBurned tracking
