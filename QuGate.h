@@ -960,7 +960,19 @@ public:
 
     struct processMultisigVote_input { uint64 slotIdx; uint64 gateId; sint64 amount; };
     struct processMultisigVote_output { sint64 status; uint8 deferredToGate; uint64 deferredGateSlot; sint64 deferredGateAmount; uint8 chainForward; sint64 chainForwardAmount; };
-    struct processMultisigVote_locals { GateConfig gate; QUGATE_MultisigConfig msigCfg; QUGATE_AdminApprovalState adminApproval; uint8 foundGuardian; uint8 guardianIdx; QuGateLogger logger; };
+    struct processMultisigVote_locals
+    {
+        GateConfig gate;
+        QUGATE_MultisigConfig msigCfg;
+        QUGATE_AdminApprovalState adminApproval;
+        uint8 foundGuardian;
+        uint8 guardianIdx;
+        QuGateLogger logger;
+        sint64 releaseAmount;
+        uint8 transferred;
+        uint64 targetSlot;
+        uint64 targetGen;
+    };
 
     struct fundGate_locals
     {
@@ -2036,8 +2048,10 @@ public:
         }
         else
         {
-            qpi.transfer(qpi.invocator(), input.amount);
-            output.status = QUGATE_CONDITIONAL_REJECTED;
+            if (qpi.transfer(qpi.invocator(), input.amount) >= 0) // [QG-17]
+            {
+                output.status = QUGATE_CONDITIONAL_REJECTED;
+            }
         }
 
         state.mut()._gates.set(input.gateIdx, locals.gate);
@@ -2121,7 +2135,7 @@ public:
             LOG_INFO(locals.logger);
 
             // Check threshold
-            sint64 releaseAmount = input.amount;
+            locals.releaseAmount = input.amount;
             if (locals.gate.recipientCount == 0
                 && locals.gate.chainNextGateId == -1
                 && locals.msigCfg.adminApprovalWindowEpochs > 0
@@ -2152,43 +2166,43 @@ public:
                 else if (locals.gate.currentBalance > 0)
                 {
                     // Transfer balance to target (recipients.get(0) is the target address)
-                    releaseAmount = (sint64)locals.gate.currentBalance;
-                    uint8 transferred = 0;
+                    locals.releaseAmount = (sint64)locals.gate.currentBalance;
+                    locals.transferred = 0;
                     if (locals.gate.recipientCount > 0)
                     {
                         if (locals.gate.recipientGateIds.get(0) >= 0)
                         {
                             // Gate-as-recipient: defer routing to caller
-                            uint64 targetSlot = (uint64)(locals.gate.recipientGateIds.get(0)) & QUGATE_GATE_ID_SLOT_MASK;
-                            uint64 targetGen = (uint64)(locals.gate.recipientGateIds.get(0)) >> QUGATE_GATE_ID_SLOT_BITS;
-                            if (targetSlot < state.get()._gateCount && targetGen > 0
-                                && state.get()._gateGenerations.get(targetSlot) == (uint16)(targetGen - 1)
-                                && state.get()._gates.get(targetSlot).active == 1)
+                            locals.targetSlot = (uint64)(locals.gate.recipientGateIds.get(0)) & QUGATE_GATE_ID_SLOT_MASK;
+                            locals.targetGen = (uint64)(locals.gate.recipientGateIds.get(0)) >> QUGATE_GATE_ID_SLOT_BITS;
+                            if (locals.targetSlot < state.get()._gateCount && locals.targetGen > 0
+                                && state.get()._gateGenerations.get(locals.targetSlot) == (uint16)(locals.targetGen - 1)
+                                && state.get()._gates.get(locals.targetSlot).active == 1)
                             {
                                 output.deferredToGate = 1;
-                                output.deferredGateSlot = targetSlot;
-                                output.deferredGateAmount = releaseAmount;
-                                transferred = 1;
+                                output.deferredGateSlot = locals.targetSlot;
+                                output.deferredGateAmount = locals.releaseAmount;
+                                locals.transferred = 1;
                             }
                         }
                         else
                         {
-                            if (qpi.transfer(locals.gate.recipients.get(0), releaseAmount) >= 0) // [QG-12]
+                            if (qpi.transfer(locals.gate.recipients.get(0), locals.releaseAmount) >= 0) // [QG-12]
                             {
-                                transferred = 1;
+                                locals.transferred = 1;
                             }
                         }
                     }
                     else if (locals.gate.chainNextGateId != -1)
                     {
-                        transferred = 1; // No recipient, chain will handle
+                        locals.transferred = 1; // No recipient, chain will handle
                         output.chainForward = 1;
-                        output.chainForwardAmount = releaseAmount;
+                        output.chainForwardAmount = locals.releaseAmount;
                     }
                     // else: no recipients AND no chain — funds stay in currentBalance
-                    if (transferred)
+                    if (locals.transferred)
                     {
-                        locals.gate.totalForwarded += (uint64)releaseAmount;
+                        locals.gate.totalForwarded += (uint64)locals.releaseAmount;
                         locals.gate.currentBalance = 0;
                         state.mut()._gates.set(input.slotIdx, locals.gate);
 
@@ -2204,7 +2218,7 @@ public:
                 locals.logger._type = QUGATE_LOG_MULTISIG_EXECUTED;
                 locals.logger.gateId = input.gateId;
                 locals.logger.sender = qpi.invocator();
-                locals.logger.amount = releaseAmount;
+                locals.logger.amount = locals.releaseAmount;
                 LOG_INFO(locals.logger);
             }
         }
@@ -3608,13 +3622,17 @@ public:
         {
             if (locals.gate.currentBalance > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.currentBalance);
-                locals.gate.currentBalance = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0)
+                {
+                    locals.gate.currentBalance = 0;
+                }
             }
             if (locals.gate.reserve > 0)
             {
-                qpi.transfer(locals.gate.owner, locals.gate.reserve);
-                locals.gate.reserve = 0;
+                if (qpi.transfer(locals.gate.owner, locals.gate.reserve) >= 0)
+                {
+                    locals.gate.reserve = 0;
+                }
             }
             locals.gate.active = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
@@ -6070,7 +6088,7 @@ public:
             {
                 if (locals.gate.reserve >= (sint64)state.get()._idleFee)
                 {
-                    locals.maintenanceBurnAmount = (state.get()._idleFee * QUGATE_MAINTENANCE_BURN_BPS) / 10000ULL;
+                    locals.maintenanceBurnAmount = QPI::div(state.get()._idleFee * QUGATE_MAINTENANCE_BURN_BPS, 10000ULL);
                     locals.maintenanceDividendAmount = state.get()._idleFee - locals.maintenanceBurnAmount;
 
                     locals.gate.reserve -= state.get()._idleFee;
