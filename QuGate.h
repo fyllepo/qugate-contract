@@ -57,12 +57,9 @@ constexpr uint64 QUGATE_DEFAULT_MIN_SEND = 1000;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_FEE = 25000;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS = 4;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS = 4;
-// Idle maintenance: 100% burned (penalises gate abandonment)
-// No dividend split — idle fees are purely deflationary.
-
-// Creation fee split: burn vs shareholder dividends
-constexpr uint64 QUGATE_CREATION_BURN_BPS = 9000;       // 90% burned
-constexpr uint64 QUGATE_CREATION_DIVIDEND_BPS = 1000;    // 10% to shareholders
+// Fee split: burn vs shareholder dividends (applies to both creation and idle fees)
+constexpr uint64 QUGATE_FEE_BURN_BPS = 8000;             // 80% burned
+constexpr uint64 QUGATE_FEE_DIVIDEND_BPS = 2000;          // 20% to shareholders
 
 // Escalating fee: fee = baseFee * (1 + QPI::div(activeGates, FEE_ESCALATION_STEP))
 constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
@@ -1166,6 +1163,8 @@ public:
         GateConfig gate;
         uint8  maintenanceEligible;
         uint16 delinquentEpoch;
+        uint64 maintenanceBurnAmount;
+        uint64 maintenanceDividendAmount;
         uint64 maintenanceDistributed;
         uint64 maintenanceAmountPerShare;
         uint8  recentlyActive;
@@ -1737,7 +1736,7 @@ public:
         state.mut()._activeGates += 1;
 
         // Split creation fee: burn + shareholder dividends
-        locals.creationBurnAmount = QPI::div(locals.currentFee * QUGATE_CREATION_BURN_BPS, 10000ULL);
+        locals.creationBurnAmount = QPI::div(locals.currentFee * QUGATE_FEE_BURN_BPS, 10000ULL);
         locals.creationDividendAmount = locals.currentFee - locals.creationBurnAmount;
         qpi.burn(locals.creationBurnAmount);
         state.mut()._totalBurned += locals.creationBurnAmount;
@@ -6101,10 +6100,14 @@ public:
                     state.mut()._idleDelinquentEpochs.set(locals.i, 0);
                     state.mut()._totalMaintenanceCharged += state.get()._idleFee;
 
-                    // Idle maintenance is 100% burned — penalises abandonment
-                    qpi.burn(state.get()._idleFee);
-                    state.mut()._totalBurned += state.get()._idleFee;
-                    state.mut()._totalMaintenanceBurned += state.get()._idleFee;
+                    // Idle maintenance: 80% burn, 20% shareholder dividends
+                    locals.maintenanceBurnAmount = QPI::div(state.get()._idleFee * QUGATE_FEE_BURN_BPS, 10000ULL);
+                    locals.maintenanceDividendAmount = state.get()._idleFee - locals.maintenanceBurnAmount;
+                    qpi.burn(locals.maintenanceBurnAmount);
+                    state.mut()._totalBurned += locals.maintenanceBurnAmount;
+                    state.mut()._totalMaintenanceBurned += locals.maintenanceBurnAmount;
+                    state.mut()._earnedMaintenanceDividends += locals.maintenanceDividendAmount;
+                    state.mut()._totalMaintenanceDividends += locals.maintenanceDividendAmount;
 
                     locals.logger._contractIndex = CONTRACT_INDEX;
                     locals.logger._type = (locals.delinquentEpoch > 0 ? QUGATE_LOG_MAINTENANCE_CURED : QUGATE_LOG_MAINTENANCE_CHARGED);
