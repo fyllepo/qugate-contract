@@ -6585,7 +6585,7 @@ public:
                 ? (state.get()._earnedMaintenanceDividends - state.get()._distributedMaintenanceDividends)
                 : 0;
 
-        locals.maintenanceDividendPerShare = div(locals.availableMaintenanceDividends, (uint64)NUMBER_OF_COMPUTORS);
+        locals.maintenanceDividendPerShare = QPI::div(locals.availableMaintenanceDividends, (uint64)NUMBER_OF_COMPUTORS);
         if (locals.maintenanceDividendPerShare > 0)
         {
             if (qpi.distributeDividends(locals.maintenanceDividendPerShare))
