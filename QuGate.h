@@ -57,8 +57,12 @@ constexpr uint64 QUGATE_DEFAULT_MIN_SEND = 1000;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_FEE = 25000;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS = 4;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS = 4;
-constexpr uint64 QUGATE_MAINTENANCE_BURN_BPS = 8000;
-constexpr uint64 QUGATE_MAINTENANCE_DIVIDEND_BPS = 2000;
+// Idle maintenance: 100% burned (penalises gate abandonment)
+// No dividend split — idle fees are purely deflationary.
+
+// Creation fee split: burn vs shareholder dividends
+constexpr uint64 QUGATE_CREATION_BURN_BPS = 9000;       // 90% burned
+constexpr uint64 QUGATE_CREATION_DIVIDEND_BPS = 1000;    // 10% to shareholders
 
 // Escalating fee: fee = baseFee * (1 + QPI::div(activeGates, FEE_ESCALATION_STEP))
 constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
@@ -815,6 +819,8 @@ public:
         uint64 i;
         uint64 slotIdx;
         uint64 currentFee;     // escalated fee
+        uint64 creationBurnAmount;
+        uint64 creationDividendAmount;
     };
 
     struct processSplit_input
@@ -1160,11 +1166,8 @@ public:
         GateConfig gate;
         uint8  maintenanceEligible;
         uint16 delinquentEpoch;
-        uint64 maintenanceBurnAmount;
-        uint64 maintenanceDividendAmount;
         uint64 maintenanceDistributed;
         uint64 maintenanceAmountPerShare;
-        uint8  maintenanceChargedThisEpoch;
         uint8  recentlyActive;
         uint8  activeHold;
         // Heartbeat processing
@@ -1733,9 +1736,13 @@ public:
         output.gateId = ((uint64)(state.get()._gateGenerations.get(locals.slotIdx) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.slotIdx;
         state.mut()._activeGates += 1;
 
-        // Burn the escalated creation fee
-        qpi.burn(locals.currentFee);
-        state.mut()._totalBurned += locals.currentFee;
+        // Split creation fee: burn + shareholder dividends
+        locals.creationBurnAmount = QPI::div(locals.currentFee * QUGATE_CREATION_BURN_BPS, 10000ULL);
+        locals.creationDividendAmount = locals.currentFee - locals.creationBurnAmount;
+        qpi.burn(locals.creationBurnAmount);
+        state.mut()._totalBurned += locals.creationBurnAmount;
+        state.mut()._earnedMaintenanceDividends += locals.creationDividendAmount;
+        state.mut()._totalMaintenanceDividends += locals.creationDividendAmount;
         output.feePaid = locals.currentFee;
 
         // Excess creation fee seeds the unified reserve (no separate fundGate needed)
@@ -6088,21 +6095,16 @@ public:
             {
                 if (locals.gate.reserve >= (sint64)state.get()._idleFee)
                 {
-                    locals.maintenanceBurnAmount = QPI::div(state.get()._idleFee * QUGATE_MAINTENANCE_BURN_BPS, 10000ULL);
-                    locals.maintenanceDividendAmount = state.get()._idleFee - locals.maintenanceBurnAmount;
-
                     locals.gate.reserve -= state.get()._idleFee;
                     locals.gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
                     state.mut()._gates.set(locals.i, locals.gate);
                     state.mut()._idleDelinquentEpochs.set(locals.i, 0);
                     state.mut()._totalMaintenanceCharged += state.get()._idleFee;
 
-                    qpi.burn(locals.maintenanceBurnAmount);
-                    state.mut()._totalBurned += locals.maintenanceBurnAmount;
-                    state.mut()._totalMaintenanceBurned += locals.maintenanceBurnAmount;
-
-                    state.mut()._earnedMaintenanceDividends += locals.maintenanceDividendAmount;
-                    state.mut()._totalMaintenanceDividends += locals.maintenanceDividendAmount;
+                    // Idle maintenance is 100% burned — penalises abandonment
+                    qpi.burn(state.get()._idleFee);
+                    state.mut()._totalBurned += state.get()._idleFee;
+                    state.mut()._totalMaintenanceBurned += state.get()._idleFee;
 
                     locals.logger._contractIndex = CONTRACT_INDEX;
                     locals.logger._type = (locals.delinquentEpoch > 0 ? QUGATE_LOG_MAINTENANCE_CURED : QUGATE_LOG_MAINTENANCE_CHARGED);
