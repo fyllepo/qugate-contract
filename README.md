@@ -44,7 +44,7 @@ Gate-to-gate forwarding can happen in two ways:
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `QUGATE_MAX_GATES` | 256 x X_MULTIPLIER | Max concurrent gates (scales with network) |
+| `QUGATE_MAX_GATES` | 2048 x X_MULTIPLIER | Max concurrent gates (scales with network) |
 | `QUGATE_MAX_RECIPIENTS` | 8 | Max recipients per gate |
 | `QUGATE_MAX_RATIO` | 10,000 | Max ratio value per recipient |
 | `QUGATE_DEFAULT_CREATION_FEE` | 100,000 QU | Initial base creation fee |

@@ -218,7 +218,7 @@ struct TestQpiContext {
 // the contract exactly.
 
 // Pull in constants and structures from QuGate.h
-constexpr uint64 QUGATE_INITIAL_MAX_GATES = 256;
+constexpr uint64 QUGATE_INITIAL_MAX_GATES = 2048;
 constexpr uint64 QUGATE_MAX_GATES = QUGATE_INITIAL_MAX_GATES * 1; // X_MULTIPLIER=1
 constexpr uint64 QUGATE_MAX_RECIPIENTS = 8;
 constexpr uint64 QUGATE_MAX_RATIO = 10000;
@@ -261,7 +261,6 @@ struct GateConfig {
     uint8 mode;
     uint8 recipientCount;
     uint8 active;
-    uint8 allowedSenderCount;
     uint16 createdEpoch;
     uint16 lastActivityEpoch;
     uint64 totalReceived;
@@ -271,7 +270,6 @@ struct GateConfig {
     uint64 roundRobinIndex;
     Array<id, 8> recipients;
     Array<uint64, 8> ratios;
-    Array<id, 8> allowedSenders;
 
     // Chain fields
     sint64 chainNextGateId;
@@ -279,6 +277,12 @@ struct GateConfig {
 
     // Unified reserve — covers chain hop fees and idle maintenance
     sint64 reserve;
+};
+
+// Per-gate allowed-senders configuration (side array)
+struct QUGATE_AllowedSendersConfig {
+    Array<id, 8> senders;
+    uint8 count;
 };
 
 // =============================================
@@ -296,6 +300,7 @@ struct QuGateState {
     uint64 _creationFee;
     uint64 _minSendAmount;
     uint64 _expiryEpochs;
+    Array<QUGATE_AllowedSendersConfig, QUGATE_MAX_GATES> _allowedSendersConfigs;
 };
 
 // =============================================
@@ -490,7 +495,6 @@ public:
         g.mode = input.mode;
         g.recipientCount = input.recipientCount;
         g.active = 1;
-        g.allowedSenderCount = input.allowedSenderCount;
         g.createdEpoch = qpi.epoch();
         g.lastActivityEpoch = qpi.epoch();
         g.threshold = input.threshold;
@@ -539,12 +543,16 @@ public:
                 g.ratios.set(i, 0);
             }
         }
+        // Build allowed-senders config (side array)
+        QUGATE_AllowedSendersConfig asCfg;
+        memset(&asCfg, 0, sizeof(asCfg));
+        asCfg.count = input.allowedSenderCount;
         for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++)
         {
             if (i < input.allowedSenderCount)
-                g.allowedSenders.set(i, input.allowedSenders.get(i));
+                asCfg.senders.set(i, input.allowedSenders.get(i));
             else
-                g.allowedSenders.set(i, id::zero());
+                asCfg.senders.set(i, id::zero());
         }
 
         uint64 slotIdx;
@@ -559,6 +567,7 @@ public:
         }
 
         state.mut()._gates.set(slotIdx, g);
+        state.mut()._allowedSendersConfigs.set(slotIdx, asCfg);
         output.gateId = slotIdx + 1;
         state.mut()._activeGates += 1;
 
@@ -694,10 +703,11 @@ public:
         }
         else if (gate.mode == MODE_CONDITIONAL)
         {
+            QUGATE_AllowedSendersConfig asCfg = state.get()._allowedSendersConfigs.get(gateIdx);
             uint8 senderAllowed = 0;
-            for (uint64 i = 0; i < gate.allowedSenderCount; i++)
+            for (uint64 i = 0; i < asCfg.count; i++)
             {
-                if (gate.allowedSenders.get(i) == sender)
+                if (asCfg.senders.get(i) == sender)
                 {
                     senderAllowed = 1; break;
                 }
@@ -844,7 +854,6 @@ public:
         gate.lastActivityEpoch = qpi.epoch();
         gate.recipientCount = input.recipientCount;
         gate.threshold = input.threshold;
-        gate.allowedSenderCount = input.allowedSenderCount;
 
         for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++)
         {
@@ -857,13 +866,22 @@ public:
                 gate.recipients.set(i, id::zero());
                 gate.ratios.set(i, 0);
             }
+        }
+
+        // Build allowed-senders config (side array)
+        QUGATE_AllowedSendersConfig asCfg;
+        memset(&asCfg, 0, sizeof(asCfg));
+        asCfg.count = input.allowedSenderCount;
+        for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++)
+        {
             if (i < input.allowedSenderCount)
-                gate.allowedSenders.set(i, input.allowedSenders.get(i));
+                asCfg.senders.set(i, input.allowedSenders.get(i));
             else
-                gate.allowedSenders.set(i, id::zero());
+                asCfg.senders.set(i, id::zero());
         }
 
         state.mut()._gates.set(input.gateId - 1, gate);
+        state.mut()._allowedSendersConfigs.set(input.gateId - 1, asCfg);
 
         if (reward > 0) qpi.transfer(caller, reward);
         return output;

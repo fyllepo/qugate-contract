@@ -46,7 +46,7 @@ using namespace QPI;
 // instead of modifying this file (qubic-contract-verify rejects preprocessor directives).
 
 // Capacity scales with network via X_MULTIPLIER
-constexpr uint64 QUGATE_INITIAL_MAX_GATES = 256;  // testnet size; scale up for mainnet
+constexpr uint64 QUGATE_INITIAL_MAX_GATES = 2048;  // testnet size; scale up for mainnet
 constexpr uint64 QUGATE_MAX_GATES = QUGATE_INITIAL_MAX_GATES * X_MULTIPLIER;
 constexpr uint64 QUGATE_MAX_RECIPIENTS = 8;
 constexpr uint64 QUGATE_MAX_RATIO = 10000;       // Max ratio per recipient (prevents overflow)
@@ -243,6 +243,14 @@ struct QUGATE_TimeLockConfig
     uint8  active;         // 1 = time lock is configured on this gate
 };
 
+// Per-gate allowed-senders configuration (CONDITIONAL mode whitelist)
+// Stored outside GateConfig to reduce per-gate footprint.
+struct QUGATE_AllowedSendersConfig
+{
+    Array<id, 8> senders;  // Whitelist addresses
+    uint8 count;           // Number of active entries (0-8)
+};
+
 // HeartbeatBeneficiary removed — beneficiaries are now stored inline in QUGATE_HeartbeatConfig
 
 struct QUGATE : public ContractBase
@@ -272,7 +280,6 @@ public:
         uint8  mode;                // Gate routing mode; one of QUGATE_MODE_* constants; immutable after creation
         uint8  recipientCount;      // Number of active recipients (1 to QUGATE_MAX_RECIPIENTS)
         uint8  active;              // 1 = gate is active and routing; 0 = closed or expired
-        uint8  allowedSenderCount;  // Number of addresses in allowedSenders (0 to QUGATE_MAX_RECIPIENTS)
         uint16 createdEpoch;        // Network epoch when this gate was created
         uint16 lastActivityEpoch;   // Network epoch of last sendToGate or updateGate call; used for expiry
         uint64 totalReceived;       // Cumulative QU received by this gate across all sendToGate calls
@@ -282,7 +289,6 @@ public:
         uint64 roundRobinIndex;     // Next recipient index for ROUND_ROBIN mode; wraps at recipientCount
         Array<id, 8> recipients;     // Recipient public keys; indices beyond recipientCount are zeroed
         Array<uint64, 8> ratios;         // Ratio per recipient for SPLIT mode; others may zero these
-        Array<id, 8> allowedSenders; // Whitelist for CONDITIONAL mode; indices beyond allowedSenderCount are zeroed
 
         // Chain gate fields — only active when chainNextGateId != -1
         sint64 chainNextGateId;   // Versioned gate ID of next gate in chain; -1 if this is a terminal gate
@@ -294,7 +300,6 @@ public:
 
         // Admin gate fields — governance via MULTISIG quorum
         sint64 adminGateId;       // -1 = no admin gate (owner-only). Set to a MULTISIG gate ID for quorum-controlled config.
-        uint8  hasAdminGate;      // 1 if adminGateId is set
 
         // Gate-as-recipient — allows recipients to be other gates for internal routing
         Array<sint64, 8> recipientGateIds;  // Per-recipient: -1 = wallet, >= 0 = versioned gate ID
@@ -606,6 +611,7 @@ public:
     struct getGateBySlot_locals
     {
         GateConfig gate;
+        QUGATE_AllowedSendersConfig asCfg;
         uint64 i;
         uint16 delinquentEpoch;
     };
@@ -786,6 +792,9 @@ public:
         // TIME_LOCK mode state — indexed by gate slot (same index as _gates)
         Array<QUGATE_TimeLockConfig, QUGATE_MAX_GATES> _timeLockConfigs;
 
+        // Allowed-senders config — indexed by gate slot (same index as _gates)
+        Array<QUGATE_AllowedSendersConfig, QUGATE_MAX_GATES> _allowedSendersConfigs;
+
         // Minimal latest execution metadata — one record per gate slot
         Array<QUGATE_LatestExecution, QUGATE_MAX_GATES> _latestExecutions;
     };
@@ -801,6 +810,7 @@ public:
         GateConfig newGate;
         QUGATE_AdminApprovalState adminApprovalZero;
         QUGATE_LatestExecution latestExecZero;
+        QUGATE_AllowedSendersConfig allowedSendersZero;
         uint64 totalRatio;
         uint64 i;
         uint64 slotIdx;
@@ -903,6 +913,7 @@ public:
     struct processConditional_locals
     {
         GateConfig gate;
+        QUGATE_AllowedSendersConfig asCfg;
         uint64 i;
         uint8 senderAllowed;
     };
@@ -1090,6 +1101,7 @@ public:
         sint64 invReward;
         QuGateLogger logger;
         GateConfig gate;
+        QUGATE_AllowedSendersConfig asCfg;
         uint64 totalRatio;
         uint64 i;
         uint64 slotIdx;
@@ -1105,6 +1117,7 @@ public:
     struct getGate_locals
     {
         GateConfig gate;
+        QUGATE_AllowedSendersConfig asCfg;
         uint64 i;
         uint64 slotIdx;
         uint64 encodedGen;
@@ -1116,6 +1129,7 @@ public:
         uint64 i;
         uint64 j;
         GateConfig gate;
+        QUGATE_AllowedSendersConfig asCfg;
         getGate_output entry;
         uint64 slotIdx;
         uint64 encodedGen;
@@ -1468,7 +1482,6 @@ public:
         locals.newGate.mode = input.mode;
         locals.newGate.recipientCount = input.recipientCount;
         locals.newGate.active = 1;
-        locals.newGate.allowedSenderCount = input.allowedSenderCount;
         locals.newGate.createdEpoch = qpi.epoch();       // uint16
         locals.newGate.lastActivityEpoch = qpi.epoch();  //
         locals.newGate.totalReceived = 0;
@@ -1492,7 +1505,6 @@ public:
 
         // Admin gate fields
         locals.newGate.adminGateId = -1;
-        locals.newGate.hasAdminGate = 0;
 
         // Gate-as-recipient: init all to -1 (wallet), then copy from input
         for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i++)
@@ -1516,15 +1528,17 @@ public:
             }
         }
 
+        // Build allowed-senders config (side array)
+        locals.allowedSendersZero.count = input.allowedSenderCount;
         for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i++)
         {
             if (locals.i < input.allowedSenderCount)
             {
-                locals.newGate.allowedSenders.set(locals.i, input.allowedSenders.get(locals.i));
+                locals.allowedSendersZero.senders.set(locals.i, input.allowedSenders.get(locals.i));
             }
             else
             {
-                locals.newGate.allowedSenders.set(locals.i, id::zero());
+                locals.allowedSendersZero.senders.set(locals.i, id::zero());
             }
         }
 
@@ -1692,6 +1706,7 @@ public:
         }
 
         state.mut()._gates.set(locals.slotIdx, locals.newGate);
+        state.mut()._allowedSendersConfigs.set(locals.slotIdx, locals.allowedSendersZero);
         locals.adminApprovalZero.active = 0;
         locals.adminApprovalZero.validUntilEpoch = 0;
         state.mut()._adminApprovalStates.set(locals.slotIdx, locals.adminApprovalZero);
@@ -1974,9 +1989,10 @@ public:
         output.forwarded = 0;
 
         locals.senderAllowed = 0;
-        for (locals.i = 0; locals.i < locals.gate.allowedSenderCount; locals.i++)
+        locals.asCfg = state.get()._allowedSendersConfigs.get(input.gateIdx);
+        for (locals.i = 0; locals.i < locals.asCfg.count; locals.i++)
         {
-            if (locals.senderAllowed == 0 && locals.gate.allowedSenders.get(locals.i) == qpi.invocator())
+            if (locals.senderAllowed == 0 && locals.asCfg.senders.get(locals.i) == qpi.invocator())
             {
                 locals.senderAllowed = 1;
             }
@@ -3304,10 +3320,10 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
+        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
         {
             uint8 adminAuth = 0;
-            if (locals.gate.hasAdminGate)
+            if (locals.gate.adminGateId >= 0)
             {
                 locals.adminCheckSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
                 if (locals.adminCheckSlot < state.get()._gateCount)
@@ -3531,10 +3547,10 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
+        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
         {
             uint8 adminAuth = 0;
-            if (locals.gate.hasAdminGate)
+            if (locals.gate.adminGateId >= 0)
             {
                 locals.adminCheckSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
                 if (locals.adminCheckSlot < state.get()._gateCount)
@@ -3710,7 +3726,6 @@ public:
             locals.gate.roundRobinIndex = 0;
         }
         locals.gate.threshold = input.threshold;
-        locals.gate.allowedSenderCount = input.allowedSenderCount;
 
         // Use locals.i, zero stale slots
         for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i++)
@@ -3727,14 +3742,19 @@ public:
                 locals.gate.ratios.set(locals.i, 0);
                 locals.gate.recipientGateIds.set(locals.i, -1);
             }
+        }
 
+        // Build allowed-senders config (side array)
+        locals.asCfg.count = input.allowedSenderCount;
+        for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i++)
+        {
             if (locals.i < input.allowedSenderCount)
             {
-                locals.gate.allowedSenders.set(locals.i, input.allowedSenders.get(locals.i));
+                locals.asCfg.senders.set(locals.i, input.allowedSenders.get(locals.i));
             }
             else
             {
-                locals.gate.allowedSenders.set(locals.i, id::zero());
+                locals.asCfg.senders.set(locals.i, id::zero());
             }
         }
 
@@ -3760,6 +3780,7 @@ public:
         }
 
         state.mut()._gates.set(locals.slotIdx, locals.gate);
+        state.mut()._allowedSendersConfigs.set(locals.slotIdx, locals.asCfg);
 
         if (locals.invReward > 0)
         {
@@ -3902,19 +3923,20 @@ public:
         output.createdEpoch = locals.gate.createdEpoch;
         output.lastActivityEpoch = locals.gate.lastActivityEpoch;
 
+        locals.asCfg = state.get()._allowedSendersConfigs.get(locals.slotIdx);
         for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i++)
         {
             output.recipients.set(locals.i, locals.gate.recipients.get(locals.i));
             output.ratios.set(locals.i, locals.gate.ratios.get(locals.i));
-            output.allowedSenders.set(locals.i, locals.gate.allowedSenders.get(locals.i));
+            output.allowedSenders.set(locals.i, locals.asCfg.senders.get(locals.i));
         }
-        output.allowedSenderCount = locals.gate.allowedSenderCount;
+        output.allowedSenderCount = locals.asCfg.count;
         output.chainNextGateId = locals.gate.chainNextGateId;
         output.chainDepth = locals.gate.chainDepth;
         output.reserve = locals.gate.reserve;
         output.nextIdleChargeEpoch = locals.gate.nextIdleChargeEpoch;
         output.adminGateId = locals.gate.adminGateId;
-        output.hasAdminGate = locals.gate.hasAdminGate;
+        output.hasAdminGate = (locals.gate.adminGateId >= 0) ? 1 : 0;
         locals.delinquentEpoch = state.get()._idleDelinquentEpochs.get(locals.slotIdx);
         output.idleDelinquent = (locals.delinquentEpoch > 0 ? 1 : 0);
         output.idleGraceRemainingEpochs = 0;
@@ -4032,9 +4054,10 @@ public:
                 locals.entry.reserve = locals.gate.reserve;
                 locals.entry.chainDepth = locals.gate.chainDepth;
                 locals.entry.nextIdleChargeEpoch = locals.gate.nextIdleChargeEpoch;
-                locals.entry.allowedSenderCount = locals.gate.allowedSenderCount;
+                locals.asCfg = state.get()._allowedSendersConfigs.get(locals.slotIdx);
+                locals.entry.allowedSenderCount = locals.asCfg.count;
                 locals.entry.adminGateId = locals.gate.adminGateId;
-                locals.entry.hasAdminGate = locals.gate.hasAdminGate;
+                locals.entry.hasAdminGate = (locals.gate.adminGateId >= 0) ? 1 : 0;
                 locals.delinquentEpoch = state.get()._idleDelinquentEpochs.get(locals.slotIdx);
                 locals.entry.idleDelinquent = (locals.delinquentEpoch > 0 ? 1 : 0);
                 locals.entry.idleGraceRemainingEpochs = 0;
@@ -4056,7 +4079,7 @@ public:
                 {
                     locals.entry.recipients.set(locals.j, locals.gate.recipients.get(locals.j));
                     locals.entry.ratios.set(locals.j, locals.gate.ratios.get(locals.j));
-                    locals.entry.allowedSenders.set(locals.j, locals.gate.allowedSenders.get(locals.j));
+                    locals.entry.allowedSenders.set(locals.j, locals.asCfg.senders.get(locals.j));
                     locals.entry.recipientGateIds.set(locals.j, locals.gate.recipientGateIds.get(locals.j));
                 }
 
@@ -4120,10 +4143,10 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
+        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
         {
             uint8 adminAuth = 0;
-            if (locals.gate.hasAdminGate)
+            if (locals.gate.adminGateId >= 0)
             {
                 locals.adminCheckSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
                 if (locals.adminCheckSlot < state.get()._gateCount)
@@ -4384,10 +4407,10 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
+        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
         {
             uint8 adminAuth = 0;
-            if (locals.gate.hasAdminGate)
+            if (locals.gate.adminGateId >= 0)
             {
                 locals.adminCheckSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
                 if (locals.adminCheckSlot < state.get()._gateCount)
@@ -4720,10 +4743,10 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
+        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
         {
             uint8 adminAuth = 0;
-            if (locals.gate.hasAdminGate)
+            if (locals.gate.adminGateId >= 0)
             {
                 locals.adminCheckSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
                 if (locals.adminCheckSlot < state.get()._gateCount)
@@ -4979,10 +5002,10 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
+        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
         {
             uint8 adminAuth = 0;
-            if (locals.gate.hasAdminGate)
+            if (locals.gate.adminGateId >= 0)
             {
                 locals.adminCheckSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
                 if (locals.adminCheckSlot < state.get()._gateCount)
@@ -5151,10 +5174,10 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.hasAdminGate)
+        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
         {
             uint8 adminAuth = 0;
-            if (locals.gate.hasAdminGate)
+            if (locals.gate.adminGateId >= 0)
             {
                 locals.adminCheckSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
                 if (locals.adminCheckSlot < state.get()._gateCount)
@@ -5386,11 +5409,11 @@ public:
 
         // Authorization
         locals.adminApprovalUsed = 0;
-        if (qpi.invocator() != locals.gate.owner || locals.gate.hasAdminGate)
+        if (qpi.invocator() != locals.gate.owner || locals.gate.adminGateId >= 0)
         {
             // Once an admin gate is set, any change to admin governance requires
             // an active approval window from that admin gate.
-            if (!locals.gate.hasAdminGate)
+            if (locals.gate.adminGateId < 0)
             {
                 output.status = QUGATE_UNAUTHORIZED;
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
@@ -5423,7 +5446,6 @@ public:
                 if (locals.adminApproved == 1)
                 {
                     locals.gate.adminGateId = -1;
-                    locals.gate.hasAdminGate = 0;
                     state.mut()._gates.set(locals.slotIdx, locals.gate);
                     output.status = QUGATE_SUCCESS;
                     locals.logger._type = QUGATE_LOG_ADMIN_GATE_CLEARED;
@@ -5473,7 +5495,6 @@ public:
         if (input.adminGateId == -1)
         {
             locals.gate.adminGateId = -1;
-            locals.gate.hasAdminGate = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
             if (locals.adminApprovalUsed == 1)
             {
@@ -5528,7 +5549,7 @@ public:
         for (locals.walkStep = 0; locals.walkStep < QUGATE_MAX_CHAIN_DEPTH; locals.walkStep++)
         {
             locals.walkGate = state.get()._gates.get(locals.walkSlot);
-            if (locals.walkGate.adminGateId == -1 || locals.walkGate.hasAdminGate == 0)
+            if (locals.walkGate.adminGateId < 0)
             {
                 break;
             }
@@ -5549,7 +5570,6 @@ public:
 
         // Set admin gate
         locals.gate.adminGateId = input.adminGateId;
-        locals.gate.hasAdminGate = 1;
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
         if (locals.adminApprovalUsed == 1)
@@ -5595,11 +5615,11 @@ public:
         }
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
-        output.hasAdminGate = locals.gate.hasAdminGate;
+        output.hasAdminGate = (locals.gate.adminGateId >= 0) ? 1 : 0;
         output.adminGateId = locals.gate.adminGateId;
 
         // If admin gate is set, look up its mode
-        if (locals.gate.hasAdminGate)
+        if (locals.gate.adminGateId >= 0)
         {
             locals.adminSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
             if (locals.adminSlot < state.get()._gateCount)
@@ -5667,7 +5687,7 @@ public:
         if (locals.gate.owner != qpi.invocator())
         {
             uint8 adminAuth = 0;
-            if (locals.gate.hasAdminGate)
+            if (locals.gate.adminGateId >= 0)
             {
                 locals.adminCheckSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
                 if (locals.adminCheckSlot < state.get()._gateCount)
@@ -5791,13 +5811,14 @@ public:
         output.threshold = locals.gate.threshold;
         output.createdEpoch = locals.gate.createdEpoch;
         output.lastActivityEpoch = locals.gate.lastActivityEpoch;
-        output.allowedSenderCount = locals.gate.allowedSenderCount;
+        locals.asCfg = state.get()._allowedSendersConfigs.get(input.slotIndex);
+        output.allowedSenderCount = locals.asCfg.count;
         output.chainNextGateId = locals.gate.chainNextGateId;
         output.reserve = locals.gate.reserve;
         output.chainDepth = locals.gate.chainDepth;
         output.nextIdleChargeEpoch = locals.gate.nextIdleChargeEpoch;
         output.adminGateId = locals.gate.adminGateId;
-        output.hasAdminGate = locals.gate.hasAdminGate;
+        output.hasAdminGate = (locals.gate.adminGateId >= 0) ? 1 : 0;
         locals.delinquentEpoch = state.get()._idleDelinquentEpochs.get(input.slotIndex);
         output.idleDelinquent = (locals.delinquentEpoch > 0 ? 1 : 0);
         output.idleGraceRemainingEpochs = 0;
@@ -5819,7 +5840,7 @@ public:
         {
             output.recipients.set(locals.i, locals.gate.recipients.get(locals.i));
             output.ratios.set(locals.i, locals.gate.ratios.get(locals.i));
-            output.allowedSenders.set(locals.i, locals.gate.allowedSenders.get(locals.i));
+            output.allowedSenders.set(locals.i, locals.asCfg.senders.get(locals.i));
             output.recipientGateIds.set(locals.i, locals.gate.recipientGateIds.get(locals.i));
         }
 
