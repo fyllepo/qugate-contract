@@ -2148,9 +2148,11 @@ public:
                 && input.amount > 0
                 && locals.gate.currentBalance >= (uint64)input.amount)
             {
-                // Admin-only multisig votes are burned immediately instead of accumulating.
+                // Admin-only multisig: burn the vote QU (governance gates don't accumulate)
                 locals.gate.currentBalance -= (uint64)input.amount;
                 state.mut()._gates.set(input.slotIdx, locals.gate);
+                qpi.burn(input.amount);
+                state.mut()._totalBurned += input.amount;
             }
 
             if (locals.msigCfg.approvalCount >= locals.msigCfg.required)
@@ -2268,6 +2270,7 @@ public:
                 locals.gate.reserve -= QUGATE_CHAIN_HOP_FEE;
                 state.mut()._gates.set(input.slotIdx, locals.gate);
                 qpi.burn(QUGATE_CHAIN_HOP_FEE);
+                state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
                 // amountAfterFee stays as input.amount (reserve paid the fee)
             }
             else
@@ -2286,6 +2289,7 @@ public:
         else
         {
             qpi.burn(QUGATE_CHAIN_HOP_FEE);
+            state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
             locals.amountAfterFee = input.amount - QUGATE_CHAIN_HOP_FEE;
         }
 
@@ -4273,6 +4277,7 @@ public:
             locals.gate.chainDepth = 0;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
             qpi.burn(QUGATE_CHAIN_HOP_FEE);
+            state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
             if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
             {
                 qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
@@ -4374,6 +4379,7 @@ public:
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
         qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
         if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
         {
             qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
@@ -5298,6 +5304,15 @@ public:
             if (qpi.transfer(locals.gate.owner, locals.gate.currentBalance) >= 0) // [QG-18]
             {
                 locals.gate.currentBalance = 0;
+            }
+        }
+
+        // Refund reserve to owner
+        if (locals.gate.reserve > 0)
+        {
+            if (qpi.transfer(locals.gate.owner, locals.gate.reserve) >= 0) // [QG-18]
+            {
+                locals.gate.reserve = 0;
             }
         }
 
