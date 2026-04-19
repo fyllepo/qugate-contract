@@ -238,8 +238,8 @@ constexpr uint8 MODE_MULTISIG = 7;
 constexpr uint8 MODE_TIME_LOCK = 8;
 
 // Fee split: burn vs shareholder dividends
-constexpr uint64 QUGATE_FEE_BURN_BPS = 8000;        // 80% burned
-constexpr uint64 QUGATE_FEE_DIVIDEND_BPS = 2000;     // 20% to shareholders
+constexpr uint64 QUGATE_FEE_BURN_BPS = 5000;        // 50% burned
+constexpr uint64 QUGATE_FEE_DIVIDEND_BPS = 5000;     // 50% to shareholders
 
 // Idle maintenance defaults
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_FEE = 25000;
@@ -649,7 +649,7 @@ public:
         output.gateId = slotIdx + 1;
         state.mut()._activeGates += 1;
 
-        // Split creation fee: burn 80% + shareholder dividends 20%
+        // Split creation fee: burn 50% + shareholder dividends 50%
         uint64 creationBurnAmount = QPI::div(currentFee * QUGATE_FEE_BURN_BPS, 10000ULL);
         uint64 creationDividendAmount = currentFee - creationBurnAmount;
         qpi.burn(creationBurnAmount);
@@ -991,7 +991,7 @@ public:
                     state.mut()._gates.set(i, gate);
                     state.mut()._totalMaintenanceCharged += state.get()._idleFee;
 
-                    // Idle maintenance: 80% burn, 20% shareholder dividends
+                    // Idle maintenance: 50% burn, 50% shareholder dividends
                     uint64 maintenanceBurnAmount = QPI::div(state.get()._idleFee * QUGATE_FEE_BURN_BPS, 10000ULL);
                     uint64 maintenanceDividendAmount = state.get()._idleFee - maintenanceBurnAmount;
                     qpi.burn(maintenanceBurnAmount);
@@ -2604,9 +2604,9 @@ TEST(QuGateV3, EndEpochExpiryFullLifecycle)
 TEST(QuGateFinancial, CreationFee80_20Split)
 {
     // When a gate is created with 100,000 QU fee:
-    //   80,000 should be burned (_totalBurned += 80000)
-    //   20,000 should go to dividend pool (_earnedMaintenanceDividends += 20000)
-    //   _totalMaintenanceDividends += 20000
+    //   50,000 should be burned (_totalBurned += 50000)
+    //   50,000 should go to dividend pool (_earnedMaintenanceDividends += 50000)
+    //   _totalMaintenanceDividends += 50000
     //   burn + dividend = fee exactly
     QuGateTest env;
     id recips[] = { BOB };
@@ -2623,11 +2623,11 @@ TEST(QuGateFinancial, CreationFee80_20Split)
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
     ASSERT_EQ(out.feePaid, fee);
 
-    uint64 expectedBurn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL); // 80000
-    uint64 expectedDividend = fee - expectedBurn;                         // 20000
+    uint64 expectedBurn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL); // 50000
+    uint64 expectedDividend = fee - expectedBurn;                         // 50000
 
-    EXPECT_EQ(expectedBurn, 80000ULL);
-    EXPECT_EQ(expectedDividend, 20000ULL);
+    EXPECT_EQ(expectedBurn, 50000ULL);
+    EXPECT_EQ(expectedDividend, 50000ULL);
 
     // Verify state changes
     EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, expectedBurn);
@@ -2673,7 +2673,7 @@ TEST(QuGateFinancial, CreationFeeEscalatedSplitStillBalances)
 TEST(QuGateFinancial, IdleMaintenanceFee80_20Split)
 {
     // When a gate is charged 25,000 QU idle fee:
-    //   20,000 burned (_totalMaintenanceBurned += 20000)
+    //   12,500 burned (_totalMaintenanceBurned += 12500)
     //   5,000 to dividend pool (_earnedMaintenanceDividends increases)
     //   _totalMaintenanceCharged += 25000
     //   gate.reserve decreases by 25000
@@ -2707,10 +2707,10 @@ TEST(QuGateFinancial, IdleMaintenanceFee80_20Split)
     env.endEpoch();
 
     uint64 idleFee = QUGATE_DEFAULT_MAINTENANCE_FEE; // 25000
-    uint64 expectedBurn = QPI::div(idleFee * QUGATE_FEE_BURN_BPS, 10000ULL); // 20000
+    uint64 expectedBurn = QPI::div(idleFee * QUGATE_FEE_BURN_BPS, 10000ULL); // 12500
     uint64 expectedDividend = idleFee - expectedBurn;                         // 5000
 
-    EXPECT_EQ(expectedBurn, 20000ULL);
+    EXPECT_EQ(expectedBurn, 12500ULL);
     EXPECT_EQ(expectedDividend, 5000ULL);
 
     // Verify maintenance tracking
@@ -2793,33 +2793,33 @@ TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
         EXPECT_EQ(burn + div, fee);
     }
 
-    // fee = 99999: burn = 79999, dividend = 20000
+    // fee = 99999: burn = 49999, dividend = 50000
     {
         uint64 fee = 99999;
         uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
         uint64 div = fee - burn;
-        EXPECT_EQ(burn, 79999ULL);
-        EXPECT_EQ(div, 20000ULL);
+        EXPECT_EQ(burn, 49999ULL);
+        EXPECT_EQ(div, 50000ULL);
         EXPECT_EQ(burn + div, fee);
     }
 
-    // fee = 100000: burn = 80000, dividend = 20000 (default creation fee)
+    // fee = 100000: burn = 50000, dividend = 50000 (default creation fee)
     {
         uint64 fee = 100000;
         uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
         uint64 div = fee - burn;
-        EXPECT_EQ(burn, 80000ULL);
-        EXPECT_EQ(div, 20000ULL);
+        EXPECT_EQ(burn, 50000ULL);
+        EXPECT_EQ(div, 50000ULL);
         EXPECT_EQ(burn + div, fee);
     }
 
-    // fee = 25000: burn = 20000, dividend = 5000 (idle maintenance fee)
+    // fee = 25000: burn = 12500, dividend = 12500 (idle maintenance fee)
     {
         uint64 fee = 25000;
         uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
         uint64 div = fee - burn;
-        EXPECT_EQ(burn, 20000ULL);
-        EXPECT_EQ(div, 5000ULL);
+        EXPECT_EQ(burn, 12500ULL);
+        EXPECT_EQ(div, 12500ULL);
         EXPECT_EQ(burn + div, fee);
     }
 

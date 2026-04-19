@@ -58,8 +58,8 @@ constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_FEE = 25000;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS = 4;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS = 4;
 // Fee split: burn vs shareholder dividends (applies to both creation and idle fees)
-constexpr uint64 QUGATE_FEE_BURN_BPS = 8000;             // 80% burned
-constexpr uint64 QUGATE_FEE_DIVIDEND_BPS = 2000;          // 20% to shareholders
+constexpr uint64 QUGATE_FEE_BURN_BPS = 5000;             // 50% burned
+constexpr uint64 QUGATE_FEE_DIVIDEND_BPS = 5000;          // 50% to shareholders
 
 // Escalating fee: fee = baseFee * (1 + QPI::div(activeGates, FEE_ESCALATION_STEP))
 constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
