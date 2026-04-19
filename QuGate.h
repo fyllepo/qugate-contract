@@ -10,7 +10,7 @@
 //   THRESHOLD   - Accumulate until amount reached, then forward
 //   RANDOM      - Select one recipient per payment using tick-based entropy
 //   CONDITIONAL - Only forward if sender matches whitelist, else bounce
-//   ORACLE      - Reserved (pending oracle infrastructure)
+//   _(slot 5)_  - Reserved for future use
 //   HEARTBEAT   - Dead-man's switch; distributes if not pinged within N epochs
 //                 Recipients configured via configureHeartbeat (recipientCount=0 at creation)
 //   MULTISIG    - M-of-N guardian approval before funds release
@@ -1404,7 +1404,7 @@ public:
         // Validate mode
         if (input.mode > QUGATE_MODE_TIME_LOCK || input.mode == QUGATE_MODE_ORACLE)
         {
-            // Refund all — mode 5 (ORACLE) is reserved pending infrastructure
+            // Refund all — mode 5 is reserved for future use
             qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_INVALID_MODE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;

@@ -124,7 +124,7 @@ When the sender is authorized, the full amount is forwarded to recipient 0.
 
 ### Mode Slot 5 — Reserved
 
-Mode slot 5 is reserved. `createGate` with `mode=5` returns `QUGATE_UNSUPPORTED_MODE`. No oracle-related fields remain in the wire format — they were removed in v2.5 when reserves were unified.
+Mode slot 5 is reserved for future use. `createGate` with `mode=5` returns `QUGATE_INVALID_MODE`.
 
 ---
 

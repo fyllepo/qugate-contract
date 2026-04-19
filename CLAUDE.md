@@ -14,7 +14,7 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 | THRESHOLD | 2 | Accumulate until target, then release |
 | RANDOM | 3 | Select one recipient per payment (tick entropy, not cryptographic) |
 | CONDITIONAL | 4 | Only forward from whitelisted senders |
-| _(reserved)_ | 5 | Reserved — oracle mode pending infrastructure |
+| _(reserved)_ | 5 | Reserved for future use |
 | HEARTBEAT | 6 | Dead-man's switch — distribute if no ping for N epochs |
 | MULTISIG | 7 | M-of-N guardian approval before release |
 | TIME_LOCK | 8 | Hold until unlock epoch |
