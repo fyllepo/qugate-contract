@@ -72,7 +72,7 @@ constexpr uint64 QUGATE_GATE_ID_SLOT_BITS = 20;
 constexpr uint64 QUGATE_GATE_ID_SLOT_MASK = (1ULL << QUGATE_GATE_ID_SLOT_BITS) - 1; // 0xFFFFF
 
 // Query limits
-constexpr uint64 QUGATE_MAX_OWNER_GATES = 16;    // max gates returned by getGatesByOwner
+constexpr uint64 QUGATE_MAX_OWNER_GATES = 32;    // max gates returned by getGatesByOwner
 constexpr uint64 QUGATE_MAX_BATCH_GATES = 32;    // max gates in getGateBatch
 
 // Gate modes
