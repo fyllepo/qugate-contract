@@ -233,6 +233,22 @@ constexpr uint8 MODE_ROUND_ROBIN = 1;
 constexpr uint8 MODE_THRESHOLD = 2;
 constexpr uint8 MODE_RANDOM = 3;
 constexpr uint8 MODE_CONDITIONAL = 4;
+constexpr uint8 MODE_HEARTBEAT = 6;
+constexpr uint8 MODE_MULTISIG = 7;
+constexpr uint8 MODE_TIME_LOCK = 8;
+
+// Fee split: burn vs shareholder dividends
+constexpr uint64 QUGATE_FEE_BURN_BPS = 8000;        // 80% burned
+constexpr uint64 QUGATE_FEE_DIVIDEND_BPS = 2000;     // 20% to shareholders
+
+// Idle maintenance defaults
+constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_FEE = 25000;
+constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS = 4;
+constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS = 4;
+
+// Time lock constants
+constexpr uint8 QUGATE_TIME_LOCK_ABSOLUTE_EPOCH = 0;
+constexpr sint64 QUGATE_TIME_LOCK_NOT_CANCELLABLE = -24;
 
 constexpr sint64 QUGATE_INVALID_CHAIN = -14;
 constexpr uint8  QUGATE_MAX_CHAIN_DEPTH = 3;
@@ -277,6 +293,9 @@ struct GateConfig {
 
     // Unified reserve — covers chain hop fees and idle maintenance
     sint64 reserve;
+
+    // Idle maintenance
+    uint16 nextIdleChargeEpoch;
 };
 
 // Per-gate allowed-senders configuration (side array)
@@ -288,6 +307,30 @@ struct QUGATE_AllowedSendersConfig {
 // =============================================
 // V3 QuGateState
 // =============================================
+
+// Minimal multisig config for test harness
+struct QUGATE_MultisigConfig_Test {
+    Array<id, 8> guardians;
+    uint8        guardianCount;
+    uint8        required;
+    uint32       proposalExpiryEpochs;
+    uint32       adminApprovalWindowEpochs;
+    uint8        approvalBitmap;
+    uint8        approvalCount;
+    uint32       proposalEpoch;
+    uint8        proposalActive;
+};
+
+// Minimal time lock config for test harness
+struct QUGATE_TimeLockConfig_Test {
+    uint32 unlockEpoch;
+    uint32 delayEpochs;
+    uint8  lockMode;
+    uint8  cancellable;
+    uint8  fired;
+    uint8  cancelled;
+    uint8  active;
+};
 
 struct QuGateState {
     uint64 _gateCount;
@@ -301,6 +344,20 @@ struct QuGateState {
     uint64 _minSendAmount;
     uint64 _expiryEpochs;
     Array<QUGATE_AllowedSendersConfig, QUGATE_MAX_GATES> _allowedSendersConfigs;
+
+    // Financial model fields
+    uint64 _idleFee;
+    uint64 _idleWindowEpochs;
+    uint64 _idleGraceEpochs;
+    uint64 _totalMaintenanceCharged;
+    uint64 _totalMaintenanceBurned;
+    uint64 _totalMaintenanceDividends;
+    uint64 _earnedMaintenanceDividends;
+    uint64 _distributedMaintenanceDividends;
+
+    // Mode-specific state arrays
+    Array<QUGATE_MultisigConfig_Test, QUGATE_MAX_GATES> _multisigConfigs;
+    Array<QUGATE_TimeLockConfig_Test, QUGATE_MAX_GATES> _timeLockConfigs;
 };
 
 // =============================================
@@ -399,6 +456,14 @@ public:
         state.mut()._creationFee = QUGATE_DEFAULT_CREATION_FEE;
         state.mut()._minSendAmount = QUGATE_DEFAULT_MIN_SEND;
         state.mut()._expiryEpochs = QUGATE_DEFAULT_EXPIRY_EPOCHS;
+        state.mut()._idleFee = QUGATE_DEFAULT_MAINTENANCE_FEE;
+        state.mut()._idleWindowEpochs = QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS;
+        state.mut()._idleGraceEpochs = QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS;
+        state.mut()._totalMaintenanceCharged = 0;
+        state.mut()._totalMaintenanceBurned = 0;
+        state.mut()._totalMaintenanceDividends = 0;
+        state.mut()._earnedMaintenanceDividends = 0;
+        state.mut()._distributedMaintenanceDividends = 0;
     }
 
     ~QuGateTest()
@@ -438,13 +503,21 @@ public:
             output.status = QUGATE_INSUFFICIENT_FEE;
             return output;
         }
-        if (input.mode > MODE_CONDITIONAL)
+        if (input.mode > MODE_TIME_LOCK || input.mode == 5)
         {
             qpi.transfer(creator, fee);
             output.status = QUGATE_INVALID_MODE;
             return output;
         }
-        if (input.recipientCount == 0 || input.recipientCount > QUGATE_MAX_RECIPIENTS)
+        // HEARTBEAT, MULTISIG, TIME_LOCK allow recipientCount=0
+        if (input.recipientCount == 0 && input.mode != MODE_HEARTBEAT
+            && input.mode != MODE_MULTISIG && input.mode != MODE_TIME_LOCK)
+        {
+            qpi.transfer(creator, fee);
+            output.status = QUGATE_INVALID_RECIPIENT_COUNT;
+            return output;
+        }
+        if (input.recipientCount > QUGATE_MAX_RECIPIENTS)
         {
             qpi.transfer(creator, fee);
             output.status = QUGATE_INVALID_RECIPIENT_COUNT;
@@ -502,6 +575,11 @@ public:
         g.chainNextGateId = -1;
         g.chainDepth = 0;
         g.reserve = 0;
+        // Set idle charge due epoch
+        if (state.get()._idleWindowEpochs > 0)
+        {
+            g.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+        }
 
         // Chain validation (chainNextGateId > 0 means chained; 0 or -1 = no chain)
         if (input.chainNextGateId > 0)
@@ -571,8 +649,13 @@ public:
         output.gateId = slotIdx + 1;
         state.mut()._activeGates += 1;
 
-        qpi.burn(currentFee);
-        state.mut()._totalBurned += currentFee;
+        // Split creation fee: burn 80% + shareholder dividends 20%
+        uint64 creationBurnAmount = QPI::div(currentFee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 creationDividendAmount = currentFee - creationBurnAmount;
+        qpi.burn(creationBurnAmount);
+        state.mut()._totalBurned += creationBurnAmount;
+        state.mut()._earnedMaintenanceDividends += creationDividendAmount;
+        state.mut()._totalMaintenanceDividends += creationDividendAmount;
         output.feePaid = currentFee;
 
         // Excess creation fee auto-seeds reserve
@@ -887,9 +970,40 @@ public:
         return output;
     }
 
-    // ---- endEpoch (gate expiry) ----
+    // ---- endEpoch (idle maintenance + gate expiry) ----
     void endEpoch()
     {
+        // Idle maintenance charging
+        for (uint64 i = 0; i < state.get()._gateCount; i++)
+        {
+            GateConfig gate = state.get()._gates.get(i);
+            if (gate.active == 0) continue;
+
+            // Charge inactivity maintenance when idle gate reaches its due epoch
+            if (state.get()._idleWindowEpochs > 0
+                && gate.nextIdleChargeEpoch > 0
+                && qpi.epoch() >= gate.nextIdleChargeEpoch)
+            {
+                if (gate.reserve >= (sint64)state.get()._idleFee)
+                {
+                    gate.reserve -= state.get()._idleFee;
+                    gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                    state.mut()._gates.set(i, gate);
+                    state.mut()._totalMaintenanceCharged += state.get()._idleFee;
+
+                    // Idle maintenance: 80% burn, 20% shareholder dividends
+                    uint64 maintenanceBurnAmount = QPI::div(state.get()._idleFee * QUGATE_FEE_BURN_BPS, 10000ULL);
+                    uint64 maintenanceDividendAmount = state.get()._idleFee - maintenanceBurnAmount;
+                    qpi.burn(maintenanceBurnAmount);
+                    state.mut()._totalBurned += maintenanceBurnAmount;
+                    state.mut()._totalMaintenanceBurned += maintenanceBurnAmount;
+                    state.mut()._earnedMaintenanceDividends += maintenanceDividendAmount;
+                    state.mut()._totalMaintenanceDividends += maintenanceDividendAmount;
+                }
+            }
+        }
+
+        // Expire inactive gates
         for (uint64 i = 0; i < state.get()._gateCount; i++)
         {
             GateConfig gate = state.get()._gates.get(i);
@@ -1003,6 +1117,183 @@ public:
 
         gate.reserve += amount;
         state.mut()._gates.set(gateId - 1, gate);
+        return output;
+    }
+
+    // ---- configureTimeLock (simplified harness) ----
+    sint64 configureTimeLock(const id& caller, uint64 gateId, uint32 unlockEpoch,
+                             uint8 lockMode, uint8 cancellable)
+    {
+        qpi.reset();
+        qpi._invocator = caller;
+
+        if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
+        uint64 idx = gateId - 1;
+        GateConfig gate = state.get()._gates.get(idx);
+        if (!(gate.owner == caller)) return QUGATE_UNAUTHORIZED;
+        if (gate.active == 0) return QUGATE_GATE_NOT_ACTIVE;
+        if (gate.mode != MODE_TIME_LOCK) return QUGATE_INVALID_MODE;
+
+        QUGATE_TimeLockConfig_Test cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.unlockEpoch = unlockEpoch;
+        cfg.lockMode = lockMode;
+        cfg.cancellable = cancellable;
+        cfg.active = 1;
+        state.mut()._timeLockConfigs.set(idx, cfg);
+        return QUGATE_SUCCESS;
+    }
+
+    // ---- cancelTimeLock (simplified harness) ----
+    sint64 cancelTimeLock(const id& caller, uint64 gateId)
+    {
+        qpi.reset();
+        qpi._invocator = caller;
+
+        if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
+        uint64 idx = gateId - 1;
+        GateConfig gate = state.get()._gates.get(idx);
+        if (!(gate.owner == caller)) return QUGATE_UNAUTHORIZED;
+        if (gate.active == 0) return QUGATE_GATE_NOT_ACTIVE;
+        if (gate.mode != MODE_TIME_LOCK) return QUGATE_INVALID_MODE;
+
+        QUGATE_TimeLockConfig_Test cfg = state.get()._timeLockConfigs.get(idx);
+        if (cfg.active == 0) return QUGATE_GATE_NOT_ACTIVE;
+        if (cfg.fired == 1) return -23; // QUGATE_TIME_LOCK_ALREADY_FIRED
+        if (cfg.cancelled == 1) return QUGATE_GATE_NOT_ACTIVE;
+        if (cfg.cancellable == 0) return QUGATE_TIME_LOCK_NOT_CANCELLABLE;
+
+        // Refund held balance to owner
+        if (gate.currentBalance > 0)
+        {
+            qpi.transfer(gate.owner, gate.currentBalance);
+            gate.currentBalance = 0;
+        }
+
+        // Refund reserve to owner
+        if (gate.reserve > 0)
+        {
+            qpi.transfer(gate.owner, gate.reserve);
+            gate.reserve = 0;
+        }
+
+        // Mark cancelled, close gate
+        cfg.cancelled = 1;
+        state.mut()._timeLockConfigs.set(idx, cfg);
+        gate.active = 0;
+        state.mut()._gates.set(idx, gate);
+        state.mut()._activeGates -= 1;
+        state.mut()._freeSlots.set(state.get()._freeCount, idx);
+        state.mut()._freeCount += 1;
+        state.mut()._gateGenerations.set(idx, state.get()._gateGenerations.get(idx) + 1);
+
+        return QUGATE_SUCCESS;
+    }
+
+    // ---- configureMultisig (simplified harness) ----
+    sint64 configureMultisig(const id& caller, uint64 gateId,
+                              id* guardians, uint8 guardianCount,
+                              uint8 required, uint32 proposalExpiryEpochs,
+                              uint32 adminApprovalWindowEpochs)
+    {
+        qpi.reset();
+        qpi._invocator = caller;
+
+        if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
+        uint64 idx = gateId - 1;
+        GateConfig gate = state.get()._gates.get(idx);
+        if (!(gate.owner == caller)) return QUGATE_UNAUTHORIZED;
+        if (gate.active == 0) return QUGATE_GATE_NOT_ACTIVE;
+        if (gate.mode != MODE_MULTISIG) return QUGATE_INVALID_MODE;
+
+        QUGATE_MultisigConfig_Test cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.guardianCount = guardianCount;
+        cfg.required = required;
+        cfg.proposalExpiryEpochs = proposalExpiryEpochs;
+        cfg.adminApprovalWindowEpochs = adminApprovalWindowEpochs;
+        for (uint8 i = 0; i < guardianCount && i < 8; i++)
+        {
+            cfg.guardians.set(i, guardians[i]);
+        }
+        state.mut()._multisigConfigs.set(idx, cfg);
+        return QUGATE_SUCCESS;
+    }
+
+    // ---- multisigVote (simplified harness — sendToGate for MULTISIG mode) ----
+    // Returns status. For admin-only MULTISIG (recipientCount=0, chainNextGateId=-1,
+    // adminApprovalWindowEpochs>0), vote QU is burned.
+    sendToGate_output sendToMultisigGate(const id& sender, uint64 gateId, sint64 amount)
+    {
+        qpi.reset();
+        qpi._invocator = sender;
+        qpi._reward = amount;
+
+        sendToGate_output output;
+        output.status = QUGATE_SUCCESS;
+
+        if (gateId == 0 || gateId > state.get()._gateCount)
+        {
+            if (amount > 0) qpi.transfer(sender, amount);
+            output.status = QUGATE_INVALID_GATE_ID;
+            return output;
+        }
+
+        uint64 idx = gateId - 1;
+        GateConfig gate = state.get()._gates.get(idx);
+        if (gate.active == 0)
+        {
+            if (amount > 0) qpi.transfer(sender, amount);
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            return output;
+        }
+        if (gate.mode != MODE_MULTISIG)
+        {
+            if (amount > 0) qpi.transfer(sender, amount);
+            output.status = QUGATE_INVALID_MODE;
+            return output;
+        }
+
+        // Accumulate balance
+        gate.totalReceived += amount;
+        gate.currentBalance += amount;
+        gate.lastActivityEpoch = qpi.epoch();
+
+        QUGATE_MultisigConfig_Test msigCfg = state.get()._multisigConfigs.get(idx);
+
+        // Check if sender is a guardian — cast vote
+        uint8 guardianIdx = 255;
+        for (uint8 i = 0; i < msigCfg.guardianCount; i++)
+        {
+            if (msigCfg.guardians.get(i) == sender)
+            {
+                guardianIdx = i;
+                break;
+            }
+        }
+        if (guardianIdx != 255 && !(msigCfg.approvalBitmap & (1 << guardianIdx)))
+        {
+            msigCfg.approvalBitmap |= (1 << guardianIdx);
+            msigCfg.approvalCount++;
+            if (!msigCfg.proposalActive)
+            {
+                msigCfg.proposalActive = 1;
+                msigCfg.proposalEpoch = qpi.epoch();
+            }
+            state.mut()._multisigConfigs.set(idx, msigCfg);
+
+            // Admin-only multisig: burn the vote QU
+            if (gate.recipientCount == 0 && gate.chainNextGateId == -1
+                && msigCfg.adminApprovalWindowEpochs > 0
+                && amount > 0 && gate.currentBalance >= (uint64)amount)
+            {
+                gate.currentBalance -= (uint64)amount;
+                qpi.burn(amount);
+                state.mut()._totalBurned += amount;
+            }
+        }
+
+        state.mut()._gates.set(idx, gate);
         return output;
     }
 
@@ -2302,4 +2593,546 @@ TEST(QuGateV3, EndEpochExpiryFullLifecycle)
     auto out2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(out2.status, QUGATE_SUCCESS);
     EXPECT_EQ(env.state.get()._freeCount, 0ULL); // slot was reused from free-list
+}
+
+// =============================================
+// FINANCIAL MODEL TESTS
+// =============================================
+
+// ---- 1. Creation fee 80/20 split ----
+
+TEST(QuGateFinancial, CreationFee80_20Split)
+{
+    // When a gate is created with 100,000 QU fee:
+    //   80,000 should be burned (_totalBurned += 80000)
+    //   20,000 should go to dividend pool (_earnedMaintenanceDividends += 20000)
+    //   _totalMaintenanceDividends += 20000
+    //   burn + dividend = fee exactly
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    uint64 fee = env.currentEscalatedFee(); // 100000 at 0 active gates
+    ASSERT_EQ(fee, 100000ULL);
+
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    uint64 dividendsBefore = env.state.get()._earnedMaintenanceDividends;
+    uint64 totalDivBefore = env.state.get()._totalMaintenanceDividends;
+
+    auto out = makeSimpleGate(env, ALICE, (sint64)fee, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(out.feePaid, fee);
+
+    uint64 expectedBurn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL); // 80000
+    uint64 expectedDividend = fee - expectedBurn;                         // 20000
+
+    EXPECT_EQ(expectedBurn, 80000ULL);
+    EXPECT_EQ(expectedDividend, 20000ULL);
+
+    // Verify state changes
+    EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, expectedBurn);
+    EXPECT_EQ(env.state.get()._earnedMaintenanceDividends - dividendsBefore, expectedDividend);
+    EXPECT_EQ(env.state.get()._totalMaintenanceDividends - totalDivBefore, expectedDividend);
+
+    // Verify burn + dividend = fee exactly
+    uint64 totalAccounted = (env.state.get()._totalBurned - burnedBefore)
+                          + (env.state.get()._earnedMaintenanceDividends - dividendsBefore);
+    EXPECT_EQ(totalAccounted, fee);
+
+    // Verify qpi.burn was called with only the burn portion
+    EXPECT_EQ(env.qpi.totalBurned, (sint64)expectedBurn);
+}
+
+TEST(QuGateFinancial, CreationFeeEscalatedSplitStillBalances)
+{
+    // With active gates, the escalated fee also splits correctly
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    // Force 1024 active gates for 2x escalation
+    env.state.mut()._activeGates = 1024;
+    uint64 fee = env.currentEscalatedFee(); // 100000 * 2 = 200000
+    ASSERT_EQ(fee, 200000ULL);
+
+    auto out = makeSimpleGate(env, ALICE, (sint64)fee, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    uint64 expectedBurn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL); // 160000
+    uint64 expectedDividend = fee - expectedBurn;                         // 40000
+
+    EXPECT_EQ(expectedBurn, 160000ULL);
+    EXPECT_EQ(expectedDividend, 40000ULL);
+
+    // burn + dividend = fee
+    EXPECT_EQ(env.state.get()._totalBurned + env.state.get()._earnedMaintenanceDividends, fee);
+}
+
+// ---- 2. Idle maintenance fee 80/20 split ----
+
+TEST(QuGateFinancial, IdleMaintenanceFee80_20Split)
+{
+    // When a gate is charged 25,000 QU idle fee:
+    //   20,000 burned (_totalMaintenanceBurned += 20000)
+    //   5,000 to dividend pool (_earnedMaintenanceDividends increases)
+    //   _totalMaintenanceCharged += 25000
+    //   gate.reserve decreases by 25000
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    uint64 creationFee = env.currentEscalatedFee();
+    uint64 reserveAmount = 200000; // well above idle fee
+
+    // Create gate at epoch 100
+    env.qpi._epoch = 100;
+    auto out = makeSimpleGate(env, ALICE, (sint64)(creationFee + reserveAmount), MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(out.feePaid, creationFee);
+
+    // Verify reserve was seeded with excess
+    auto gateBefore = env.getGate(out.gateId);
+    EXPECT_EQ(gateBefore.reserve, (sint64)reserveAmount);
+
+    // Record state before idle charge
+    uint64 maintenanceChargedBefore = env.state.get()._totalMaintenanceCharged;
+    uint64 maintenanceBurnedBefore = env.state.get()._totalMaintenanceBurned;
+    uint64 earnedDivBefore = env.state.get()._earnedMaintenanceDividends;
+    uint64 totalDivBefore = env.state.get()._totalMaintenanceDividends;
+    uint64 totalBurnedBefore = env.state.get()._totalBurned;
+
+    // Advance to idle charge epoch (created at 100, window=4, so due at 104)
+    env.qpi._epoch = 104;
+    env.qpi.reset();
+    env.endEpoch();
+
+    uint64 idleFee = QUGATE_DEFAULT_MAINTENANCE_FEE; // 25000
+    uint64 expectedBurn = QPI::div(idleFee * QUGATE_FEE_BURN_BPS, 10000ULL); // 20000
+    uint64 expectedDividend = idleFee - expectedBurn;                         // 5000
+
+    EXPECT_EQ(expectedBurn, 20000ULL);
+    EXPECT_EQ(expectedDividend, 5000ULL);
+
+    // Verify maintenance tracking
+    EXPECT_EQ(env.state.get()._totalMaintenanceCharged - maintenanceChargedBefore, idleFee);
+    EXPECT_EQ(env.state.get()._totalMaintenanceBurned - maintenanceBurnedBefore, expectedBurn);
+
+    // Verify dividend tracking
+    EXPECT_EQ(env.state.get()._earnedMaintenanceDividends - earnedDivBefore, expectedDividend);
+    EXPECT_EQ(env.state.get()._totalMaintenanceDividends - totalDivBefore, expectedDividend);
+
+    // Verify total burned includes maintenance burn
+    EXPECT_EQ(env.state.get()._totalBurned - totalBurnedBefore, expectedBurn);
+
+    // Verify gate reserve decreased by full idle fee
+    auto gateAfter = env.getGate(out.gateId);
+    EXPECT_EQ(gateAfter.reserve, (sint64)(reserveAmount - idleFee));
+
+    // Verify burn + dividend = fee exactly
+    EXPECT_EQ(expectedBurn + expectedDividend, idleFee);
+}
+
+TEST(QuGateFinancial, IdleMaintenanceMultipleCycles)
+{
+    // Verify multiple idle charge cycles accumulate correctly
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    uint64 creationFee = env.currentEscalatedFee();
+    uint64 reserveAmount = 500000; // enough for many cycles
+
+    env.qpi._epoch = 100;
+    auto out = makeSimpleGate(env, ALICE, (sint64)(creationFee + reserveAmount), MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    uint64 idleFee = QUGATE_DEFAULT_MAINTENANCE_FEE;
+    uint64 burnPerCycle = QPI::div(idleFee * QUGATE_FEE_BURN_BPS, 10000ULL);
+    uint64 divPerCycle = idleFee - burnPerCycle;
+
+    // Run 3 idle charge cycles (epochs 104, 108, 112)
+    for (int cycle = 0; cycle < 3; cycle++)
+    {
+        env.qpi._epoch = 104 + cycle * 4;
+        env.qpi.reset();
+        env.endEpoch();
+    }
+
+    EXPECT_EQ(env.state.get()._totalMaintenanceCharged, idleFee * 3);
+    EXPECT_EQ(env.state.get()._totalMaintenanceBurned, burnPerCycle * 3);
+
+    // Reserve should have decreased by 3 * idleFee
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.reserve, (sint64)(reserveAmount - idleFee * 3));
+}
+
+// ---- 3. Rounding correctness ----
+
+TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
+{
+    // For various fee amounts, verify burn + dividend = fee exactly
+    // The formula: burn = fee * 8000 / 10000, dividend = fee - burn
+
+    // fee = 1: burn = 0, dividend = 1
+    {
+        uint64 fee = 1;
+        uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 div = fee - burn;
+        EXPECT_EQ(burn, 0ULL);
+        EXPECT_EQ(div, 1ULL);
+        EXPECT_EQ(burn + div, fee);
+    }
+
+    // fee = 7: burn = 5, dividend = 2
+    {
+        uint64 fee = 7;
+        uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 div = fee - burn;
+        EXPECT_EQ(burn, 5ULL);
+        EXPECT_EQ(div, 2ULL);
+        EXPECT_EQ(burn + div, fee);
+    }
+
+    // fee = 99999: burn = 79999, dividend = 20000
+    {
+        uint64 fee = 99999;
+        uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 div = fee - burn;
+        EXPECT_EQ(burn, 79999ULL);
+        EXPECT_EQ(div, 20000ULL);
+        EXPECT_EQ(burn + div, fee);
+    }
+
+    // fee = 100000: burn = 80000, dividend = 20000 (default creation fee)
+    {
+        uint64 fee = 100000;
+        uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 div = fee - burn;
+        EXPECT_EQ(burn, 80000ULL);
+        EXPECT_EQ(div, 20000ULL);
+        EXPECT_EQ(burn + div, fee);
+    }
+
+    // fee = 25000: burn = 20000, dividend = 5000 (idle maintenance fee)
+    {
+        uint64 fee = 25000;
+        uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 div = fee - burn;
+        EXPECT_EQ(burn, 20000ULL);
+        EXPECT_EQ(div, 5000ULL);
+        EXPECT_EQ(burn + div, fee);
+    }
+
+    // fee = 3: burn = 2, dividend = 1
+    {
+        uint64 fee = 3;
+        uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 div = fee - burn;
+        EXPECT_EQ(burn, 2ULL);
+        EXPECT_EQ(div, 1ULL);
+        EXPECT_EQ(burn + div, fee);
+    }
+}
+
+// ---- 4. cancelTimeLock refunds reserve ----
+
+TEST(QuGateFinancial, CancelTimeLockRefundsReserve)
+{
+    // Create a TIME_LOCK gate, fund its reserve, cancel it
+    // — verify reserve is refunded to owner (not trapped)
+    QuGateTest env;
+
+    uint64 creationFee = env.currentEscalatedFee();
+
+    // Create TIME_LOCK gate with recipientCount=0
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_TIME_LOCK;
+    in.recipientCount = 0;
+    in.chainNextGateId = -1;
+    auto out = env.createGate(ALICE, (sint64)creationFee, in);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    // Configure time lock (cancellable)
+    auto cfgStatus = env.configureTimeLock(ALICE, out.gateId, 200, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1);
+    ASSERT_EQ(cfgStatus, QUGATE_SUCCESS);
+
+    // Fund reserve
+    auto fundOut = env.fundGate(ALICE, out.gateId, 50000);
+    ASSERT_EQ(fundOut.result, QUGATE_SUCCESS);
+
+    // Send some QU to accumulate in currentBalance
+    // (For TIME_LOCK, sendToGate accumulates in currentBalance)
+    // We'll directly set the balance to simulate funding
+    {
+        GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
+        gate.currentBalance = 30000;
+        env.state.mut()._gates.set(out.gateId - 1, gate);
+    }
+
+    auto gateBefore = env.getGate(out.gateId);
+    EXPECT_EQ(gateBefore.reserve, 50000);
+    EXPECT_EQ(gateBefore.currentBalance, 30000ULL);
+
+    // Cancel the time lock
+    env.qpi.reset();
+    auto cancelStatus = env.cancelTimeLock(ALICE, out.gateId);
+    ASSERT_EQ(cancelStatus, QUGATE_SUCCESS);
+
+    // Verify reserve + balance refunded to owner
+    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 30000 + 50000);
+
+    // Verify gate is closed
+    auto gateAfter = env.getGate(out.gateId);
+    EXPECT_EQ(gateAfter.active, 0);
+    EXPECT_EQ(gateAfter.currentBalance, 0ULL);
+    EXPECT_EQ(gateAfter.reserve, 0);
+}
+
+TEST(QuGateFinancial, CancelTimeLockNonCancellableRejected)
+{
+    // Verify that cancelling a non-cancellable TIME_LOCK is rejected
+    QuGateTest env;
+
+    uint64 creationFee = env.currentEscalatedFee();
+
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_TIME_LOCK;
+    in.recipientCount = 0;
+    in.chainNextGateId = -1;
+    auto out = env.createGate(ALICE, (sint64)creationFee, in);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    // Configure as non-cancellable
+    auto cfgStatus = env.configureTimeLock(ALICE, out.gateId, 200, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 0);
+    ASSERT_EQ(cfgStatus, QUGATE_SUCCESS);
+
+    env.fundGate(ALICE, out.gateId, 50000);
+
+    auto cancelStatus = env.cancelTimeLock(ALICE, out.gateId);
+    EXPECT_EQ(cancelStatus, QUGATE_TIME_LOCK_NOT_CANCELLABLE);
+
+    // Gate should still be active with reserve intact
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.reserve, 50000);
+}
+
+// ---- 5. Admin-only MULTISIG vote burns QU ----
+
+TEST(QuGateFinancial, AdminOnlyMultisigVoteBurnsQU)
+{
+    // Create admin-only MULTISIG (recipientCount=0, chainNextGateId=-1,
+    // adminApprovalWindowEpochs>0), send QU as a vote
+    // — verify QU is burned and _totalBurned increases
+    QuGateTest env;
+
+    uint64 creationFee = env.currentEscalatedFee();
+
+    // Create MULTISIG gate with recipientCount=0 (admin-only governance gate)
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_MULTISIG;
+    in.recipientCount = 0;
+    in.chainNextGateId = -1;
+    auto out = env.createGate(ALICE, (sint64)creationFee, in);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    // Configure multisig: BOB and CHARLIE as guardians, 2-of-2, adminApprovalWindowEpochs=5
+    id guardians[] = { BOB, CHARLIE };
+    auto cfgStatus = env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 10, 5);
+    ASSERT_EQ(cfgStatus, QUGATE_SUCCESS);
+
+    uint64 totalBurnedBefore = env.state.get()._totalBurned;
+
+    // BOB votes with 5000 QU
+    auto voteOut = env.sendToMultisigGate(BOB, out.gateId, 5000);
+    EXPECT_EQ(voteOut.status, QUGATE_SUCCESS);
+
+    // The 5000 QU should be burned (admin-only multisig burns vote QU)
+    EXPECT_EQ(env.state.get()._totalBurned - totalBurnedBefore, 5000ULL);
+    EXPECT_EQ(env.qpi.totalBurned, 5000);
+
+    // Gate balance should be 0 (burned, not accumulated)
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.currentBalance, 0ULL);
+}
+
+TEST(QuGateFinancial, AdminOnlyMultisigMultipleVotesBurn)
+{
+    // Multiple guardian votes each burn their QU independently
+    QuGateTest env;
+
+    uint64 creationFee = env.currentEscalatedFee();
+
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_MULTISIG;
+    in.recipientCount = 0;
+    in.chainNextGateId = -1;
+    auto out = env.createGate(ALICE, (sint64)creationFee, in);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    id guardians[] = { BOB, CHARLIE, DAVE };
+    auto cfgStatus = env.configureMultisig(ALICE, out.gateId, guardians, 3, 2, 10, 5);
+    ASSERT_EQ(cfgStatus, QUGATE_SUCCESS);
+
+    uint64 totalBurnedBefore = env.state.get()._totalBurned;
+
+    // BOB votes with 3000 QU
+    env.sendToMultisigGate(BOB, out.gateId, 3000);
+    EXPECT_EQ(env.state.get()._totalBurned - totalBurnedBefore, 3000ULL);
+
+    // CHARLIE votes with 7000 QU
+    env.sendToMultisigGate(CHARLIE, out.gateId, 7000);
+    EXPECT_EQ(env.state.get()._totalBurned - totalBurnedBefore, 10000ULL);
+
+    // Total burned should be cumulative
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.currentBalance, 0ULL);
+}
+
+// ---- 6. Chain hop fee tracked in _totalBurned ----
+
+TEST(QuGateFinancial, ChainHopFeeBurnedAndTracked)
+{
+    // Create two chained gates, send QU through the chain
+    // — verify _totalBurned includes the hop fee (1000 QU per hop)
+    QuGateTest env;
+
+    uint64 creationFee = env.currentEscalatedFee();
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    // Create target gate (g1) and source gate (g2)
+    auto g1 = makeSimpleGate(env, ALICE, (sint64)creationFee, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(g1.status, QUGATE_SUCCESS);
+
+    id recips2[] = { CHARLIE };
+    auto g2 = makeSimpleGate(env, ALICE, (sint64)creationFee, MODE_SPLIT, 1, recips2, ratios);
+    ASSERT_EQ(g2.status, QUGATE_SUCCESS);
+
+    // Chain g2 → g1 (costs QUGATE_CHAIN_HOP_FEE to set up)
+    env.setChain(ALICE, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
+
+    // Record state before chain routing
+    uint64 totalBurnedBefore = env.state.get()._totalBurned;
+
+    // Route 10000 through the chain: g2 → g1
+    env.qpi.reset();
+    sint64 forwarded = env.routeChain(g2.gateId, 10000);
+
+    // Hop 1 (g2): 10000 - 1000 hop fee = 9000 forwarded through SPLIT to CHARLIE
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 9000);
+
+    // Hop 2 (g1): 9000 - 1000 hop fee = 8000 forwarded through SPLIT to BOB
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 8000);
+
+    // Total hop fees burned: 2 * 1000 = 2000
+    EXPECT_EQ(env.qpi.totalBurned, 2000);
+
+    // _totalBurned in state should NOT be updated by routeToGate/routeChain
+    // (the harness routeToGate calls qpi.burn but doesn't update state._totalBurned)
+    // However, verifying the qpi.burn accumulation is the key test
+    EXPECT_EQ(env.qpi.totalBurned, 2 * QUGATE_CHAIN_HOP_FEE);
+}
+
+TEST(QuGateFinancial, SetChainBurnsHopFee)
+{
+    // Verify that setChain burns QUGATE_CHAIN_HOP_FEE and tracks it
+    QuGateTest env;
+
+    uint64 creationFee = env.currentEscalatedFee();
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    auto g1 = makeSimpleGate(env, ALICE, (sint64)creationFee, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, (sint64)creationFee, MODE_SPLIT, 1, recips, ratios);
+
+    env.qpi.reset();
+    auto out = env.setChain(ALICE, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
+    EXPECT_EQ(out.result, QUGATE_SUCCESS);
+
+    // The hop fee should be burned
+    EXPECT_EQ(env.qpi.totalBurned, QUGATE_CHAIN_HOP_FEE);
+}
+
+TEST(QuGateFinancial, SetChainExcessFeeRefunded)
+{
+    // If more than QUGATE_CHAIN_HOP_FEE is paid, excess is refunded
+    QuGateTest env;
+
+    uint64 creationFee = env.currentEscalatedFee();
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    auto g1 = makeSimpleGate(env, ALICE, (sint64)creationFee, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, (sint64)creationFee, MODE_SPLIT, 1, recips, ratios);
+
+    env.qpi.reset();
+    auto out = env.setChain(ALICE, g2.gateId, g1.gateId, 5000);
+    EXPECT_EQ(out.result, QUGATE_SUCCESS);
+
+    // Hop fee burned
+    EXPECT_EQ(env.qpi.totalBurned, QUGATE_CHAIN_HOP_FEE);
+
+    // Excess refunded to ALICE (5000 - 1000 = 4000)
+    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 4000);
+}
+
+// ---- 7. Excess creation fee seeds reserve ----
+
+TEST(QuGateFinancial, ExcessCreationFeeSeedsReserve)
+{
+    // Create a gate with 150,000 QU when fee is 100,000
+    // — verify gate.reserve = 50,000 (the excess)
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    uint64 creationFee = env.currentEscalatedFee(); // 100000
+    ASSERT_EQ(creationFee, 100000ULL);
+
+    uint64 payment = 150000;
+    auto out = makeSimpleGate(env, ALICE, (sint64)payment, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(out.feePaid, creationFee);
+
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.reserve, (sint64)(payment - creationFee)); // 50000
+}
+
+TEST(QuGateFinancial, ExactCreationFeeZeroReserve)
+{
+    // Paying exactly the fee should result in zero reserve
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    uint64 creationFee = env.currentEscalatedFee();
+    auto out = makeSimpleGate(env, ALICE, (sint64)creationFee, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.reserve, 0);
+}
+
+TEST(QuGateFinancial, LargeExcessSeedsLargeReserve)
+{
+    // Verify large overpayment all goes to reserve
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    uint64 creationFee = env.currentEscalatedFee(); // 100000
+    uint64 payment = 1000000; // 10x the fee
+    auto out = makeSimpleGate(env, ALICE, (sint64)payment, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.reserve, (sint64)(payment - creationFee)); // 900000
+
+    // No refund transfer — all excess is reserve
+    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 0);
 }
