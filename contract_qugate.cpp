@@ -147,6 +147,9 @@ struct TestQpiContext {
     sint64 _reward;
     uint16 _epoch;
     uint64 _tick;
+    id _failTransferTo;
+    bool _failTransferActive;
+    int _failTransferRemaining;
 
     static constexpr int MAX_TRANSFERS = 64;
     struct Transfer { id to; sint64 amount; };
@@ -155,9 +158,10 @@ struct TestQpiContext {
 
     sint64 totalBurned;
 
-    TestQpiContext() : _reward(0), _epoch(100), _tick(12345), transferCount(0), totalBurned(0)
+    TestQpiContext() : _reward(0), _epoch(100), _tick(12345), _failTransferActive(false), _failTransferRemaining(0), transferCount(0), totalBurned(0)
     {
         memset(&_invocator, 0, sizeof(_invocator));
+        memset(&_failTransferTo, 0, sizeof(_failTransferTo));
         memset(transfers, 0, sizeof(transfers));
     }
 
@@ -166,14 +170,27 @@ struct TestQpiContext {
     uint16 epoch() const { return _epoch; }
     uint64 tick() const { return _tick; }
 
-    void transfer(const id& to, sint64 amount)
+    sint64 transfer(const id& to, sint64 amount)
     {
+        if (_failTransferActive && to == _failTransferTo && _failTransferRemaining != 0)
+        {
+            if (_failTransferRemaining > 0)
+            {
+                _failTransferRemaining--;
+                if (_failTransferRemaining == 0)
+                {
+                    _failTransferActive = false;
+                }
+            }
+            return -1;
+        }
         if (transferCount < MAX_TRANSFERS)
         {
             transfers[transferCount].to = to;
             transfers[transferCount].amount = amount;
             transferCount++;
         }
+        return 0;
     }
 
     void burn(sint64 amount)
@@ -186,6 +203,20 @@ struct TestQpiContext {
         transferCount = 0;
         totalBurned = 0;
         _reward = 0;
+    }
+
+    void failTransfersTo(const id& to, int count = 1)
+    {
+        _failTransferTo = to;
+        _failTransferActive = true;
+        _failTransferRemaining = count;
+    }
+
+    void clearTransferFailures()
+    {
+        _failTransferActive = false;
+        _failTransferRemaining = 0;
+        memset(&_failTransferTo, 0, sizeof(_failTransferTo));
     }
 
     sint64 totalTransferredTo(const id& addr) const {
@@ -248,11 +279,13 @@ constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS = 4;
 
 // Time lock constants
 constexpr uint8 QUGATE_TIME_LOCK_ABSOLUTE_EPOCH = 0;
+constexpr uint8 QUGATE_TIME_LOCK_RELATIVE_EPOCHS = 1;
 constexpr sint64 QUGATE_TIME_LOCK_NOT_CANCELLABLE = -24;
 
 constexpr sint64 QUGATE_INVALID_CHAIN = -14;
 constexpr uint8  QUGATE_MAX_CHAIN_DEPTH = 3;
 constexpr sint64 QUGATE_CHAIN_HOP_FEE = 1000;
+constexpr uint64 QUGATE_GATE_ID_SLOT_STRIDE = 1000000ULL;
 
 constexpr sint64 QUGATE_SUCCESS = 0;
 constexpr sint64 QUGATE_INVALID_GATE_ID = -1;
@@ -267,6 +300,20 @@ constexpr sint64 QUGATE_DUST_AMOUNT = -9;
 constexpr sint64 QUGATE_INVALID_THRESHOLD = -10;
 constexpr sint64 QUGATE_INVALID_SENDER_COUNT = -11;
 constexpr sint64 QUGATE_CONDITIONAL_REJECTED = -12;
+constexpr sint64 QUGATE_HEARTBEAT_NOT_ACTIVE = -15;
+constexpr sint64 QUGATE_HEARTBEAT_TRIGGERED = -16;
+constexpr sint64 QUGATE_HEARTBEAT_INVALID = -17;
+constexpr sint64 QUGATE_MULTISIG_NOT_GUARDIAN = -19;
+constexpr sint64 QUGATE_MULTISIG_ALREADY_VOTED = -20;
+constexpr sint64 QUGATE_MULTISIG_INVALID_CONFIG = -21;
+constexpr sint64 QUGATE_MULTISIG_NO_ACTIVE_PROP = -22;
+constexpr sint64 QUGATE_TIME_LOCK_ALREADY_FIRED = -23;
+constexpr sint64 QUGATE_TIME_LOCK_EPOCH_PAST = -25;
+constexpr sint64 QUGATE_INVALID_ADMIN_GATE = -26;
+constexpr sint64 QUGATE_ADMIN_GATE_REQUIRED = -27;
+constexpr sint64 QUGATE_INVALID_ADMIN_CYCLE = -29;
+constexpr sint64 QUGATE_MULTISIG_PROPOSAL_ACTIVE = -30;
+constexpr sint64 QUGATE_INVALID_PARAMS = -31;
 
 // =============================================
 // V3 GateConfig (matches QuGate.h exactly)
@@ -286,6 +333,7 @@ struct GateConfig {
     uint64 roundRobinIndex;
     Array<id, 8> recipients;
     Array<uint64, 8> ratios;
+    Array<sint64, 8> recipientGateIds;
 
     // Chain fields
     sint64 chainNextGateId;
@@ -296,6 +344,8 @@ struct GateConfig {
 
     // Idle maintenance
     uint16 nextIdleChargeEpoch;
+
+    sint64 adminGateId;
 };
 
 // Per-gate allowed-senders configuration (side array)
@@ -321,6 +371,19 @@ struct QUGATE_MultisigConfig_Test {
     uint8        proposalActive;
 };
 
+struct QUGATE_HeartbeatConfig_Test {
+    uint32 thresholdEpochs;
+    uint32 lastHeartbeatEpoch;
+    uint8  payoutPercentPerEpoch;
+    sint64 minimumBalance;
+    uint8  active;
+    uint8  triggered;
+    uint32 triggerEpoch;
+    uint8  beneficiaryCount;
+    Array<id, 8> beneficiaryAddresses;
+    Array<uint8, 8> beneficiaryShares;
+};
+
 // Minimal time lock config for test harness
 struct QUGATE_TimeLockConfig_Test {
     uint32 unlockEpoch;
@@ -330,6 +393,11 @@ struct QUGATE_TimeLockConfig_Test {
     uint8  fired;
     uint8  cancelled;
     uint8  active;
+};
+
+struct QUGATE_AdminApprovalState_Test {
+    uint8 active;
+    uint32 validUntilEpoch;
 };
 
 struct QuGateState {
@@ -355,9 +423,14 @@ struct QuGateState {
     uint64 _earnedMaintenanceDividends;
     uint64 _distributedMaintenanceDividends;
 
+    // Idle delinquency tracking (epoch when gate became delinquent, 0 = not delinquent)
+    Array<uint16, QUGATE_MAX_GATES> _idleDelinquentEpochs;
+
     // Mode-specific state arrays
+    Array<QUGATE_HeartbeatConfig_Test, QUGATE_MAX_GATES> _heartbeatConfigs;
     Array<QUGATE_MultisigConfig_Test, QUGATE_MAX_GATES> _multisigConfigs;
     Array<QUGATE_TimeLockConfig_Test, QUGATE_MAX_GATES> _timeLockConfigs;
+    Array<QUGATE_AdminApprovalState_Test, QUGATE_MAX_GATES> _adminApprovalStates;
 };
 
 // =============================================
@@ -369,6 +442,7 @@ struct createGate_input {
     uint8 recipientCount;
     Array<id, 8> recipients;
     Array<uint64, 8> ratios;
+    Array<sint64, 8> recipientGateIds;
     uint64 threshold;
     Array<id, 8> allowedSenders;
     uint8 allowedSenderCount;
@@ -391,6 +465,7 @@ struct updateGate_input {
     uint8 recipientCount;
     Array<id, 8> recipients;
     Array<uint64, 8> ratios;
+    Array<sint64, 8> recipientGateIds;
     uint64 threshold;
     Array<id, 8> allowedSenders;
     uint8 allowedSenderCount;
@@ -416,8 +491,49 @@ struct getGate_output {
     uint16 lastActivityEpoch;
     Array<id, 8> recipients;
     Array<uint64, 8> ratios;
+    Array<sint64, 8> recipientGateIds;
     sint64 chainNextGateId;
     uint8  chainDepth;
+    sint64 reserve;
+    sint64 adminGateId;
+    uint8 hasAdminGate;
+};
+
+struct getHeartbeat_output {
+    uint8 active;
+    uint8 triggered;
+    uint32 thresholdEpochs;
+    uint32 lastHeartbeatEpoch;
+    uint32 triggerEpoch;
+    uint8 payoutPercentPerEpoch;
+    sint64 minimumBalance;
+    uint8 beneficiaryCount;
+    Array<id, 8> beneficiaryAddresses;
+    Array<uint8, 8> beneficiaryShares;
+};
+
+struct getAdminGate_output {
+    uint8 hasAdminGate;
+    sint64 adminGateId;
+    uint8 adminGateMode;
+    uint8 guardianCount;
+    uint8 required;
+    uint32 adminApprovalWindowEpochs;
+    uint8 adminApprovalActive;
+    uint32 adminApprovalValidUntilEpoch;
+    Array<id, 8> guardians;
+};
+
+struct withdrawReserve_output {
+    sint64 status;
+    uint64 withdrawn;
+};
+
+struct getGateBySlot_output {
+    uint8 valid;
+    sint64 gateId;
+    uint8 active;
+    uint64 currentBalance;
     sint64 reserve;
 };
 
@@ -476,6 +592,97 @@ public:
         id result = m256i::zero();
         result.m256i_u8[0] = val;
         return result;
+    }
+
+    static sint64 versionedGateId(uint64 slotIdx, uint16 generation)
+    {
+        return (sint64)(slotIdx + 1 + (uint64)generation * QUGATE_GATE_ID_SLOT_STRIDE);
+    }
+
+    static uint64 slotFromGateId(sint64 gateId)
+    {
+        if (gateId <= 0)
+        {
+            return QUGATE_MAX_GATES;
+        }
+        return (uint64)((gateId - 1) % (sint64)QUGATE_GATE_ID_SLOT_STRIDE);
+    }
+
+    static uint16 generationFromGateId(sint64 gateId)
+    {
+        if (gateId <= 0)
+        {
+            return 0;
+        }
+        return (uint16)((gateId - 1) / (sint64)QUGATE_GATE_ID_SLOT_STRIDE);
+    }
+
+    bool gateIdMatchesCurrentGeneration(sint64 gateId) const
+    {
+        uint64 slotIdx = slotFromGateId(gateId);
+        if (slotIdx >= state.get()._gateCount)
+        {
+            return false;
+        }
+        return state.get()._gateGenerations.get(slotIdx) == generationFromGateId(gateId);
+    }
+
+    sint64 encodeCurrentGateId(uint64 slotIdx) const
+    {
+        return versionedGateId(slotIdx, state.get()._gateGenerations.get(slotIdx));
+    }
+
+    bool adminApprovalValid(uint64 slotIdx) const
+    {
+        if (slotIdx >= state.get()._gateCount)
+        {
+            return false;
+        }
+        QUGATE_AdminApprovalState_Test approval = state.get()._adminApprovalStates.get(slotIdx);
+        return approval.active == 1 && qpi.epoch() <= approval.validUntilEpoch;
+    }
+
+    bool authorizeGateMutation(const id& caller, uint64 slotIdx, sint64& statusOut, bool allowOwnerBypassForStaleClear = false, bool clearingAdmin = false)
+    {
+        GateConfig gate = state.get()._gates.get(slotIdx);
+        if (gate.owner == caller && gate.adminGateId < 0)
+        {
+            return true;
+        }
+        if (gate.owner == caller && allowOwnerBypassForStaleClear && clearingAdmin)
+        {
+            uint64 adminSlot = slotFromGateId(gate.adminGateId);
+            if (gate.adminGateId < 0
+                || adminSlot >= state.get()._gateCount
+                || !gateIdMatchesCurrentGeneration(gate.adminGateId))
+            {
+                return true;
+            }
+            GateConfig adminGate = state.get()._gates.get(adminSlot);
+            if (adminGate.active == 0 || adminGate.mode != MODE_MULTISIG)
+            {
+                return true;
+            }
+        }
+        if (gate.adminGateId >= 0)
+        {
+            uint64 adminSlot = slotFromGateId(gate.adminGateId);
+            if (adminSlot < state.get()._gateCount
+                && gateIdMatchesCurrentGeneration(gate.adminGateId))
+            {
+                GateConfig adminGate = state.get()._gates.get(adminSlot);
+                if (adminGate.active == 1
+                    && adminGate.mode == MODE_MULTISIG
+                    && adminApprovalValid(adminSlot))
+                {
+                    return true;
+                }
+            }
+            statusOut = QUGATE_ADMIN_GATE_REQUIRED;
+            return false;
+        }
+        statusOut = QUGATE_UNAUTHORIZED;
+        return false;
     }
 
     // ---- escalated fee calculation ----
@@ -575,6 +782,7 @@ public:
         g.chainNextGateId = -1;
         g.chainDepth = 0;
         g.reserve = 0;
+        g.adminGateId = -1;
         // Set idle charge due epoch
         if (state.get()._idleWindowEpochs > 0)
         {
@@ -615,10 +823,12 @@ public:
             {
                 g.recipients.set(i, input.recipients.get(i));
                 g.ratios.set(i, input.ratios.get(i));
+                g.recipientGateIds.set(i, input.recipientGateIds.get(i));
             }
             else {
                 g.recipients.set(i, id::zero());
                 g.ratios.set(i, 0);
+                g.recipientGateIds.set(i, -1);
             }
         }
         // Build allowed-senders config (side array)
@@ -722,6 +932,41 @@ public:
             return output;
         }
 
+        if (state.get()._expiryEpochs > 0
+            && (uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs)
+        {
+            if (gate.currentBalance > 0)
+            {
+                if (qpi.transfer(gate.owner, gate.currentBalance) >= 0)
+                {
+                    gate.currentBalance = 0;
+                }
+            }
+            if (gate.reserve > 0)
+            {
+                if (qpi.transfer(gate.owner, gate.reserve) >= 0)
+                {
+                    gate.reserve = 0;
+                }
+            }
+            state.mut()._gates.set(idx, gate);
+            if (gate.currentBalance > 0 || gate.reserve > 0)
+            {
+                if (amount > 0) qpi.transfer(sender, amount);
+                output.status = QUGATE_GATE_NOT_ACTIVE;
+                return output;
+            }
+            gate.active = 0;
+            state.mut()._gates.set(idx, gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, idx);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(idx, state.get()._gateGenerations.get(idx) + 1);
+            if (amount > 0) qpi.transfer(sender, amount);
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            return output;
+        }
+
         if (amount == 0)
         {
             output.status = QUGATE_DUST_AMOUNT;
@@ -735,6 +980,22 @@ public:
             state.mut()._totalBurned += amount;
             output.status = QUGATE_DUST_AMOUNT;
             return output;
+        }
+
+        if (gate.mode == MODE_TIME_LOCK)
+        {
+            QUGATE_TimeLockConfig_Test cfg = state.get()._timeLockConfigs.get(idx);
+            if (cfg.active == 0 || cfg.cancelled == 1 || cfg.fired == 1)
+            {
+                if (amount > 0) qpi.transfer(sender, amount);
+                output.status = QUGATE_GATE_NOT_ACTIVE;
+                return output;
+            }
+        }
+
+        if (gate.mode == MODE_MULTISIG)
+        {
+            return sendToMultisigGate(sender, gateId, amount);
         }
 
         // Update last activity
@@ -786,7 +1047,7 @@ public:
         }
         else if (gate.mode == MODE_CONDITIONAL)
         {
-            QUGATE_AllowedSendersConfig asCfg = state.get()._allowedSendersConfigs.get(gateIdx);
+            QUGATE_AllowedSendersConfig asCfg = state.get()._allowedSendersConfigs.get(idx);
             uint8 senderAllowed = 0;
             for (uint64 i = 0; i < asCfg.count; i++)
             {
@@ -804,6 +1065,20 @@ public:
                 qpi.transfer(sender, amount);
                 output.status = QUGATE_CONDITIONAL_REJECTED;
             }
+        }
+        else if (gate.mode == MODE_TIME_LOCK)
+        {
+            QUGATE_TimeLockConfig_Test cfg = state.get()._timeLockConfigs.get(idx);
+            if (cfg.lockMode == QUGATE_TIME_LOCK_RELATIVE_EPOCHS && cfg.unlockEpoch == 0)
+            {
+                cfg.unlockEpoch = qpi.epoch() + cfg.delayEpochs;
+                state.mut()._timeLockConfigs.set(idx, cfg);
+            }
+            gate.currentBalance += amount;
+        }
+        else if (gate.mode == MODE_HEARTBEAT)
+        {
+            gate.currentBalance += amount;
         }
         state.mut()._gates.set(gateId - 1, gate);
         return output;
@@ -826,10 +1101,10 @@ public:
         }
 
         GateConfig gate = state.get()._gates.get(gateId - 1);
-
-        if (!(gate.owner == caller))
+        sint64 authStatus = QUGATE_SUCCESS;
+        if (!authorizeGateMutation(caller, gateId - 1, authStatus))
         {
-            output.status = QUGATE_UNAUTHORIZED;
+            output.status = authStatus;
             return output;
         }
         if (gate.active == 0)
@@ -838,17 +1113,69 @@ public:
             return output;
         }
 
+        if (state.get()._expiryEpochs > 0
+            && (uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs)
+        {
+            if (gate.currentBalance > 0)
+            {
+                if (qpi.transfer(gate.owner, gate.currentBalance) >= 0)
+                {
+                    gate.currentBalance = 0;
+                }
+            }
+            if (gate.reserve > 0)
+            {
+                if (qpi.transfer(gate.owner, gate.reserve) >= 0)
+                {
+                    gate.reserve = 0;
+                }
+            }
+
+            state.mut()._gates.set(gateId - 1, gate);
+
+            if (gate.currentBalance > 0 || gate.reserve > 0)
+            {
+                output.status = QUGATE_GATE_NOT_ACTIVE;
+                if (reward > 0) qpi.transfer(caller, reward);
+                return output;
+            }
+
+            gate.active = 0;
+            state.mut()._gates.set(gateId - 1, gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, gateId - 1);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(gateId - 1, state.get()._gateGenerations.get(gateId - 1) + 1);
+
+            if (reward > 0) qpi.transfer(caller, reward);
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            return output;
+        }
+
         if (gate.currentBalance > 0)
         {
-            qpi.transfer(gate.owner, gate.currentBalance);
-            gate.currentBalance = 0;
+            if (qpi.transfer(gate.owner, gate.currentBalance) >= 0)
+            {
+                gate.currentBalance = 0;
+            }
         }
 
         // Refund reserve
         if (gate.reserve > 0)
         {
-            qpi.transfer(gate.owner, gate.reserve);
-            gate.reserve = 0;
+            if (qpi.transfer(gate.owner, gate.reserve) >= 0)
+            {
+                gate.reserve = 0;
+            }
+        }
+
+        state.mut()._gates.set(gateId - 1, gate);
+
+        if (gate.currentBalance > 0 || gate.reserve > 0)
+        {
+            output.status = QUGATE_INVALID_PARAMS;
+            if (reward > 0) qpi.transfer(caller, reward);
+            return output;
         }
 
         gate.active = 0;
@@ -857,6 +1184,7 @@ public:
 
         state.mut()._freeSlots.set(state.get()._freeCount, gateId - 1);
         state.mut()._freeCount += 1;
+        state.mut()._gateGenerations.set(gateId - 1, state.get()._gateGenerations.get(gateId - 1) + 1);
 
         if (reward > 0) qpi.transfer(caller, reward);
 
@@ -882,14 +1210,49 @@ public:
 
         GateConfig gate = state.get()._gates.get(input.gateId - 1);
 
-        if (!(gate.owner == caller))
+        sint64 authStatus = QUGATE_SUCCESS;
+        if (!authorizeGateMutation(caller, input.gateId - 1, authStatus))
         {
             if (reward > 0) qpi.transfer(caller, reward);
-            output.status = QUGATE_UNAUTHORIZED;
+            output.status = authStatus;
             return output;
         }
         if (gate.active == 0)
         {
+            if (reward > 0) qpi.transfer(caller, reward);
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            return output;
+        }
+        if (state.get()._expiryEpochs > 0
+            && (uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs)
+        {
+            if (gate.currentBalance > 0)
+            {
+                if (qpi.transfer(gate.owner, gate.currentBalance) >= 0)
+                {
+                    gate.currentBalance = 0;
+                }
+            }
+            if (gate.reserve > 0)
+            {
+                if (qpi.transfer(gate.owner, gate.reserve) >= 0)
+                {
+                    gate.reserve = 0;
+                }
+            }
+            state.mut()._gates.set(input.gateId - 1, gate);
+            if (gate.currentBalance > 0 || gate.reserve > 0)
+            {
+                if (reward > 0) qpi.transfer(caller, reward);
+                output.status = QUGATE_GATE_NOT_ACTIVE;
+                return output;
+            }
+            gate.active = 0;
+            state.mut()._gates.set(input.gateId - 1, gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, input.gateId - 1);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(input.gateId - 1, state.get()._gateGenerations.get(input.gateId - 1) + 1);
             if (reward > 0) qpi.transfer(caller, reward);
             output.status = QUGATE_GATE_NOT_ACTIVE;
             return output;
@@ -944,10 +1307,12 @@ public:
             {
                 gate.recipients.set(i, input.recipients.get(i));
                 gate.ratios.set(i, input.ratios.get(i));
+                gate.recipientGateIds.set(i, input.recipientGateIds.get(i));
             }
             else {
                 gate.recipients.set(i, id::zero());
                 gate.ratios.set(i, 0);
+                gate.recipientGateIds.set(i, -1);
             }
         }
 
@@ -973,11 +1338,66 @@ public:
     // ---- endEpoch (idle maintenance + gate expiry) ----
     void endEpoch()
     {
-        // Idle maintenance charging
+        // Idle maintenance charging (mirrors QuGate.h END_EPOCH maintenance loop)
         for (uint64 i = 0; i < state.get()._gateCount; i++)
         {
             GateConfig gate = state.get()._gates.get(i);
             if (gate.active == 0) continue;
+            if (state.get()._idleFee == 0) continue;
+
+            uint16 delinquentEpoch = state.get()._idleDelinquentEpochs.get(i);
+
+            // Recently-active check: skip charge if gate had activity within window
+            uint8 recentlyActive = 0;
+            if (state.get()._idleWindowEpochs > 0
+                && qpi.epoch() - gate.lastActivityEpoch < state.get()._idleWindowEpochs)
+            {
+                recentlyActive = 1;
+            }
+
+            // Active-hold exemptions: modes with pending operations skip charge
+            uint8 activeHold = 0;
+            if (gate.mode == MODE_HEARTBEAT)
+            {
+                QUGATE_HeartbeatConfig_Test hbCfg = state.get()._heartbeatConfigs.get(i);
+                if (hbCfg.active == 1 && hbCfg.triggered == 0) activeHold = 1;
+            }
+            else if (gate.mode == MODE_TIME_LOCK)
+            {
+                QUGATE_TimeLockConfig_Test tlCfg = state.get()._timeLockConfigs.get(i);
+                if (tlCfg.active == 1 && tlCfg.fired == 0 && tlCfg.cancelled == 0 && gate.currentBalance > 0) activeHold = 1;
+            }
+            else if (gate.mode == MODE_THRESHOLD)
+            {
+                if (gate.currentBalance > 0) activeHold = 1;
+            }
+            else if (gate.mode == MODE_MULTISIG)
+            {
+                QUGATE_MultisigConfig_Test msCfg = state.get()._multisigConfigs.get(i);
+                if (gate.currentBalance > 0 || msCfg.proposalActive == 1) activeHold = 1;
+            }
+
+            if (recentlyActive == 1 || activeHold == 1)
+            {
+                if (state.get()._idleWindowEpochs > 0)
+                {
+                    gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                    state.mut()._gates.set(i, gate);
+                }
+                if (delinquentEpoch > 0)
+                {
+                    state.mut()._idleDelinquentEpochs.set(i, 0);
+                }
+                continue;
+            }
+
+            // First-time idle: seed nextIdleChargeEpoch if not yet set
+            if (gate.nextIdleChargeEpoch == 0 && state.get()._idleWindowEpochs > 0)
+            {
+                gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                state.mut()._gates.set(i, gate);
+                continue;
+            }
 
             // Charge inactivity maintenance when idle gate reaches its due epoch
             if (state.get()._idleWindowEpochs > 0
@@ -989,6 +1409,7 @@ public:
                     gate.reserve -= state.get()._idleFee;
                     gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
                     state.mut()._gates.set(i, gate);
+                    state.mut()._idleDelinquentEpochs.set(i, 0);
                     state.mut()._totalMaintenanceCharged += state.get()._idleFee;
 
                     // Idle maintenance: 50% burn, 50% shareholder dividends
@@ -1000,35 +1421,246 @@ public:
                     state.mut()._earnedMaintenanceDividends += maintenanceDividendAmount;
                     state.mut()._totalMaintenanceDividends += maintenanceDividendAmount;
                 }
+                else if (delinquentEpoch == 0)
+                {
+                    // Insufficient reserve — mark delinquent
+                    state.mut()._idleDelinquentEpochs.set(i, qpi.epoch());
+                }
             }
         }
 
-        // Expire inactive gates
+        // Expire inactive gates (inactivity expiry OR delinquency grace expiry)
         for (uint64 i = 0; i < state.get()._gateCount; i++)
         {
             GateConfig gate = state.get()._gates.get(i);
+            uint16 delinquentEpoch = state.get()._idleDelinquentEpochs.get(i);
             if (gate.active == 1 && state.get()._expiryEpochs > 0)
             {
-                if ((uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs)
+                bool graceExpired = (delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0
+                    && qpi.epoch() - delinquentEpoch >= state.get()._idleGraceEpochs);
+                bool inactivityExpired = (qpi.epoch() - gate.lastActivityEpoch >= state.get()._expiryEpochs);
+                if (graceExpired || inactivityExpired)
                 {
                     if (gate.currentBalance > 0)
                     {
-                        qpi.transfer(gate.owner, gate.currentBalance);
-                        gate.currentBalance = 0;
+                        if (qpi.transfer(gate.owner, gate.currentBalance) >= 0)
+                        {
+                            gate.currentBalance = 0;
+                        }
                     }
                     if (gate.reserve > 0)
                     {
-                        qpi.transfer(gate.owner, gate.reserve);
-                        gate.reserve = 0;
+                        if (qpi.transfer(gate.owner, gate.reserve) >= 0)
+                        {
+                            gate.reserve = 0;
+                        }
+                    }
+                    state.mut()._gates.set(i, gate);
+                    if (gate.currentBalance > 0 || gate.reserve > 0)
+                    {
+                        continue;
                     }
                     gate.active = 0;
                     state.mut()._gates.set(i, gate);
                     state.mut()._activeGates -= 1;
+                    state.mut()._idleDelinquentEpochs.set(i, 0);
                     state.mut()._freeSlots.set(state.get()._freeCount, i);
                     state.mut()._freeCount += 1;
                     // Increment generation so recycled slot gets a new gateId
                     state.mut()._gateGenerations.set(i, state.get()._gateGenerations.get(i) + 1);
                 }
+            }
+        }
+
+        // TIME_LOCK release
+        for (uint64 i = 0; i < state.get()._gateCount; i++)
+        {
+            GateConfig gate = state.get()._gates.get(i);
+            if (gate.active == 0 || gate.mode != MODE_HEARTBEAT)
+            {
+                continue;
+            }
+
+            QUGATE_HeartbeatConfig_Test cfg = state.get()._heartbeatConfigs.get(i);
+            if (cfg.active == 0)
+            {
+                continue;
+            }
+
+            if (cfg.triggered == 1)
+            {
+                sint64 balance = (sint64)gate.currentBalance;
+                if (balance > cfg.minimumBalance)
+                {
+                    sint64 payoutTotal = (sint64)QPI::div((uint64)(balance * cfg.payoutPercentPerEpoch), 100ULL);
+                    if (payoutTotal == 0 && balance > 0)
+                    {
+                        payoutTotal = balance;
+                    }
+
+                    if (payoutTotal > 0)
+                    {
+                        sint64 distributed = 0;
+                        for (uint8 j = 0; j < cfg.beneficiaryCount; j++)
+                        {
+                            sint64 share = 0;
+                            if (j == cfg.beneficiaryCount - 1)
+                            {
+                                share = payoutTotal - distributed;
+                            }
+                            else
+                            {
+                                share = (sint64)QPI::div((uint64)(payoutTotal * cfg.beneficiaryShares.get(j)), 100ULL);
+                            }
+
+                            if (share > 0 && qpi.transfer(cfg.beneficiaryAddresses.get(j), share) >= 0)
+                            {
+                                distributed += share;
+                                gate.totalForwarded += (uint64)share;
+                                gate.currentBalance -= (uint64)share;
+                            }
+                        }
+                    }
+                    state.mut()._gates.set(i, gate);
+                }
+
+                gate = state.get()._gates.get(i);
+                if ((sint64)gate.currentBalance <= cfg.minimumBalance)
+                {
+                    if (gate.currentBalance > 0 && cfg.beneficiaryCount > 0)
+                    {
+                        sint64 dustTotal = (sint64)gate.currentBalance;
+                        sint64 distributed = 0;
+                        for (uint8 j = 0; j < cfg.beneficiaryCount; j++)
+                        {
+                            sint64 share = 0;
+                            if (j == cfg.beneficiaryCount - 1)
+                            {
+                                share = dustTotal - distributed;
+                            }
+                            else
+                            {
+                                share = (sint64)QPI::div((uint64)(dustTotal * cfg.beneficiaryShares.get(j)), 100ULL);
+                            }
+                            if (share > 0 && qpi.transfer(cfg.beneficiaryAddresses.get(j), share) >= 0)
+                            {
+                                distributed += share;
+                                gate.totalForwarded += (uint64)share;
+                                gate.currentBalance -= (uint64)share;
+                            }
+                        }
+                    }
+                    else if (gate.currentBalance > 0)
+                    {
+                        if (qpi.transfer(gate.owner, (sint64)gate.currentBalance) >= 0)
+                        {
+                            gate.currentBalance = 0;
+                        }
+                    }
+
+                    state.mut()._gates.set(i, gate);
+                    if (gate.currentBalance > 0)
+                    {
+                        continue;
+                    }
+
+                    gate.active = 0;
+                    state.mut()._gates.set(i, gate);
+                    state.mut()._activeGates -= 1;
+                    state.mut()._freeSlots.set(state.get()._freeCount, i);
+                    state.mut()._freeCount += 1;
+                    state.mut()._gateGenerations.set(i, state.get()._gateGenerations.get(i) + 1);
+                }
+            }
+            else
+            {
+                uint32 epochsInactive = (uint32)(qpi.epoch() - cfg.lastHeartbeatEpoch);
+                if (epochsInactive > cfg.thresholdEpochs)
+                {
+                    cfg.triggered = 1;
+                    cfg.triggerEpoch = qpi.epoch();
+                    state.mut()._heartbeatConfigs.set(i, cfg);
+                }
+            }
+        }
+
+        for (uint64 i = 0; i < state.get()._gateCount; i++)
+        {
+            QUGATE_MultisigConfig_Test cfg = state.get()._multisigConfigs.get(i);
+            if (cfg.proposalActive == 1
+                && (uint32)(qpi.epoch() - cfg.proposalEpoch) > cfg.proposalExpiryEpochs)
+            {
+                cfg.approvalBitmap = 0;
+                cfg.approvalCount = 0;
+                cfg.proposalActive = 0;
+                state.mut()._multisigConfigs.set(i, cfg);
+            }
+        }
+
+        for (uint64 i = 0; i < state.get()._gateCount; i++)
+        {
+            GateConfig gate = state.get()._gates.get(i);
+            if (gate.active == 0 || gate.mode != MODE_TIME_LOCK)
+            {
+                continue;
+            }
+
+            QUGATE_TimeLockConfig_Test cfg = state.get()._timeLockConfigs.get(i);
+            if (cfg.active == 0 || cfg.fired == 1 || cfg.cancelled == 1 || cfg.unlockEpoch == 0)
+            {
+                continue;
+            }
+
+            if ((uint32)qpi.epoch() >= cfg.unlockEpoch)
+            {
+                if (gate.currentBalance > 0)
+                {
+                    sint64 releaseAmount = (sint64)gate.currentBalance;
+                    bool transferred = false;
+                    if (gate.recipientCount > 0)
+                    {
+                        if (gate.recipientGateIds.get(0) > 0)
+                        {
+                            uint64 targetSlot = slotFromGateId(gate.recipientGateIds.get(0));
+                            if (targetSlot < state.get()._gateCount)
+                            {
+                                RouteResult routed = routeToGate(targetSlot, releaseAmount, 0);
+                                transferred = routed.accepted;
+                            }
+                        }
+                        else if (qpi.transfer(gate.recipients.get(0), releaseAmount) >= 0)
+                        {
+                            transferred = true;
+                        }
+                    }
+                    else if (gate.chainNextGateId != -1)
+                    {
+                        transferred = true;
+                        routeChain((uint64)gate.chainNextGateId, releaseAmount);
+                    }
+
+                    if (transferred)
+                    {
+                        gate.totalForwarded += gate.currentBalance;
+                        gate.currentBalance = 0;
+                        state.mut()._gates.set(i, gate);
+                    }
+                }
+
+                gate = state.get()._gates.get(i);
+                if (gate.currentBalance > 0)
+                {
+                    continue;
+                }
+
+                cfg.fired = 1;
+                state.mut()._timeLockConfigs.set(i, cfg);
+                gate.active = 0;
+                state.mut()._gates.set(i, gate);
+                state.mut()._activeGates -= 1;
+                state.mut()._freeSlots.set(state.get()._freeCount, i);
+                state.mut()._freeCount += 1;
+                state.mut()._gateGenerations.set(i, state.get()._gateGenerations.get(i) + 1);
             }
         }
     }
@@ -1056,10 +1688,13 @@ public:
         out.chainNextGateId = g.chainNextGateId;
         out.chainDepth = g.chainDepth;
         out.reserve = g.reserve;
+        out.adminGateId = g.adminGateId;
+        out.hasAdminGate = (g.adminGateId >= 0) ? 1 : 0;
         for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++)
         {
             out.recipients.set(i, g.recipients.get(i));
             out.ratios.set(i, g.ratios.get(i));
+            out.recipientGateIds.set(i, g.recipientGateIds.get(i));
         }
         return out;
     }
@@ -1109,6 +1744,40 @@ public:
             output.result = QUGATE_GATE_NOT_ACTIVE;
             return output;
         }
+        if (state.get()._expiryEpochs > 0
+            && (uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs)
+        {
+            if (gate.currentBalance > 0)
+            {
+                if (qpi.transfer(gate.owner, gate.currentBalance) >= 0)
+                {
+                    gate.currentBalance = 0;
+                }
+            }
+            if (gate.reserve > 0)
+            {
+                if (qpi.transfer(gate.owner, gate.reserve) >= 0)
+                {
+                    gate.reserve = 0;
+                }
+            }
+            state.mut()._gates.set(gateId - 1, gate);
+            if (gate.currentBalance > 0 || gate.reserve > 0)
+            {
+                if (amount > 0) qpi.transfer(caller, amount);
+                output.result = QUGATE_GATE_NOT_ACTIVE;
+                return output;
+            }
+            gate.active = 0;
+            state.mut()._gates.set(gateId - 1, gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, gateId - 1);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(gateId - 1, state.get()._gateGenerations.get(gateId - 1) + 1);
+            if (amount > 0) qpi.transfer(caller, amount);
+            output.result = QUGATE_GATE_NOT_ACTIVE;
+            return output;
+        }
         if (amount <= 0)
         {
             output.result = QUGATE_DUST_AMOUNT;
@@ -1118,6 +1787,295 @@ public:
         gate.reserve += amount;
         state.mut()._gates.set(gateId - 1, gate);
         return output;
+    }
+
+    sint64 configureHeartbeat(const id& caller, uint64 gateId, uint32 thresholdEpochs,
+                              uint8 payoutPercentPerEpoch, sint64 minimumBalance,
+                              id* beneficiaries, uint8* beneficiaryShares, uint8 beneficiaryCount)
+    {
+        qpi.reset();
+        qpi._invocator = caller;
+
+        if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
+        uint64 idx = gateId - 1;
+        GateConfig gate = state.get()._gates.get(idx);
+        sint64 authStatus = QUGATE_SUCCESS;
+        if (!authorizeGateMutation(caller, idx, authStatus))
+        {
+            return authStatus;
+        }
+        if (gate.active == 0) return QUGATE_GATE_NOT_ACTIVE;
+        if (gate.mode != MODE_HEARTBEAT) return QUGATE_HEARTBEAT_NOT_ACTIVE;
+        if (thresholdEpochs == 0 || payoutPercentPerEpoch == 0 || payoutPercentPerEpoch > 100) return QUGATE_HEARTBEAT_INVALID;
+        if (beneficiaryCount == 0 || beneficiaryCount > 8) return QUGATE_HEARTBEAT_INVALID;
+
+        uint64 shareSum = 0;
+        for (uint8 i = 0; i < beneficiaryCount; i++)
+        {
+            shareSum += beneficiaryShares[i];
+        }
+        if (shareSum != 100) return QUGATE_HEARTBEAT_INVALID;
+
+        QUGATE_HeartbeatConfig_Test cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.thresholdEpochs = thresholdEpochs;
+        cfg.lastHeartbeatEpoch = qpi.epoch();
+        cfg.payoutPercentPerEpoch = payoutPercentPerEpoch;
+        cfg.minimumBalance = minimumBalance;
+        cfg.active = 1;
+        cfg.triggered = 0;
+        cfg.triggerEpoch = 0;
+        cfg.beneficiaryCount = beneficiaryCount;
+        for (uint8 i = 0; i < 8; i++)
+        {
+            if (i < beneficiaryCount)
+            {
+                cfg.beneficiaryAddresses.set(i, beneficiaries[i]);
+                cfg.beneficiaryShares.set(i, beneficiaryShares[i]);
+            }
+            else
+            {
+                cfg.beneficiaryAddresses.set(i, id::zero());
+                cfg.beneficiaryShares.set(i, 0);
+            }
+        }
+        state.mut()._heartbeatConfigs.set(idx, cfg);
+        gate.lastActivityEpoch = qpi.epoch();
+        state.mut()._gates.set(idx, gate);
+        return QUGATE_SUCCESS;
+    }
+
+    sint64 sendHeartbeat(const id& caller, uint64 gateId)
+    {
+        qpi.reset();
+        qpi._invocator = caller;
+
+        if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
+        uint64 idx = gateId - 1;
+        GateConfig gate = state.get()._gates.get(idx);
+        if (!(gate.owner == caller)) return QUGATE_UNAUTHORIZED;
+        if (gate.active == 0) return QUGATE_GATE_NOT_ACTIVE;
+        if (gate.mode != MODE_HEARTBEAT) return QUGATE_HEARTBEAT_NOT_ACTIVE;
+
+        QUGATE_HeartbeatConfig_Test cfg = state.get()._heartbeatConfigs.get(idx);
+        if (cfg.active == 0) return QUGATE_HEARTBEAT_NOT_ACTIVE;
+        if (cfg.triggered == 1) return QUGATE_HEARTBEAT_TRIGGERED;
+
+        cfg.lastHeartbeatEpoch = qpi.epoch();
+        state.mut()._heartbeatConfigs.set(idx, cfg);
+        gate.lastActivityEpoch = qpi.epoch();
+        state.mut()._gates.set(idx, gate);
+        return QUGATE_SUCCESS;
+    }
+
+    getHeartbeat_output getHeartbeat(uint64 gateId)
+    {
+        getHeartbeat_output out;
+        memset(&out, 0, sizeof(out));
+        if (gateId == 0 || gateId > state.get()._gateCount) return out;
+
+        uint64 idx = gateId - 1;
+        GateConfig gate = state.get()._gates.get(idx);
+        if (gate.mode != MODE_HEARTBEAT) return out;
+
+        QUGATE_HeartbeatConfig_Test cfg = state.get()._heartbeatConfigs.get(idx);
+        out.active = cfg.active;
+        out.triggered = cfg.triggered;
+        out.thresholdEpochs = cfg.thresholdEpochs;
+        out.lastHeartbeatEpoch = cfg.lastHeartbeatEpoch;
+        out.triggerEpoch = cfg.triggerEpoch;
+        out.payoutPercentPerEpoch = cfg.payoutPercentPerEpoch;
+        out.minimumBalance = cfg.minimumBalance;
+        out.beneficiaryCount = cfg.beneficiaryCount;
+        for (uint8 i = 0; i < 8; i++)
+        {
+            out.beneficiaryAddresses.set(i, cfg.beneficiaryAddresses.get(i));
+            out.beneficiaryShares.set(i, cfg.beneficiaryShares.get(i));
+        }
+        return out;
+    }
+
+    sint64 setAdminGate(const id& caller, uint64 gateId, sint64 adminGateId)
+    {
+        qpi.reset();
+        qpi._invocator = caller;
+
+        if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
+        uint64 idx = gateId - 1;
+        GateConfig gate = state.get()._gates.get(idx);
+        sint64 authStatus = QUGATE_SUCCESS;
+        if (!authorizeGateMutation(caller, idx, authStatus, true, adminGateId == -1))
+        {
+            return authStatus;
+        }
+        if (gate.active == 0) return QUGATE_GATE_NOT_ACTIVE;
+
+        if (adminGateId == -1)
+        {
+            gate.adminGateId = -1;
+            state.mut()._gates.set(idx, gate);
+            return QUGATE_SUCCESS;
+        }
+
+        if (adminGateId == (sint64)gateId) return QUGATE_INVALID_ADMIN_CYCLE;
+        if (adminGateId <= 0 || adminGateId > (sint64)state.get()._gateCount) return QUGATE_INVALID_ADMIN_GATE;
+
+        uint64 adminSlot = (uint64)adminGateId - 1;
+        GateConfig adminGate = state.get()._gates.get(adminSlot);
+        if (adminGate.active == 0 || adminGate.mode != MODE_MULTISIG) return QUGATE_INVALID_ADMIN_GATE;
+
+        uint64 walkSlot = adminSlot;
+        for (uint8 step = 0; step < QUGATE_MAX_CHAIN_DEPTH; step++)
+        {
+            GateConfig walkGate = state.get()._gates.get(walkSlot);
+            if (walkGate.adminGateId < 0) break;
+            uint64 nextAdminSlot = slotFromGateId(walkGate.adminGateId);
+            if (nextAdminSlot == idx) return QUGATE_INVALID_ADMIN_CYCLE;
+            if (nextAdminSlot >= state.get()._gateCount || !gateIdMatchesCurrentGeneration(walkGate.adminGateId)) break;
+            walkSlot = nextAdminSlot;
+        }
+
+        gate.adminGateId = encodeCurrentGateId(adminSlot);
+        state.mut()._gates.set(idx, gate);
+        return QUGATE_SUCCESS;
+    }
+
+    getAdminGate_output getAdminGate(uint64 gateId)
+    {
+        getAdminGate_output out;
+        memset(&out, 0, sizeof(out));
+        out.adminGateId = -1;
+        if (gateId == 0 || gateId > state.get()._gateCount) return out;
+
+        GateConfig gate = state.get()._gates.get(gateId - 1);
+        out.hasAdminGate = (gate.adminGateId >= 0) ? 1 : 0;
+        out.adminGateId = gate.adminGateId;
+        if (gate.adminGateId < 0) return out;
+
+        uint64 adminSlot = slotFromGateId(gate.adminGateId);
+        if (adminSlot >= state.get()._gateCount || !gateIdMatchesCurrentGeneration(gate.adminGateId))
+        {
+            return out;
+        }
+
+        GateConfig adminGate = state.get()._gates.get(adminSlot);
+        out.adminGateMode = adminGate.mode;
+        QUGATE_MultisigConfig_Test cfg = state.get()._multisigConfigs.get(adminSlot);
+        out.guardianCount = cfg.guardianCount;
+        out.required = cfg.required;
+        out.adminApprovalWindowEpochs = cfg.adminApprovalWindowEpochs;
+        if (adminApprovalValid(adminSlot))
+        {
+            out.adminApprovalActive = 1;
+            out.adminApprovalValidUntilEpoch = state.get()._adminApprovalStates.get(adminSlot).validUntilEpoch;
+        }
+        for (uint8 i = 0; i < cfg.guardianCount; i++)
+        {
+            out.guardians.set(i, cfg.guardians.get(i));
+        }
+        return out;
+    }
+
+    withdrawReserve_output withdrawReserve(const id& caller, uint64 gateId, uint64 amount)
+    {
+        qpi.reset();
+        qpi._invocator = caller;
+
+        withdrawReserve_output out;
+        out.status = QUGATE_SUCCESS;
+        out.withdrawn = 0;
+
+        if (gateId == 0 || gateId > state.get()._gateCount)
+        {
+            out.status = QUGATE_INVALID_GATE_ID;
+            return out;
+        }
+        uint64 idx = gateId - 1;
+        GateConfig gate = state.get()._gates.get(idx);
+        sint64 authStatus = QUGATE_SUCCESS;
+        if (!authorizeGateMutation(caller, idx, authStatus))
+        {
+            out.status = authStatus;
+            return out;
+        }
+        if (gate.active == 0)
+        {
+            out.status = QUGATE_GATE_NOT_ACTIVE;
+            return out;
+        }
+        if (gate.reserve <= 0)
+        {
+            return out;
+        }
+
+        uint64 toWithdraw = (uint64)gate.reserve;
+        if (amount != 0 && amount < toWithdraw)
+        {
+            toWithdraw = amount;
+        }
+        if (amount != 0 && amount > (uint64)gate.reserve)
+        {
+            out.status = QUGATE_INVALID_PARAMS;
+            return out;
+        }
+
+        if (qpi.transfer(caller, (sint64)toWithdraw) >= 0)
+        {
+            gate.reserve -= (sint64)toWithdraw;
+            state.mut()._gates.set(idx, gate);
+            out.withdrawn = toWithdraw;
+        }
+        return out;
+    }
+
+    Array<sint64, QUGATE_MAX_GATES> getGatesByOwner(const id& owner)
+    {
+        Array<sint64, QUGATE_MAX_GATES> out;
+        for (uint64 i = 0; i < QUGATE_MAX_GATES; i++)
+        {
+            out.set(i, 0);
+        }
+        uint64 count = 0;
+        for (uint64 i = 0; i < state.get()._gateCount; i++)
+        {
+            GateConfig gate = state.get()._gates.get(i);
+            if (gate.active == 1 && gate.owner == owner)
+            {
+                out.set(count, encodeCurrentGateId(i));
+                count++;
+            }
+        }
+        return out;
+    }
+
+    getGateBySlot_output getGateBySlot(uint64 slotIdx)
+    {
+        getGateBySlot_output out;
+        memset(&out, 0, sizeof(out));
+        out.gateId = -1;
+        if (slotIdx >= state.get()._gateCount)
+        {
+            return out;
+        }
+
+        GateConfig gate = state.get()._gates.get(slotIdx);
+        out.valid = 1;
+        out.active = gate.active;
+        out.currentBalance = gate.currentBalance;
+        out.reserve = gate.reserve;
+        if (gate.active == 1)
+        {
+            out.gateId = encodeCurrentGateId(slotIdx);
+        }
+        else if (state.get()._gateGenerations.get(slotIdx) > 0)
+        {
+            out.gateId = versionedGateId(slotIdx, state.get()._gateGenerations.get(slotIdx) - 1);
+        }
+        else
+        {
+            out.gateId = versionedGateId(slotIdx, 0);
+        }
+        return out;
     }
 
     // ---- configureTimeLock (simplified harness) ----
@@ -1130,13 +2088,28 @@ public:
         if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
         uint64 idx = gateId - 1;
         GateConfig gate = state.get()._gates.get(idx);
-        if (!(gate.owner == caller)) return QUGATE_UNAUTHORIZED;
+        sint64 authStatus = QUGATE_SUCCESS;
+        if (!authorizeGateMutation(caller, idx, authStatus)) return authStatus;
         if (gate.active == 0) return QUGATE_GATE_NOT_ACTIVE;
         if (gate.mode != MODE_TIME_LOCK) return QUGATE_INVALID_MODE;
 
         QUGATE_TimeLockConfig_Test cfg;
         memset(&cfg, 0, sizeof(cfg));
-        cfg.unlockEpoch = unlockEpoch;
+        if (lockMode == QUGATE_TIME_LOCK_ABSOLUTE_EPOCH)
+        {
+            if (unlockEpoch <= qpi.epoch()) return QUGATE_TIME_LOCK_EPOCH_PAST;
+            cfg.unlockEpoch = unlockEpoch;
+        }
+        else if (lockMode == QUGATE_TIME_LOCK_RELATIVE_EPOCHS)
+        {
+            if (unlockEpoch == 0) return QUGATE_INVALID_PARAMS;
+            cfg.delayEpochs = unlockEpoch;
+            cfg.unlockEpoch = (gate.currentBalance > 0) ? (qpi.epoch() + unlockEpoch) : 0;
+        }
+        else
+        {
+            return QUGATE_INVALID_PARAMS;
+        }
         cfg.lockMode = lockMode;
         cfg.cancellable = cancellable;
         cfg.active = 1;
@@ -1153,28 +2126,40 @@ public:
         if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
         uint64 idx = gateId - 1;
         GateConfig gate = state.get()._gates.get(idx);
-        if (!(gate.owner == caller)) return QUGATE_UNAUTHORIZED;
+        sint64 authStatus = QUGATE_SUCCESS;
+        if (!authorizeGateMutation(caller, idx, authStatus)) return authStatus;
         if (gate.active == 0) return QUGATE_GATE_NOT_ACTIVE;
         if (gate.mode != MODE_TIME_LOCK) return QUGATE_INVALID_MODE;
 
         QUGATE_TimeLockConfig_Test cfg = state.get()._timeLockConfigs.get(idx);
         if (cfg.active == 0) return QUGATE_GATE_NOT_ACTIVE;
-        if (cfg.fired == 1) return -23; // QUGATE_TIME_LOCK_ALREADY_FIRED
+        if (cfg.fired == 1) return QUGATE_TIME_LOCK_ALREADY_FIRED;
         if (cfg.cancelled == 1) return QUGATE_GATE_NOT_ACTIVE;
         if (cfg.cancellable == 0) return QUGATE_TIME_LOCK_NOT_CANCELLABLE;
 
         // Refund held balance to owner
         if (gate.currentBalance > 0)
         {
-            qpi.transfer(gate.owner, gate.currentBalance);
-            gate.currentBalance = 0;
+            if (qpi.transfer(gate.owner, gate.currentBalance) >= 0)
+            {
+                gate.currentBalance = 0;
+            }
         }
 
         // Refund reserve to owner
         if (gate.reserve > 0)
         {
-            qpi.transfer(gate.owner, gate.reserve);
-            gate.reserve = 0;
+            if (qpi.transfer(gate.owner, gate.reserve) >= 0)
+            {
+                gate.reserve = 0;
+            }
+        }
+
+        state.mut()._gates.set(idx, gate);
+
+        if (gate.currentBalance > 0 || gate.reserve > 0)
+        {
+            return QUGATE_INVALID_PARAMS;
         }
 
         // Mark cancelled, close gate
@@ -1202,9 +2187,23 @@ public:
         if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
         uint64 idx = gateId - 1;
         GateConfig gate = state.get()._gates.get(idx);
-        if (!(gate.owner == caller)) return QUGATE_UNAUTHORIZED;
+        sint64 authStatus = QUGATE_SUCCESS;
+        if (!authorizeGateMutation(caller, idx, authStatus)) return authStatus;
         if (gate.active == 0) return QUGATE_GATE_NOT_ACTIVE;
-        if (gate.mode != MODE_MULTISIG) return QUGATE_INVALID_MODE;
+        if (gate.mode != MODE_MULTISIG) return QUGATE_MULTISIG_INVALID_CONFIG;
+
+        if (guardianCount == 0 || guardianCount > 8 || required == 0 || required > guardianCount
+            || proposalExpiryEpochs == 0 || adminApprovalWindowEpochs == 0)
+        {
+            return QUGATE_MULTISIG_INVALID_CONFIG;
+        }
+
+        QUGATE_MultisigConfig_Test existingCfg = state.get()._multisigConfigs.get(idx);
+        if (existingCfg.proposalActive == 1
+            && (uint32)(qpi.epoch() - existingCfg.proposalEpoch) <= existingCfg.proposalExpiryEpochs)
+        {
+            return QUGATE_MULTISIG_PROPOSAL_ACTIVE;
+        }
 
         QUGATE_MultisigConfig_Test cfg;
         memset(&cfg, 0, sizeof(cfg));
@@ -1217,6 +2216,9 @@ public:
             cfg.guardians.set(i, guardians[i]);
         }
         state.mut()._multisigConfigs.set(idx, cfg);
+        QUGATE_AdminApprovalState_Test approval;
+        memset(&approval, 0, sizeof(approval));
+        state.mut()._adminApprovalStates.set(idx, approval);
         return QUGATE_SUCCESS;
     }
 
@@ -1254,12 +2256,20 @@ public:
             return output;
         }
 
+        QUGATE_MultisigConfig_Test msigCfg = state.get()._multisigConfigs.get(idx);
+        if (msigCfg.proposalActive == 1
+            && (uint32)(qpi.epoch() - msigCfg.proposalEpoch) > msigCfg.proposalExpiryEpochs)
+        {
+            msigCfg.approvalBitmap = 0;
+            msigCfg.approvalCount = 0;
+            msigCfg.proposalActive = 0;
+            state.mut()._multisigConfigs.set(idx, msigCfg);
+        }
+
         // Accumulate balance
         gate.totalReceived += amount;
         gate.currentBalance += amount;
         gate.lastActivityEpoch = qpi.epoch();
-
-        QUGATE_MultisigConfig_Test msigCfg = state.get()._multisigConfigs.get(idx);
 
         // Check if sender is a guardian — cast vote
         uint8 guardianIdx = 255;
@@ -1271,8 +2281,15 @@ public:
                 break;
             }
         }
-        if (guardianIdx != 255 && !(msigCfg.approvalBitmap & (1 << guardianIdx)))
+        if (guardianIdx != 255)
         {
+            if (msigCfg.approvalBitmap & (1 << guardianIdx))
+            {
+                state.mut()._gates.set(idx, gate);
+                output.status = QUGATE_MULTISIG_ALREADY_VOTED;
+                return output;
+            }
+
             msigCfg.approvalBitmap |= (1 << guardianIdx);
             msigCfg.approvalCount++;
             if (!msigCfg.proposalActive)
@@ -1291,9 +2308,60 @@ public:
                 qpi.burn(amount);
                 state.mut()._totalBurned += amount;
             }
+
+            if (msigCfg.approvalCount >= msigCfg.required)
+            {
+                bool released = false;
+                sint64 releaseAmount = (sint64)gate.currentBalance;
+                if (gate.recipientCount == 0
+                    && gate.chainNextGateId == -1
+                    && msigCfg.adminApprovalWindowEpochs > 0)
+                {
+                    QUGATE_AdminApprovalState_Test approval;
+                    approval.active = 1;
+                    approval.validUntilEpoch = qpi.epoch() + msigCfg.adminApprovalWindowEpochs - 1;
+                    state.mut()._adminApprovalStates.set(idx, approval);
+                    released = true;
+                }
+                else if (releaseAmount > 0)
+                {
+                    if (gate.recipientCount > 0)
+                    {
+                        if (gate.recipientGateIds.get(0) > 0)
+                        {
+                            uint64 targetSlot = slotFromGateId(gate.recipientGateIds.get(0));
+                            if (targetSlot < state.get()._gateCount)
+                            {
+                                RouteResult routed = routeToGate(targetSlot, releaseAmount, 0);
+                                released = routed.accepted;
+                            }
+                        }
+                        else if (qpi.transfer(gate.recipients.get(0), releaseAmount) >= 0)
+                        {
+                            released = true;
+                        }
+                    }
+                    else if (gate.chainNextGateId != -1)
+                    {
+                        released = true;
+                        routeChain((uint64)gate.chainNextGateId, releaseAmount);
+                    }
+                }
+
+                msigCfg.approvalBitmap = 0;
+                msigCfg.approvalCount = 0;
+                msigCfg.proposalActive = 0;
+
+                if (released && releaseAmount > 0)
+                {
+                    gate.totalForwarded += (uint64)releaseAmount;
+                    gate.currentBalance = 0;
+                }
+            }
         }
 
         state.mut()._gates.set(idx, gate);
+        state.mut()._multisigConfigs.set(idx, msigCfg);
         return output;
     }
 
@@ -1315,14 +2383,49 @@ public:
         }
 
         GateConfig gate = state.get()._gates.get(gateId - 1);
-        if (!(gate.owner == caller))
+        sint64 authStatus = QUGATE_SUCCESS;
+        if (!authorizeGateMutation(caller, gateId - 1, authStatus))
         {
             if (fee > 0) qpi.transfer(caller, fee);
-            output.result = QUGATE_UNAUTHORIZED;
+            output.result = authStatus;
             return output;
         }
         if (gate.active == 0)
         {
+            if (fee > 0) qpi.transfer(caller, fee);
+            output.result = QUGATE_GATE_NOT_ACTIVE;
+            return output;
+        }
+        if (state.get()._expiryEpochs > 0
+            && (uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs)
+        {
+            if (gate.currentBalance > 0)
+            {
+                if (qpi.transfer(gate.owner, gate.currentBalance) >= 0)
+                {
+                    gate.currentBalance = 0;
+                }
+            }
+            if (gate.reserve > 0)
+            {
+                if (qpi.transfer(gate.owner, gate.reserve) >= 0)
+                {
+                    gate.reserve = 0;
+                }
+            }
+            state.mut()._gates.set(gateId - 1, gate);
+            if (gate.currentBalance > 0 || gate.reserve > 0)
+            {
+                if (fee > 0) qpi.transfer(caller, fee);
+                output.result = QUGATE_GATE_NOT_ACTIVE;
+                return output;
+            }
+            gate.active = 0;
+            state.mut()._gates.set(gateId - 1, gate);
+            state.mut()._activeGates -= 1;
+            state.mut()._freeSlots.set(state.get()._freeCount, gateId - 1);
+            state.mut()._freeCount += 1;
+            state.mut()._gateGenerations.set(gateId - 1, state.get()._gateGenerations.get(gateId - 1) + 1);
             if (fee > 0) qpi.transfer(caller, fee);
             output.result = QUGATE_GATE_NOT_ACTIVE;
             return output;
@@ -1399,12 +2502,13 @@ public:
     }
 
     // ---- routeToGate (single hop) ----
-    struct RouteResult { sint64 forwarded; };
+    struct RouteResult { sint64 forwarded; bool accepted; };
 
     RouteResult routeToGate(uint64 slotIdx, sint64 amount, uint8 hopCount)
     {
         RouteResult result;
         result.forwarded = 0;
+        result.accepted = false;
 
         if (hopCount >= QUGATE_MAX_CHAIN_DEPTH) return result;
 
@@ -1423,6 +2527,7 @@ public:
             else {
                 gate.currentBalance += amount;
                 state.mut()._gates.set(slotIdx, gate);
+                result.accepted = true;
                 return result; // stranded
             }
         }
@@ -1455,6 +2560,7 @@ public:
             gate.totalForwarded += distributed;
             state.mut()._gates.set(slotIdx, gate);
             result.forwarded = distributed;
+            result.accepted = (distributed > 0);
         }
         else if (gate.mode == MODE_ROUND_ROBIN)
         {
@@ -1463,6 +2569,7 @@ public:
             gate.roundRobinIndex = QPI::mod(gate.roundRobinIndex + 1, (uint64)gate.recipientCount);
             state.mut()._gates.set(slotIdx, gate);
             result.forwarded = amountAfterFee;
+            result.accepted = true;
         }
         else if (gate.mode == MODE_THRESHOLD)
         {
@@ -1475,6 +2582,32 @@ public:
             }
             state.mut()._gates.set(slotIdx, gate);
             result.forwarded = amountAfterFee;
+            result.accepted = true;
+        }
+        else if (gate.mode == MODE_HEARTBEAT || gate.mode == MODE_MULTISIG)
+        {
+            gate.currentBalance += amountAfterFee;
+            gate.totalReceived += amountAfterFee;
+            state.mut()._gates.set(slotIdx, gate);
+            result.forwarded = amountAfterFee;
+            result.accepted = true;
+        }
+        else if (gate.mode == MODE_TIME_LOCK)
+        {
+            QUGATE_TimeLockConfig_Test cfg = state.get()._timeLockConfigs.get(slotIdx);
+            if (cfg.active == 0 || cfg.cancelled == 1 || cfg.fired == 1)
+            {
+                return result;
+            }
+            if (cfg.lockMode == QUGATE_TIME_LOCK_RELATIVE_EPOCHS && cfg.unlockEpoch == 0)
+            {
+                cfg.unlockEpoch = qpi.epoch() + cfg.delayEpochs;
+                state.mut()._timeLockConfigs.set(slotIdx, cfg);
+            }
+            gate.currentBalance += amountAfterFee;
+            state.mut()._gates.set(slotIdx, gate);
+            result.forwarded = amountAfterFee;
+            result.accepted = true;
         }
         return result;
     }
@@ -1507,6 +2640,7 @@ static const id ALICE = QuGateTest::makeId(1);
 static const id BOB = QuGateTest::makeId(2);
 static const id CHARLIE = QuGateTest::makeId(3);
 static const id DAVE = QuGateTest::makeId(4);
+static const id EVE = QuGateTest::makeId(5);
 
 // =============================================
 // Helper to create a simple split gate
@@ -1529,7 +2663,7 @@ TEST(QuGate, SplitEvenTwo)
     QuGateTest env;
     id recips[] = { BOB, CHARLIE };
     uint64 ratios[] = { 50, 50 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 2, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 2, recips, ratios);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
     ASSERT_NE(out.gateId, 0ULL);
 
@@ -1543,7 +2677,7 @@ TEST(QuGate, SplitUnevenThree)
     QuGateTest env;
     id recips[] = { BOB, CHARLIE, DAVE };
     uint64 ratios[] = { 50, 30, 20 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 3, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 3, recips, ratios);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
 
     env.sendToGate(ALICE, out.gateId, 10000);
@@ -1556,13 +2690,14 @@ TEST(QuGate, SplitHandlesRoundingDust)
 {
     QuGateTest env;
     id recips[] = { BOB, CHARLIE, DAVE };
-    uint64 ratios[] = { 33, 33, 34 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 3, recips, ratios);
+    uint64 ratios[] = { 3333, 3333, 3334 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 3, recips, ratios);
 
-    env.sendToGate(ALICE, out.gateId, 100);
-    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 33);
-    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 33);
-    EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 34);
+    env.sendToGate(ALICE, out.gateId, 10000);
+    // 10000 * 3333 / 10000 = 3333, 10000 * 3333 / 10000 = 3333, remainder = 3334
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 3333);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 3333);
+    EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 3334);
 }
 
 TEST(QuGate, RoundRobinCycles)
@@ -1570,20 +2705,20 @@ TEST(QuGate, RoundRobinCycles)
     QuGateTest env;
     id recips[] = { BOB, CHARLIE, DAVE };
     uint64 ratios[] = { 0, 0, 0 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_ROUND_ROBIN, 3, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_ROUND_ROBIN, 3, recips, ratios);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
 
-    env.sendToGate(ALICE, out.gateId, 100);
-    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 100);
+    env.sendToGate(ALICE, out.gateId, 1000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 1000);
 
-    env.sendToGate(ALICE, out.gateId, 200);
-    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 200);
+    env.sendToGate(ALICE, out.gateId, 2000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 2000);
 
-    env.sendToGate(ALICE, out.gateId, 300);
-    EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 300);
+    env.sendToGate(ALICE, out.gateId, 3000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 3000);
 
-    env.sendToGate(ALICE, out.gateId, 400);
-    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 400);
+    env.sendToGate(ALICE, out.gateId, 4000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4000);
 }
 
 TEST(QuGate, RandomSelectionTracksTickDeterministically)
@@ -1591,18 +2726,25 @@ TEST(QuGate, RandomSelectionTracksTickDeterministically)
     QuGateTest env;
     id recips[] = { BOB, CHARLIE };
     uint64 ratios[] = { 0, 0 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_RANDOM, 2, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_RANDOM, 2, recips, ratios);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
 
+    // First send: ridx = (1000 + 12345) % 2 = 1 -> CHARLIE
     env.qpi._tick = 12345;
-    env.sendToGate(ALICE, out.gateId, 100);
-    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 100);
+    env.sendToGate(ALICE, out.gateId, 1000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 1000);
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 0);
 
+    // Second send: ridx = (2000 + 12346) % 2 = 0 -> BOB
+    // Note: sendToGate calls qpi.reset(), so only this call's transfers are visible
     env.qpi._tick = 12346;
-    env.sendToGate(ALICE, out.gateId, 100);
-    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 100);
-    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 100);
+    env.sendToGate(ALICE, out.gateId, 1000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 1000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 0);
+
+    // Verify total forwarded across both sends
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.totalForwarded, 2000ULL);
 }
 
 TEST(QuGate, ThresholdAccumulatesAndReleases)
@@ -1610,17 +2752,17 @@ TEST(QuGate, ThresholdAccumulatesAndReleases)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 0 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_THRESHOLD, 1, recips, ratios, 500);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 5000);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
 
-    env.sendToGate(ALICE, out.gateId, 200);
+    env.sendToGate(ALICE, out.gateId, 2000);
     EXPECT_EQ(env.qpi.transferCount, 0);
 
-    env.sendToGate(ALICE, out.gateId, 200);
+    env.sendToGate(ALICE, out.gateId, 2000);
     EXPECT_EQ(env.qpi.transferCount, 0);
 
-    env.sendToGate(ALICE, out.gateId, 200);
-    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 600);
+    env.sendToGate(ALICE, out.gateId, 2000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 6000);
 }
 
 TEST(QuGate, ConditionalAllowsWhitelisted)
@@ -1629,11 +2771,11 @@ TEST(QuGate, ConditionalAllowsWhitelisted)
     id recips[] = { DAVE };
     uint64 ratios[] = { 0 };
     id allowed[] = { ALICE, BOB };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_CONDITIONAL, 1, recips, ratios, 0, allowed, 2);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_CONDITIONAL, 1, recips, ratios, 0, allowed, 2);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
 
-    env.sendToGate(ALICE, out.gateId, 500);
-    EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 500);
+    env.sendToGate(ALICE, out.gateId, 5000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 5000);
 }
 
 TEST(QuGate, ConditionalBouncesUnauthorised)
@@ -1642,12 +2784,12 @@ TEST(QuGate, ConditionalBouncesUnauthorised)
     id recips[] = { DAVE };
     uint64 ratios[] = { 0 };
     id allowed[] = { ALICE };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_CONDITIONAL, 1, recips, ratios, 0, allowed, 1);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_CONDITIONAL, 1, recips, ratios, 0, allowed, 1);
 
-    auto sendOut = env.sendToGate(CHARLIE, out.gateId, 500);
+    auto sendOut = env.sendToGate(CHARLIE, out.gateId, 5000);
     EXPECT_EQ(sendOut.status, QUGATE_CONDITIONAL_REJECTED);
     EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 0);
-    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 500);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 5000);
 }
 
 TEST(QuGate, InvalidGateIdBounces)
@@ -1673,7 +2815,7 @@ TEST(QuGate, ZeroAmountDoesNothing)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     auto sendOut = env.sendToGate(ALICE, out.gateId, 0);
     EXPECT_EQ(sendOut.status, QUGATE_DUST_AMOUNT);
@@ -1686,9 +2828,9 @@ TEST(QuGate, GateCountTracking)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    makeSimpleGate(env, ALICE, 1000, MODE_ROUND_ROBIN, 1, recips, ratios);
-    makeSimpleGate(env, BOB, 1000, MODE_THRESHOLD, 1, recips, ratios, 1000);
+    makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    makeSimpleGate(env, ALICE, 100000, MODE_ROUND_ROBIN, 1, recips, ratios);
+    makeSimpleGate(env, BOB, 100000, MODE_THRESHOLD, 1, recips, ratios, 1000);
 
     EXPECT_EQ(env.state.get()._gateCount, 3ULL);
     EXPECT_EQ(env.state.get()._activeGates, 3ULL);
@@ -1703,15 +2845,15 @@ TEST(QuGate, GateCountTracking)
 TEST(QuGateV3, EscalatingFeeAtZeroGates)
 {
     QuGateTest env;
-    // 0 active gates → fee = 1000 * (1 + 0/1024) = 1000
+    // 0 active gates → fee = 100000 * (1 + 0/1024) = 100000
     auto fees = env.getFees();
-    EXPECT_EQ(fees.currentCreationFee, 1000ULL);
+    EXPECT_EQ(fees.currentCreationFee, 100000ULL);
 
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(out.status, QUGATE_SUCCESS);
-    EXPECT_EQ(out.feePaid, 1000ULL);
+    EXPECT_EQ(out.feePaid, 100000ULL);
 }
 
 TEST(QuGateV3, EscalatingFeeAt1024Gates)
@@ -1720,19 +2862,19 @@ TEST(QuGateV3, EscalatingFeeAt1024Gates)
     // Simulate 1024 active gates
     state_hack: env.state.mut()._activeGates = 1024;
 
-    // fee = 1000 * (1 + 1024/1024) = 2000
+    // fee = 100000 * (1 + 1024/1024) = 200000
     auto fees = env.getFees();
-    EXPECT_EQ(fees.currentCreationFee, 2000ULL);
+    EXPECT_EQ(fees.currentCreationFee, 200000ULL);
 
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 2000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 200000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(out.status, QUGATE_SUCCESS);
-    EXPECT_EQ(out.feePaid, 2000ULL);
+    EXPECT_EQ(out.feePaid, 200000ULL);
 
     // Insufficient at old price
-    env.state.mut()._activeGates = 1025; // now fee is still 2000
-    auto out2 = makeSimpleGate(env, ALICE, 1999, MODE_SPLIT, 1, recips, ratios);
+    env.state.mut()._activeGates = 1025; // now fee is still 200000
+    auto out2 = makeSimpleGate(env, ALICE, 199999, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(out2.status, QUGATE_INSUFFICIENT_FEE);
 }
 
@@ -1740,15 +2882,15 @@ TEST(QuGateV3, EscalatingFeeAt2048Gates)
 {
     QuGateTest env;
     env.state.mut()._activeGates = 2048;
-    // fee = 1000 * (1 + 2048/1024) = 3000
+    // fee = 100000 * (1 + 2048/1024) = 300000
     auto fees = env.getFees();
-    EXPECT_EQ(fees.currentCreationFee, 3000ULL);
+    EXPECT_EQ(fees.currentCreationFee, 300000ULL);
 
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 3000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 300000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(out.status, QUGATE_SUCCESS);
-    EXPECT_EQ(out.feePaid, 3000ULL);
+    EXPECT_EQ(out.feePaid, 300000ULL);
 }
 
 // ---- Fee overpayment refund ----
@@ -1758,15 +2900,14 @@ TEST(QuGateV3, FeeOverpaymentSeedsReserve)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    // Pay 5000, fee is 1000 → excess 4000 seeds reserve
-    auto out = makeSimpleGate(env, ALICE, 5000, MODE_SPLIT, 1, recips, ratios);
+    // Pay 500000, fee is 100000 → excess 400000 seeds reserve
+    auto out = makeSimpleGate(env, ALICE, 500000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(out.status, QUGATE_SUCCESS);
-    EXPECT_EQ(out.feePaid, 1000ULL);
+    EXPECT_EQ(out.feePaid, 100000ULL);
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 0); // no refund
-    EXPECT_EQ(env.qpi.totalBurned, 1000);
     // Excess goes to reserve
     auto gate = env.getGate(out.gateId);
-    EXPECT_EQ(gate.reserve, 4000);
+    EXPECT_EQ(gate.reserve, 400000);
 }
 
 // ---- Dust burn ----
@@ -1776,14 +2917,14 @@ TEST(QuGateV3, DustBurnBelowMinSend)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
-    // Send 5 QU (below minSendAmount of 10)
+    // Send 5 QU (below minSendAmount of 1000)
     auto sendOut = env.sendToGate(ALICE, out.gateId, 5);
     EXPECT_EQ(sendOut.status, QUGATE_DUST_AMOUNT);
     EXPECT_EQ(env.qpi.totalBurned, 5);
     EXPECT_EQ(env.qpi.transferCount, 0); // no transfers, burned
-    EXPECT_EQ(env.state.get()._totalBurned, 1000 + 5); // creation fee + dust
+    EXPECT_EQ(env.state.get()._totalBurned, 50000 + 5); // creation fee burn (50%) + dust
 }
 
 TEST(QuGateV3, ExactMinSendNotDust)
@@ -1791,12 +2932,12 @@ TEST(QuGateV3, ExactMinSendNotDust)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
-    // Send exactly 10 (= minSendAmount) → should forward, not burn
-    auto sendOut = env.sendToGate(ALICE, out.gateId, 10);
+    // Send exactly 1000 (= minSendAmount) → should forward, not burn
+    auto sendOut = env.sendToGate(ALICE, out.gateId, 1000);
     EXPECT_EQ(sendOut.status, QUGATE_SUCCESS);
-    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 10);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 1000);
 }
 
 // ---- Status codes on all procedures ----
@@ -1806,7 +2947,7 @@ TEST(QuGateV3, StatusCodeCreateInvalidMode)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 1000, 99, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, 99, 1, recips, ratios);
     EXPECT_EQ(out.status, QUGATE_INVALID_MODE);
 }
 
@@ -1815,7 +2956,7 @@ TEST(QuGateV3, StatusCodeCreateInvalidRecipientCount)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 0, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 0, recips, ratios);
     EXPECT_EQ(out.status, QUGATE_INVALID_RECIPIENT_COUNT);
 }
 
@@ -1824,7 +2965,7 @@ TEST(QuGateV3, StatusCodeCreateInvalidRatio)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 0 }; // zero total ratio
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(out.status, QUGATE_INVALID_RATIO);
 }
 
@@ -1833,7 +2974,7 @@ TEST(QuGateV3, StatusCodeCreateInvalidThreshold)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_THRESHOLD, 1, recips, ratios, 0);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 0);
     EXPECT_EQ(out.status, QUGATE_INVALID_THRESHOLD);
 }
 
@@ -1842,7 +2983,7 @@ TEST(QuGateV3, StatusCodeSendToInactiveGate)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     env.closeGate(ALICE, out.gateId);
 
     auto sendOut = env.sendToGate(ALICE, out.gateId, 100);
@@ -1854,7 +2995,7 @@ TEST(QuGateV3, StatusCodeCloseUnauthorized)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     auto closeOut = env.closeGate(BOB, out.gateId);
     EXPECT_EQ(closeOut.status, QUGATE_UNAUTHORIZED);
@@ -1885,7 +3026,7 @@ TEST(QuGateV3, StatusCodeUpdateUnauthorized)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto gateOut = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto gateOut = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     updateGate_input in;
     memset(&in, 0, sizeof(in));
@@ -1905,8 +3046,8 @@ TEST(QuGateV3, FreeListSlotReuse)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(g1.gateId, 1ULL);
     EXPECT_EQ(g2.gateId, 2ULL);
     EXPECT_EQ(env.state.get()._gateCount, 2ULL);
@@ -1917,7 +3058,7 @@ TEST(QuGateV3, FreeListSlotReuse)
     EXPECT_EQ(env.state.get()._activeGates, 1ULL);
 
     // Create again — should reuse slot 0 (gateId 1)
-    auto g3 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g3 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(g3.gateId, 1ULL); // reused!
     EXPECT_EQ(env.state.get()._freeCount, 0ULL);
     EXPECT_EQ(env.state.get()._gateCount, 2ULL); // didn't grow
@@ -1933,7 +3074,7 @@ TEST(QuGateV3, GateExpiryAutoClose)
     uint64 ratios[] = { 100 };
 
     env.qpi._epoch = 100;
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
 
     // Advance epoch by expiryEpochs (50)
@@ -1954,12 +3095,12 @@ TEST(QuGateV3, GateExpiryRefundsBalance)
     uint64 ratios[] = { 100 };
 
     env.qpi._epoch = 100;
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_THRESHOLD, 1, recips, ratios, 10000);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 10000);
 
     // Send some QU that sits in threshold balance
-    env.sendToGate(CHARLIE, out.gateId, 500);
+    env.sendToGate(CHARLIE, out.gateId, 5000);
     auto gateBefore = env.getGate(out.gateId);
-    EXPECT_EQ(gateBefore.currentBalance, 500ULL);
+    EXPECT_EQ(gateBefore.currentBalance, 5000ULL);
 
     // Expire it
     env.qpi._epoch = 150;
@@ -1967,7 +3108,7 @@ TEST(QuGateV3, GateExpiryRefundsBalance)
     env.endEpoch();
 
     // Balance refunded to owner (ALICE)
-    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 500);
+    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 5000);
     auto gateAfter = env.getGate(out.gateId);
     EXPECT_EQ(gateAfter.active, 0);
 }
@@ -1979,11 +3120,11 @@ TEST(QuGateV3, GateNotExpiredIfActive)
     uint64 ratios[] = { 100 };
 
     env.qpi._epoch = 100;
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     // Send at epoch 140 → updates lastActivityEpoch
     env.qpi._epoch = 140;
-    env.sendToGate(CHARLIE, out.gateId, 100);
+    env.sendToGate(CHARLIE, out.gateId, 1000);
 
     // Run endEpoch at 150 — only 10 epochs since last activity, not 50
     env.qpi._epoch = 150;
@@ -2002,20 +3143,20 @@ TEST(QuGateV3, TotalBurnedTracking)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    // Create gate → burns 1000
-    makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    EXPECT_EQ(env.state.get()._totalBurned, 1000ULL);
+    // Create gate → burns 50% of 100000 = 50000
+    makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    EXPECT_EQ(env.state.get()._totalBurned, 50000ULL);
 
     // Dust burn → burns 5
     env.sendToGate(ALICE, 1, 5);
-    EXPECT_EQ(env.state.get()._totalBurned, 1005ULL);
+    EXPECT_EQ(env.state.get()._totalBurned, 50005ULL);
 
-    // Create another → burns 1000
-    makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    EXPECT_EQ(env.state.get()._totalBurned, 2005ULL);
+    // Create another → burns 50% of 100000 = 50000
+    makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    EXPECT_EQ(env.state.get()._totalBurned, 100005ULL);
 
     auto count = env.getGateCount();
-    EXPECT_EQ(count.totalBurned, 2005ULL);
+    EXPECT_EQ(count.totalBurned, 100005ULL);
 }
 
 // ---- getFees returns correct values ----
@@ -2024,15 +3165,15 @@ TEST(QuGateV3, GetFeesReturnsCorrectValues)
 {
     QuGateTest env;
     auto fees = env.getFees();
-    EXPECT_EQ(fees.creationFee, 1000ULL);
-    EXPECT_EQ(fees.currentCreationFee, 1000ULL);
-    EXPECT_EQ(fees.minSendAmount, 10ULL);
+    EXPECT_EQ(fees.creationFee, 100000ULL);
+    EXPECT_EQ(fees.currentCreationFee, 100000ULL);
+    EXPECT_EQ(fees.minSendAmount, QUGATE_DEFAULT_MIN_SEND);
     EXPECT_EQ(fees.expiryEpochs, 50ULL);
 
     // With active gates
     env.state.mut()._activeGates = 2048;
     fees = env.getFees();
-    EXPECT_EQ(fees.currentCreationFee, 3000ULL);
+    EXPECT_EQ(fees.currentCreationFee, 300000ULL);
 }
 
 // ---- lastActivityEpoch updates ----
@@ -2044,13 +3185,13 @@ TEST(QuGateV3, LastActivityEpochUpdatesOnSend)
     uint64 ratios[] = { 100 };
 
     env.qpi._epoch = 100;
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     auto gate = env.getGate(out.gateId);
     EXPECT_EQ(gate.lastActivityEpoch, 100);
 
     env.qpi._epoch = 120;
-    env.sendToGate(CHARLIE, out.gateId, 100);
+    env.sendToGate(CHARLIE, out.gateId, 1000);
 
     gate = env.getGate(out.gateId);
     EXPECT_EQ(gate.lastActivityEpoch, 120);
@@ -2063,7 +3204,7 @@ TEST(QuGateV3, LastActivityEpochUpdatesOnUpdate)
     uint64 ratios[] = { 100 };
 
     env.qpi._epoch = 100;
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     env.qpi._epoch = 130;
     updateGate_input in;
@@ -2086,18 +3227,18 @@ TEST(QuGateV3, FeePaidMatchesEscalatedFee)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    // 0 active gates → fee = 1000
-    auto out1 = makeSimpleGate(env, ALICE, 5000, MODE_SPLIT, 1, recips, ratios);
-    EXPECT_EQ(out1.feePaid, 1000ULL);
+    // 0 active gates → fee = 100000
+    auto out1 = makeSimpleGate(env, ALICE, 500000, MODE_SPLIT, 1, recips, ratios);
+    EXPECT_EQ(out1.feePaid, 100000ULL);
 
     // Set active gates to 1024 (minus the 1 just created, so set to 1024 total)
     env.state.mut()._activeGates = 1024;
-    auto out2 = makeSimpleGate(env, ALICE, 5000, MODE_SPLIT, 1, recips, ratios);
-    EXPECT_EQ(out2.feePaid, 2000ULL);
+    auto out2 = makeSimpleGate(env, ALICE, 500000, MODE_SPLIT, 1, recips, ratios);
+    EXPECT_EQ(out2.feePaid, 200000ULL);
 
     env.state.mut()._activeGates = 3072;
-    auto out3 = makeSimpleGate(env, ALICE, 5000, MODE_SPLIT, 1, recips, ratios);
-    EXPECT_EQ(out3.feePaid, 4000ULL);
+    auto out3 = makeSimpleGate(env, ALICE, 500000, MODE_SPLIT, 1, recips, ratios);
+    EXPECT_EQ(out3.feePaid, 400000ULL);
 }
 
 // ---- Close gate refunds invocation reward ----
@@ -2107,7 +3248,7 @@ TEST(QuGateV3, CloseGateSuccess)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     auto closeOut = env.closeGate(ALICE, out.gateId);
     EXPECT_EQ(closeOut.status, QUGATE_SUCCESS);
@@ -2119,7 +3260,7 @@ TEST(QuGateV3, CloseAlreadyClosedGate)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     env.closeGate(ALICE, out.gateId);
     auto closeOut2 = env.closeGate(ALICE, out.gateId);
@@ -2133,7 +3274,7 @@ TEST(QuGateV3, RatioOverMaxRejected)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { QUGATE_MAX_RATIO + 1 };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(out.status, QUGATE_INVALID_RATIO);
 }
 
@@ -2145,7 +3286,7 @@ TEST(QuGateV3, InvalidSenderCountRejected)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
     id allowed[1] = { ALICE };
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_CONDITIONAL, 1, recips, ratios, 0, allowed, 9);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_CONDITIONAL, 1, recips, ratios, 0, allowed, 9);
     EXPECT_EQ(out.status, QUGATE_INVALID_SENDER_COUNT);
 }
 
@@ -2171,7 +3312,7 @@ TEST(QuGateFund, FundGateSuccess)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
-    auto gateOut = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto gateOut = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(gateOut.status, QUGATE_SUCCESS);
 
     // Fund reserve with 3000
@@ -2200,7 +3341,7 @@ TEST(QuGateChain, CreateGateWithChain)
     uint64 ratios[] = { 100 };
 
     // Create target gate first (gate 1)
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(g1.status, QUGATE_SUCCESS);
 
     // Create chained gate (gate 2 → gate 1)
@@ -2211,7 +3352,7 @@ TEST(QuGateChain, CreateGateWithChain)
     in.recipients.set(0, CHARLIE);
     in.ratios.set(0, 100);
     in.chainNextGateId = g1.gateId;
-    auto g2 = env.createGate(ALICE, 1000, in);
+    auto g2 = env.createGate(ALICE, 100000, in);
     EXPECT_EQ(g2.status, QUGATE_SUCCESS);
 
     auto gate = env.getGate(g2.gateId);
@@ -2229,7 +3370,7 @@ TEST(QuGateChain, CreateGateChainInvalidTarget)
     in.recipients.set(0, BOB);
     in.ratios.set(0, 100);
     in.chainNextGateId = 999; // doesn't exist
-    auto out = env.createGate(ALICE, 1000, in);
+    auto out = env.createGate(ALICE, 100000, in);
     EXPECT_EQ(out.status, QUGATE_INVALID_CHAIN);
 }
 
@@ -2240,7 +3381,7 @@ TEST(QuGateChain, CreateGateChainDepthLimit)
     uint64 ratios[] = { 100 };
 
     // Create 3 gates: g1 (depth 0), g2→g1 (depth 1), g3→g2 (depth 2)
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     createGate_input in;
     memset(&in, 0, sizeof(in));
@@ -2249,18 +3390,18 @@ TEST(QuGateChain, CreateGateChainDepthLimit)
     in.recipients.set(0, BOB);
     in.ratios.set(0, 100);
     in.chainNextGateId = g1.gateId;
-    auto g2 = env.createGate(ALICE, 1000, in);
+    auto g2 = env.createGate(ALICE, 100000, in);
     ASSERT_EQ(g2.status, QUGATE_SUCCESS);
     EXPECT_EQ(env.getGate(g2.gateId).chainDepth, 1);
 
     in.chainNextGateId = g2.gateId;
-    auto g3 = env.createGate(ALICE, 1000, in);
+    auto g3 = env.createGate(ALICE, 100000, in);
     ASSERT_EQ(g3.status, QUGATE_SUCCESS);
     EXPECT_EQ(env.getGate(g3.gateId).chainDepth, 2);
 
     // g4→g3 should fail (depth would be 3 >= QUGATE_MAX_CHAIN_DEPTH)
     in.chainNextGateId = g3.gateId;
-    auto g4 = env.createGate(ALICE, 1000, in);
+    auto g4 = env.createGate(ALICE, 100000, in);
     EXPECT_EQ(g4.status, QUGATE_INVALID_CHAIN);
 }
 
@@ -2270,8 +3411,8 @@ TEST(QuGateChain, SetChainSuccess)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     // Link g2 → g1
     auto out = env.setChain(ALICE, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
@@ -2288,8 +3429,8 @@ TEST(QuGateChain, SetChainClearChain)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     env.setChain(ALICE, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
     EXPECT_EQ(env.getGate(g2.gateId).chainNextGateId, (sint64)g1.gateId);
@@ -2307,8 +3448,8 @@ TEST(QuGateChain, SetChainUnauthorized)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     // BOB tries to set chain on ALICE's gate
     auto out = env.setChain(BOB, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
@@ -2321,8 +3462,8 @@ TEST(QuGateChain, SetChainCycleRejectedPreservesExistingLinks)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     auto first = env.setChain(ALICE, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
     ASSERT_EQ(first.result, QUGATE_SUCCESS);
@@ -2342,8 +3483,8 @@ TEST(QuGateChain, SetChainInsufficientFee)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     auto out = env.setChain(ALICE, g2.gateId, g1.gateId, 500); // below hop fee
     EXPECT_EQ(out.result, QUGATE_INSUFFICIENT_FEE);
@@ -2355,7 +3496,7 @@ TEST(QuGateChain, RouteToGateSingleHop)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     env.qpi.reset();
     auto result = env.routeToGate(g1.gateId - 1, 5000, 0);
@@ -2371,10 +3512,10 @@ TEST(QuGateChain, RouteToGateTwoHopChain)
     uint64 ratios[] = { 100 };
 
     // g1: SPLIT 100% → BOB (depth 0)
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     // g2: SPLIT 100% → CHARLIE, chained to g1
     id recips2[] = { CHARLIE };
-    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips2, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips2, ratios);
     env.setChain(ALICE, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
 
     // Route through chain: g2 → g1
@@ -2395,7 +3536,7 @@ TEST(QuGateChain, RouteToGateThresholdAccumulatesAfterHopFee)
     id recips[] = { BOB };
     uint64 ratios[] = { 0 };
 
-    auto thresholdGate = makeSimpleGate(env, ALICE, 1000, MODE_THRESHOLD, 1, recips, ratios, 5000);
+    auto thresholdGate = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 5000);
     ASSERT_EQ(thresholdGate.status, QUGATE_SUCCESS);
 
     env.qpi.reset();
@@ -2417,7 +3558,7 @@ TEST(QuGateChain, InsufficientFundsStrand)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
 
     // Send amount <= hop fee with no chain reserve → strands
     env.qpi.reset();
@@ -2436,8 +3577,8 @@ TEST(QuGateChain, ReserveCoversHopFee)
     uint64 ratios[] = { 100 };
 
     // Create gate with chain to somewhere (need a target first)
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     env.setChain(ALICE, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
 
     // Fund reserve
@@ -2458,8 +3599,8 @@ TEST(QuGateChain, FundGateReserve)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     env.setChain(ALICE, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
 
     // Fund reserve
@@ -2479,8 +3620,8 @@ TEST(QuGateChain, DeadLinkChainedGateClosed)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     env.setChain(ALICE, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
 
     // Close the target gate
@@ -2501,8 +3642,8 @@ TEST(QuGateChain, GetGateReturnsChainFields)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     env.setChain(ALICE, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
     env.fundGate(CHARLIE, g2.gateId, 2000);
 
@@ -2524,8 +3665,8 @@ TEST(QuGateChain, CloseGateRefundsReserve)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    auto g1 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
-    auto g2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     env.setChain(ALICE, g2.gateId, g1.gateId, QUGATE_CHAIN_HOP_FEE);
     env.fundGate(BOB, g2.gateId, 3000);
 
@@ -2553,7 +3694,7 @@ TEST(QuGateV3, EndEpochExpiryFullLifecycle)
 
     // Create a THRESHOLD gate at epoch 100 so it can hold a balance
     env.qpi._epoch = 100;
-    auto out = makeSimpleGate(env, ALICE, 1000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
     uint64 gateId = out.gateId;
     uint64 slotIdx = gateId - 1;
@@ -2590,7 +3731,7 @@ TEST(QuGateV3, EndEpochExpiryFullLifecycle)
 
     // Verify a new gate created in the reused slot gets a different generation
     env.qpi._epoch = 107;
-    auto out2 = makeSimpleGate(env, ALICE, 1000, MODE_SPLIT, 1, recips, ratios);
+    auto out2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(out2.status, QUGATE_SUCCESS);
     EXPECT_EQ(env.state.get()._freeCount, 0ULL); // slot was reused from free-list
 }
@@ -2658,11 +3799,11 @@ TEST(QuGateFinancial, CreationFeeEscalatedSplitStillBalances)
     auto out = makeSimpleGate(env, ALICE, (sint64)fee, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
 
-    uint64 expectedBurn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL); // 160000
-    uint64 expectedDividend = fee - expectedBurn;                         // 40000
+    uint64 expectedBurn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL); // 100000
+    uint64 expectedDividend = fee - expectedBurn;                         // 100000
 
-    EXPECT_EQ(expectedBurn, 160000ULL);
-    EXPECT_EQ(expectedDividend, 40000ULL);
+    EXPECT_EQ(expectedBurn, 100000ULL);
+    EXPECT_EQ(expectedDividend, 100000ULL);
 
     // burn + dividend = fee
     EXPECT_EQ(env.state.get()._totalBurned + env.state.get()._earnedMaintenanceDividends, fee);
@@ -2711,7 +3852,7 @@ TEST(QuGateFinancial, IdleMaintenanceFee80_20Split)
     uint64 expectedDividend = idleFee - expectedBurn;                         // 5000
 
     EXPECT_EQ(expectedBurn, 12500ULL);
-    EXPECT_EQ(expectedDividend, 5000ULL);
+    EXPECT_EQ(expectedDividend, 12500ULL);
 
     // Verify maintenance tracking
     EXPECT_EQ(env.state.get()._totalMaintenanceCharged - maintenanceChargedBefore, idleFee);
@@ -2783,13 +3924,13 @@ TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
         EXPECT_EQ(burn + div, fee);
     }
 
-    // fee = 7: burn = 5, dividend = 2
+    // fee = 7: burn = 3, dividend = 4
     {
         uint64 fee = 7;
         uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
         uint64 div = fee - burn;
-        EXPECT_EQ(burn, 5ULL);
-        EXPECT_EQ(div, 2ULL);
+        EXPECT_EQ(burn, 3ULL);
+        EXPECT_EQ(div, 4ULL);
         EXPECT_EQ(burn + div, fee);
     }
 
@@ -2823,13 +3964,13 @@ TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
         EXPECT_EQ(burn + div, fee);
     }
 
-    // fee = 3: burn = 2, dividend = 1
+    // fee = 3: burn = 1, dividend = 2
     {
         uint64 fee = 3;
         uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
         uint64 div = fee - burn;
-        EXPECT_EQ(burn, 2ULL);
-        EXPECT_EQ(div, 1ULL);
+        EXPECT_EQ(burn, 1ULL);
+        EXPECT_EQ(div, 2ULL);
         EXPECT_EQ(burn + div, fee);
     }
 }
@@ -2917,6 +4058,894 @@ TEST(QuGateFinancial, CancelTimeLockNonCancellableRejected)
     auto gate = env.getGate(out.gateId);
     EXPECT_EQ(gate.active, 1);
     EXPECT_EQ(gate.reserve, 50000);
+}
+
+TEST(QuGateRegression, CloseGateTransferFailureDoesNotRecycleSlot)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    auto fundOut = env.fundGate(ALICE, out.gateId, 7000);
+    ASSERT_EQ(fundOut.result, QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 30000);
+
+    env.qpi.failTransfersTo(ALICE, 2);
+    auto closeOut = env.closeGate(ALICE, out.gateId);
+    EXPECT_EQ(closeOut.status, QUGATE_INVALID_PARAMS);
+
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.currentBalance, 30000ULL);
+    EXPECT_EQ(gate.reserve, 7000);
+    EXPECT_EQ(env.state.get()._freeCount, 0ULL);
+}
+
+TEST(QuGateRegression, CloseGateLazyExpiryTransferFailureDoesNotRecycleSlot)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    auto fundOut = env.fundGate(ALICE, out.gateId, 7000);
+    ASSERT_EQ(fundOut.result, QUGATE_SUCCESS);
+    env.state.mut()._gates.set(out.gateId - 1, [&]{
+        GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
+        gate.currentBalance = 30000;
+        gate.lastActivityEpoch = 100;
+        return gate;
+    }());
+    env.qpi._epoch = 200;
+
+    env.qpi.failTransfersTo(ALICE, 2);
+    auto closeOut = env.closeGate(ALICE, out.gateId);
+    EXPECT_EQ(closeOut.status, QUGATE_GATE_NOT_ACTIVE);
+
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.currentBalance, 30000ULL);
+    EXPECT_EQ(gate.reserve, 7000);
+    EXPECT_EQ(env.state.get()._freeCount, 0ULL);
+}
+
+TEST(QuGateRegression, ExpiryTransferFailureDoesNotRecycleSlot)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    env.sendToGate(ALICE, out.gateId, 30000);
+    env.qpi.failTransfersTo(ALICE, 1);
+    env.qpi._epoch = 200;
+    env.endEpoch();
+
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.currentBalance, 30000ULL);
+    EXPECT_EQ(env.state.get()._freeCount, 0ULL);
+}
+
+TEST(QuGateRegression, SendToGateLazyExpiryTransferFailureDoesNotRecycleSlot)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    auto fundOut = env.fundGate(ALICE, out.gateId, 7000);
+    ASSERT_EQ(fundOut.result, QUGATE_SUCCESS);
+    env.state.mut()._gates.set(out.gateId - 1, [&]{
+        GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
+        gate.currentBalance = 30000;
+        gate.lastActivityEpoch = 100;
+        return gate;
+    }());
+    env.qpi._epoch = 200;
+
+    env.qpi.failTransfersTo(ALICE, 2);
+    auto sendOut = env.sendToGate(CHARLIE, out.gateId, 40000);
+    EXPECT_EQ(sendOut.status, QUGATE_GATE_NOT_ACTIVE);
+
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.currentBalance, 30000ULL);
+    EXPECT_EQ(gate.reserve, 7000);
+    EXPECT_EQ(env.state.get()._freeCount, 0ULL);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 40000);
+}
+
+TEST(QuGateRegression, UpdateGateLazyExpiryTransferFailureDoesNotRecycleSlot)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    auto fundOut = env.fundGate(ALICE, out.gateId, 7000);
+    ASSERT_EQ(fundOut.result, QUGATE_SUCCESS);
+    env.state.mut()._gates.set(out.gateId - 1, [&]{
+        GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
+        gate.currentBalance = 30000;
+        gate.lastActivityEpoch = 100;
+        return gate;
+    }());
+    env.qpi._epoch = 200;
+
+    updateGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.gateId = out.gateId;
+    in.recipientCount = 1;
+    in.recipients.set(0, CHARLIE);
+    in.ratios.set(0, 100);
+    in.threshold = 50000;
+
+    env.qpi.failTransfersTo(ALICE, 2);
+    auto updateOut = env.updateGate(ALICE, 0, in);
+    EXPECT_EQ(updateOut.status, QUGATE_GATE_NOT_ACTIVE);
+
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.currentBalance, 30000ULL);
+    EXPECT_EQ(gate.reserve, 7000);
+    EXPECT_EQ(env.state.get()._freeCount, 0ULL);
+}
+
+TEST(QuGateRegression, FundGateLazyExpiryTransferFailureDoesNotRecycleSlot)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    env.state.mut()._gates.set(out.gateId - 1, [&]{
+        GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
+        gate.currentBalance = 30000;
+        gate.reserve = 7000;
+        gate.lastActivityEpoch = 100;
+        return gate;
+    }());
+    env.qpi._epoch = 200;
+
+    env.qpi.failTransfersTo(ALICE, 2);
+    auto fundOut = env.fundGate(CHARLIE, out.gateId, 40000);
+    EXPECT_EQ(fundOut.result, QUGATE_GATE_NOT_ACTIVE);
+
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.currentBalance, 30000ULL);
+    EXPECT_EQ(gate.reserve, 7000);
+    EXPECT_EQ(env.state.get()._freeCount, 0ULL);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 40000);
+}
+
+TEST(QuGateRegression, SetChainLazyExpiryTransferFailureDoesNotRecycleSlot)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, BOB, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(target.status, QUGATE_SUCCESS);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    env.state.mut()._gates.set(out.gateId - 1, [&]{
+        GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
+        gate.currentBalance = 30000;
+        gate.reserve = 7000;
+        gate.lastActivityEpoch = 100;
+        return gate;
+    }());
+    env.qpi._epoch = 200;
+
+    env.qpi.failTransfersTo(ALICE, 2);
+    auto setChainOut = env.setChain(ALICE, out.gateId, target.gateId, QUGATE_CHAIN_HOP_FEE);
+    EXPECT_EQ(setChainOut.result, QUGATE_GATE_NOT_ACTIVE);
+
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.currentBalance, 30000ULL);
+    EXPECT_EQ(gate.reserve, 7000);
+    EXPECT_EQ(env.state.get()._freeCount, 0ULL);
+}
+
+TEST(QuGateRegression, CancelTimeLockTransferFailureDoesNotRecycleSlot)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 200, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 50000).result, QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 30000);
+
+    env.qpi.failTransfersTo(ALICE, 2);
+    auto cancelStatus = env.cancelTimeLock(ALICE, out.gateId);
+    EXPECT_EQ(cancelStatus, QUGATE_INVALID_PARAMS);
+
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.currentBalance, 30000ULL);
+    EXPECT_EQ(gate.reserve, 50000);
+    EXPECT_EQ(env.state.get()._freeCount, 0ULL);
+}
+
+TEST(QuGateRegression, TimeLockRejectedDirectSendDoesNotMutateAccounting)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 200, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+
+    auto cfg = env.state.get()._timeLockConfigs.get(out.gateId - 1);
+    cfg.fired = 1;
+    env.state.mut()._timeLockConfigs.set(out.gateId - 1, cfg);
+
+    auto before = env.getGate(out.gateId);
+    auto sendOut = env.sendToGate(ALICE, out.gateId, 30000);
+    auto after = env.getGate(out.gateId);
+
+    EXPECT_EQ(sendOut.status, QUGATE_GATE_NOT_ACTIVE);
+    EXPECT_EQ(after.totalReceived, before.totalReceived);
+    EXPECT_EQ(after.lastActivityEpoch, before.lastActivityEpoch);
+    EXPECT_EQ(after.currentBalance, before.currentBalance);
+    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 30000);
+}
+
+TEST(QuGateRegression, TimeLockRejectedChainDoesNotRefundInvocator)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 200, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+
+    auto cfg = env.state.get()._timeLockConfigs.get(out.gateId - 1);
+    cfg.fired = 1;
+    env.state.mut()._timeLockConfigs.set(out.gateId - 1, cfg);
+
+    env.qpi.reset();
+    env.qpi._invocator = ALICE;
+    auto result = env.routeToGate(out.gateId - 1, 5000, 0);
+
+    EXPECT_EQ(result.forwarded, 0);
+    EXPECT_EQ(result.accepted, false);
+    EXPECT_EQ(env.qpi.transferCount, 0);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 0ULL);
+}
+
+TEST(QuGateRegression, TimeLockReleaseFailureDoesNotFireOrClose)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 101, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 30000);
+
+    env.qpi.failTransfersTo(BOB, 1);
+    env.qpi._epoch = 101;
+    env.endEpoch();
+
+    auto gate = env.getGate(out.gateId);
+    auto cfg = env.state.get()._timeLockConfigs.get(out.gateId - 1);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.currentBalance, 30000ULL);
+    EXPECT_EQ(cfg.fired, 0);
+    EXPECT_EQ(env.state.get()._freeCount, 0ULL);
+}
+
+TEST(QuGateHeartbeat, HeartbeatConfigureSuccess)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB, CHARLIE };
+    uint8 shares[] = { 60, 40 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 3, 25, 10, beneficiaries, shares, 2), QUGATE_SUCCESS);
+    auto hb = env.getHeartbeat(out.gateId);
+    EXPECT_EQ(hb.active, 1);
+    EXPECT_EQ(hb.thresholdEpochs, 3U);
+    EXPECT_EQ(hb.payoutPercentPerEpoch, 25);
+    EXPECT_EQ(hb.minimumBalance, 10);
+    EXPECT_EQ(hb.beneficiaryCount, 2);
+}
+
+TEST(QuGateHeartbeat, HeartbeatConfigureWrongMode)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    EXPECT_EQ(env.configureHeartbeat(ALICE, out.gateId, 3, 25, 10, beneficiaries, shares, 1), QUGATE_HEARTBEAT_NOT_ACTIVE);
+}
+
+TEST(QuGateHeartbeat, HeartbeatConfigureUnauthorized)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    EXPECT_EQ(env.configureHeartbeat(BOB, out.gateId, 3, 25, 10, beneficiaries, shares, 1), QUGATE_UNAUTHORIZED);
+}
+
+TEST(QuGateHeartbeat, HeartbeatPingResetsTimer)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 3, 25, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
+
+    env.qpi._epoch = 150;
+    ASSERT_EQ(env.sendHeartbeat(ALICE, out.gateId), QUGATE_SUCCESS);
+    EXPECT_EQ(env.getHeartbeat(out.gateId).lastHeartbeatEpoch, 150U);
+}
+
+TEST(QuGateHeartbeat, HeartbeatTriggerAfterInactivity)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 3, 25, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
+
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    auto hb = env.getHeartbeat(out.gateId);
+    EXPECT_EQ(hb.triggered, 1);
+    EXPECT_EQ(hb.triggerEpoch, 104U);
+}
+
+TEST(QuGateHeartbeat, HeartbeatPayoutDistribution)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB, CHARLIE };
+    uint8 shares[] = { 60, 40 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 1, 50, 10, beneficiaries, shares, 2), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 10000);
+    env.qpi._epoch = 102;
+    env.endEpoch();
+    env.qpi.reset();
+    env.qpi._epoch = 103;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 3000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 2000);
+}
+
+TEST(QuGateHeartbeat, HeartbeatPayoutMultipleEpochs)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 1, 50, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 8000);
+    env.qpi._epoch = 102;
+    env.endEpoch();
+    for (uint16 epoch = 103; epoch <= 105; epoch++)
+    {
+        env.qpi.reset();
+        env.qpi._epoch = epoch;
+        env.endEpoch();
+    }
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.currentBalance, 1000ULL);
+}
+
+TEST(QuGateHeartbeat, HeartbeatAutoCloseAtMinimum)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 1, 80, 20, beneficiaries, shares, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 100);
+    env.qpi._epoch = 102;
+    env.endEpoch();
+    env.qpi.reset();
+    env.qpi._epoch = 103;
+    env.endEpoch();
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 0);
+    EXPECT_EQ(env.state.get()._freeCount, 1ULL);
+}
+
+TEST(QuGateHeartbeat, HeartbeatAutoCloseFailedTransferKeepsGateActive)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 1, 80, 20, beneficiaries, shares, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 1000);
+    env.qpi._epoch = 102;
+    env.endEpoch();
+    env.qpi.reset();
+    env.qpi.failTransfersTo(BOB, 2);
+    env.qpi._epoch = 103;
+    env.endEpoch();
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.currentBalance, 1000ULL);
+    EXPECT_EQ(env.state.get()._freeCount, 0ULL);
+}
+
+TEST(QuGateHeartbeat, HeartbeatPingAfterTriggerDoesNotReset)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 1, 50, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
+    env.qpi._epoch = 102;
+    env.endEpoch();
+    EXPECT_EQ(env.sendHeartbeat(ALICE, out.gateId), QUGATE_HEARTBEAT_TRIGGERED);
+    EXPECT_EQ(env.getHeartbeat(out.gateId).triggered, 1);
+}
+
+TEST(QuGateHeartbeat, HeartbeatZeroBeneficiariesRefundsOwner)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 1, 50, 2000, beneficiaries, shares, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 1000);
+    auto cfg = env.state.get()._heartbeatConfigs.get(out.gateId - 1);
+    cfg.triggered = 1;
+    cfg.beneficiaryCount = 0;
+    env.state.mut()._heartbeatConfigs.set(out.gateId - 1, cfg);
+    env.qpi.reset();
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 1000);
+}
+
+TEST(QuGateMultisig, MultisigVoteAccumulatesApproval)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB, CHARLIE };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 5, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.sendToGate(BOB, out.gateId, 5000).status, QUGATE_SUCCESS);
+    auto cfg = env.state.get()._multisigConfigs.get(out.gateId - 1);
+    EXPECT_EQ(cfg.approvalCount, 1);
+    EXPECT_EQ(cfg.proposalActive, 1);
+}
+
+TEST(QuGateMultisig, MultisigQuorumRelease)
+{
+    QuGateTest env;
+    id recips[] = { DAVE };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB, CHARLIE };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 5, 3), QUGATE_SUCCESS);
+    env.sendToGate(BOB, out.gateId, 3000);
+    env.qpi.reset();
+    env.sendToGate(CHARLIE, out.gateId, 2000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 5000);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 0ULL);
+}
+
+TEST(QuGateMultisig, MultisigNonGuardianVoteIgnored)
+{
+    QuGateTest env;
+    id recips[] = { DAVE };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB, CHARLIE };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 5, 3), QUGATE_SUCCESS);
+    env.sendToGate(EVE, out.gateId, 5000);
+    auto cfg = env.state.get()._multisigConfigs.get(out.gateId - 1);
+    EXPECT_EQ(cfg.approvalCount, 0);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 5000ULL);
+}
+
+TEST(QuGateMultisig, MultisigProposalExpiry)
+{
+    QuGateTest env;
+    id recips[] = { DAVE };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB, CHARLIE };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 1, 3), QUGATE_SUCCESS);
+    env.sendToGate(BOB, out.gateId, 1000);
+    env.qpi._epoch = 103;
+    env.sendToGate(CHARLIE, out.gateId, 1000);
+    auto cfg = env.state.get()._multisigConfigs.get(out.gateId - 1);
+    EXPECT_EQ(cfg.approvalCount, 1);
+}
+
+TEST(QuGateMultisig, MultisigDuplicateVoteIgnored)
+{
+    QuGateTest env;
+    id recips[] = { DAVE };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB, CHARLIE };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 5, 3), QUGATE_SUCCESS);
+    env.sendToGate(BOB, out.gateId, 1000);
+    auto dup = env.sendToGate(BOB, out.gateId, 2000);
+    EXPECT_EQ(dup.status, QUGATE_MULTISIG_ALREADY_VOTED);
+    EXPECT_EQ(env.state.get()._multisigConfigs.get(out.gateId - 1).approvalCount, 1);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 3000ULL);
+}
+
+TEST(QuGateMultisig, MultisigReleaseFailureKeepsBalance)
+{
+    QuGateTest env;
+    id recips[] = { DAVE };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB, CHARLIE };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 5, 3), QUGATE_SUCCESS);
+    env.sendToGate(BOB, out.gateId, 3000);
+    env.qpi.failTransfersTo(DAVE, 1);
+    env.sendToGate(CHARLIE, out.gateId, 2000);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 5000ULL);
+}
+
+TEST(QuGateMultisig, MultisigChainForwardOnRelease)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_MULTISIG;
+    in.recipientCount = 0;
+    in.chainNextGateId = downstream.gateId;
+    auto out = env.createGate(ALICE, 100000, in);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    id guardians[] = { CHARLIE, DAVE };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 5, 3), QUGATE_SUCCESS);
+    env.sendToGate(CHARLIE, out.gateId, 3000);
+    env.qpi.reset();
+    env.sendToGate(DAVE, out.gateId, 2000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4000);
+}
+
+TEST(QuGateAdmin, SetAdminGateSuccess)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_SUCCESS);
+    EXPECT_EQ(env.getGate(target.gateId).hasAdminGate, 1);
+}
+
+TEST(QuGateAdmin, SetAdminGateRequiresMultisig)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    EXPECT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_INVALID_ADMIN_GATE);
+}
+
+TEST(QuGateAdmin, SetAdminGateCycleRejected)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    id guardians[] = { BOB };
+    // All three gates must be MULTISIG so they can serve as admin gates
+    auto a = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    ASSERT_EQ(env.configureMultisig(ALICE, a.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    auto b = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    ASSERT_EQ(env.configureMultisig(ALICE, b.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    auto c = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    ASSERT_EQ(env.configureMultisig(ALICE, c.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, a.gateId, b.gateId), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, b.gateId, c.gateId), QUGATE_SUCCESS);
+    EXPECT_EQ(env.setAdminGate(ALICE, c.gateId, a.gateId), QUGATE_INVALID_ADMIN_CYCLE);
+}
+
+TEST(QuGateAdmin, AdminApprovalRequired)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_MULTISIG;
+    in.recipientCount = 0;
+    in.chainNextGateId = -1;
+    auto admin = env.createGate(ALICE, 100000, in);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_SUCCESS);
+    EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_ADMIN_GATE_REQUIRED);
+    ASSERT_EQ(env.sendToGate(BOB, admin.gateId, 5000).status, QUGATE_SUCCESS);
+    EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_SUCCESS);
+}
+
+TEST(QuGateAdmin, AdminApprovalBypass)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_SUCCESS);
+    ASSERT_EQ(env.closeGate(ALICE, admin.gateId).status, QUGATE_SUCCESS);
+    EXPECT_EQ(env.setAdminGate(ALICE, target.gateId, -1), QUGATE_SUCCESS);
+}
+
+TEST(QuGateAdmin, StaleAdminGateIgnored)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+
+    createGate_input adminIn;
+    memset(&adminIn, 0, sizeof(adminIn));
+    adminIn.mode = MODE_MULTISIG;
+    adminIn.recipientCount = 0;
+    adminIn.chainNextGateId = -1;
+    auto oldAdmin = env.createGate(ALICE, 100000, adminIn);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, oldAdmin.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, oldAdmin.gateId), QUGATE_SUCCESS);
+    ASSERT_EQ(env.closeGate(ALICE, oldAdmin.gateId).status, QUGATE_SUCCESS);
+
+    auto recycled = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    ASSERT_EQ(recycled.gateId, oldAdmin.gateId);
+    ASSERT_EQ(env.configureMultisig(ALICE, recycled.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.sendToGate(BOB, recycled.gateId, 5000).status, QUGATE_SUCCESS);
+
+    EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_ADMIN_GATE_REQUIRED);
+    auto adminState = env.getAdminGate(target.gateId);
+    EXPECT_EQ(adminState.adminApprovalActive, 0);
+}
+
+TEST(QuGateAdmin, StaleAdminGateOwnerCanSelfClear)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_SUCCESS);
+    ASSERT_EQ(env.closeGate(ALICE, admin.gateId).status, QUGATE_SUCCESS);
+    auto recycled = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(recycled.gateId, admin.gateId);
+    EXPECT_EQ(env.setAdminGate(ALICE, target.gateId, -1), QUGATE_SUCCESS);
+}
+
+TEST(QuGateReserve, WithdrawReserveSuccess)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto gate = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, gate.gateId, 5000).result, QUGATE_SUCCESS);
+    auto out = env.withdrawReserve(ALICE, gate.gateId, 2000);
+    EXPECT_EQ(out.status, QUGATE_SUCCESS);
+    EXPECT_EQ(out.withdrawn, 2000ULL);
+    EXPECT_EQ(env.getGate(gate.gateId).reserve, 3000);
+}
+
+TEST(QuGateReserve, WithdrawReserveFullAmount)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto gate = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, gate.gateId, 5000).result, QUGATE_SUCCESS);
+    auto out = env.withdrawReserve(ALICE, gate.gateId, 0);
+    EXPECT_EQ(out.withdrawn, 5000ULL);
+    EXPECT_EQ(env.getGate(gate.gateId).reserve, 0);
+}
+
+TEST(QuGateReserve, WithdrawReserveExceedsBalance)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto gate = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, gate.gateId, 5000).result, QUGATE_SUCCESS);
+    auto out = env.withdrawReserve(ALICE, gate.gateId, 6000);
+    EXPECT_EQ(out.status, QUGATE_INVALID_PARAMS);
+    EXPECT_EQ(env.getGate(gate.gateId).reserve, 5000);
+}
+
+TEST(QuGateReserve, WithdrawReserveUnauthorized)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto gate = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, gate.gateId, 5000).result, QUGATE_SUCCESS);
+    auto out = env.withdrawReserve(BOB, gate.gateId, 1000);
+    EXPECT_EQ(out.status, QUGATE_UNAUTHORIZED);
+}
+
+TEST(QuGateReserve, WithdrawReserveTransferFailure)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto gate = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, gate.gateId, 5000).result, QUGATE_SUCCESS);
+    env.qpi.failTransfersTo(ALICE, 1);
+    auto out = env.withdrawReserve(ALICE, gate.gateId, 1000);
+    EXPECT_EQ(out.withdrawn, 0ULL);
+    EXPECT_EQ(env.getGate(gate.gateId).reserve, 5000);
+}
+
+TEST(QuGateTimeLock, TimeLockAbsoluteRelease)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 105, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 5000);
+    env.qpi._epoch = 105;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 5000);
+    EXPECT_EQ(env.getGate(out.gateId).active, 0);
+}
+
+TEST(QuGateTimeLock, TimeLockRelativeAnchorOnFirstFund)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 5, QUGATE_TIME_LOCK_RELATIVE_EPOCHS, 1), QUGATE_SUCCESS);
+    EXPECT_EQ(env.state.get()._timeLockConfigs.get(out.gateId - 1).unlockEpoch, 0U);
+    env.qpi._epoch = 110; // within expiry window (< 100 + 50)
+    env.sendToGate(ALICE, out.gateId, 5000);
+    EXPECT_EQ(env.state.get()._timeLockConfigs.get(out.gateId - 1).unlockEpoch, 115U);
+}
+
+TEST(QuGateTimeLock, TimeLockRelativeRelease)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 5, QUGATE_TIME_LOCK_RELATIVE_EPOCHS, 1), QUGATE_SUCCESS);
+    env.qpi._epoch = 110; // within expiry window (< 100 + 50)
+    env.sendToGate(ALICE, out.gateId, 5000);
+    env.qpi._epoch = 115; // unlock epoch = 110 + 5
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 5000);
+    EXPECT_EQ(env.getGate(out.gateId).active, 0);
+}
+
+TEST(QuGateTimeLock, TimeLockGateAsRecipientRelease)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
+    gate.recipientGateIds.set(0, downstream.gateId);
+    env.state.mut()._gates.set(out.gateId - 1, gate);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 105, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 5000);
+    env.qpi._epoch = 105;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4000);
+    EXPECT_EQ(env.getGate(out.gateId).active, 0);
+}
+
+TEST(QuGateTimeLock, TimeLockNoRecipientChainForward)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_TIME_LOCK;
+    in.recipientCount = 0;
+    in.chainNextGateId = downstream.gateId;
+    auto out = env.createGate(ALICE, 100000, in);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 105, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 5000);
+    env.qpi._epoch = 105;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4000);
+    EXPECT_EQ(env.getGate(out.gateId).active, 0);
+}
+
+TEST(QuGateQuery, GetGatesByOwnerFiltersInactive)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto a = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto b = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.closeGate(ALICE, a.gateId).status, QUGATE_SUCCESS);
+    auto gates = env.getGatesByOwner(ALICE);
+    EXPECT_EQ(gates.get(0), env.encodeCurrentGateId(b.gateId - 1));
+    EXPECT_EQ(gates.get(1), 0);
+}
+
+TEST(QuGateQuery, GetGateBySlotInactiveReturnsHistoricalId)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.closeGate(ALICE, out.gateId).status, QUGATE_SUCCESS);
+    auto slotOut = env.getGateBySlot(0);
+    EXPECT_EQ(slotOut.active, 0);
+    EXPECT_EQ(slotOut.gateId, 1);
+}
+
+TEST(QuGateQuery, GetGateBySlotActiveReturnsCurrentId)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto slotOut = env.getGateBySlot(0);
+    EXPECT_EQ(slotOut.active, 1);
+    EXPECT_EQ(slotOut.gateId, 1);
 }
 
 // ---- 5. Admin-only MULTISIG vote burns QU ----
@@ -3135,4 +5164,742 @@ TEST(QuGateFinancial, LargeExcessSeedsLargeReserve)
 
     // No refund transfer — all excess is reserve
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 0);
+}
+
+// =============================================
+// TIER 1: Fund conservation invariants
+// =============================================
+
+TEST(QuGateConservation, SplitConservation)
+{
+    QuGateTest env;
+    id recips[] = { BOB, CHARLIE };
+    uint64 ratios[] = { 7000, 3000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 2, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 10000);
+    auto gate = env.getGate(out.gateId);
+    sint64 bobGot = env.qpi.totalTransferredTo(BOB);
+    sint64 charlieGot = env.qpi.totalTransferredTo(CHARLIE);
+    EXPECT_EQ(bobGot + charlieGot, 10000);
+    EXPECT_EQ(gate.totalForwarded, 10000ULL);
+    EXPECT_EQ(gate.currentBalance, 0ULL);
+}
+
+TEST(QuGateConservation, RoundRobinConservation)
+{
+    QuGateTest env;
+    id recips[] = { BOB, CHARLIE, DAVE };
+    uint64 ratios[] = { 0, 0, 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_ROUND_ROBIN, 3, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 3000);
+    env.sendToGate(ALICE, out.gateId, 5000);
+    env.sendToGate(ALICE, out.gateId, 7000);
+    auto gate = env.getGate(out.gateId);
+    // Use gate accounting instead of qpi transfers (qpi.reset() between sends)
+    EXPECT_EQ(gate.totalReceived, 15000ULL);
+    EXPECT_EQ(gate.totalForwarded, 15000ULL);
+    EXPECT_EQ(gate.currentBalance, 0ULL);
+}
+
+TEST(QuGateConservation, ThresholdConservation)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 20000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 8000);
+    auto gateBefore = env.getGate(out.gateId);
+    EXPECT_EQ(gateBefore.currentBalance, 8000ULL);
+    EXPECT_EQ(gateBefore.totalForwarded, 0ULL);
+    env.sendToGate(ALICE, out.gateId, 15000);
+    auto gateAfter = env.getGate(out.gateId);
+    EXPECT_EQ(gateAfter.currentBalance, 0ULL);
+    EXPECT_EQ(gateAfter.totalForwarded, 23000ULL);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 23000);
+}
+
+TEST(QuGateConservation, RandomConservation)
+{
+    QuGateTest env;
+    id recips[] = { BOB, CHARLIE };
+    uint64 ratios[] = { 5000, 5000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_RANDOM, 2, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    for (int i = 0; i < 10; i++)
+    {
+        env.qpi._tick = 12345 + i;
+        env.sendToGate(ALICE, out.gateId, 1000);
+    }
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.totalReceived, 10000ULL);
+    EXPECT_EQ(gate.totalForwarded, 10000ULL);
+    EXPECT_EQ(gate.currentBalance, 0ULL);
+}
+
+TEST(QuGateConservation, ConditionalConservation)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    id allowed[] = { ALICE };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_CONDITIONAL, 1, recips, ratios, 0, allowed, 1);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 5000);
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 5000);
+    EXPECT_EQ(gate.totalForwarded, 5000ULL);
+    EXPECT_EQ(gate.currentBalance, 0ULL);
+}
+
+TEST(QuGateConservation, HeartbeatConservation)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB, CHARLIE };
+    uint8 shares[] = { 60, 40 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 1, 100, 0, beneficiaries, shares, 2), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 10000);
+    // Trigger
+    env.qpi._epoch = 102;
+    env.endEpoch();
+    // Payout (100% per epoch, should distribute all)
+    env.qpi.reset();
+    env.qpi._epoch = 103;
+    env.endEpoch();
+    sint64 total = env.qpi.totalTransferredTo(BOB) + env.qpi.totalTransferredTo(CHARLIE);
+    EXPECT_EQ(total, 10000);
+}
+
+TEST(QuGateConservation, MultisigConservation)
+{
+    QuGateTest env;
+    id recips[] = { DAVE };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB, CHARLIE };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 10, 5), QUGATE_SUCCESS);
+    env.sendToGate(BOB, out.gateId, 3000);
+    env.qpi.reset();
+    env.sendToGate(CHARLIE, out.gateId, 2000);
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 5000);
+    EXPECT_EQ(gate.currentBalance, 0ULL);
+    EXPECT_EQ(gate.totalForwarded, 5000ULL);
+}
+
+TEST(QuGateConservation, TimeLockConservation)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 110, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 3000);
+    env.sendToGate(ALICE, out.gateId, 7000);
+    auto gateBefore = env.getGate(out.gateId);
+    EXPECT_EQ(gateBefore.currentBalance, 10000ULL);
+    env.qpi._epoch = 110;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 10000);
+    auto gateAfter = env.getGate(out.gateId);
+    EXPECT_EQ(gateAfter.currentBalance, 0ULL);
+    EXPECT_EQ(gateAfter.totalForwarded, 10000ULL);
+    EXPECT_EQ(gateAfter.active, 0);
+}
+
+TEST(QuGateConservation, CloseGateAccountingComplete)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 5000).result, QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 20000);
+    auto gateBefore = env.getGate(out.gateId);
+    EXPECT_EQ(gateBefore.currentBalance, 20000ULL);
+    EXPECT_EQ(gateBefore.reserve, 5000);
+    env.qpi.reset();
+    ASSERT_EQ(env.closeGate(ALICE, out.gateId).status, QUGATE_SUCCESS);
+    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 25000);
+    auto gateAfter = env.getGate(out.gateId);
+    EXPECT_EQ(gateAfter.active, 0);
+    EXPECT_EQ(gateAfter.currentBalance, 0ULL);
+    EXPECT_EQ(gateAfter.reserve, 0);
+}
+
+TEST(QuGateConservation, ExpiryAccountingComplete)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 5000).result, QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 20000);
+    env.qpi.reset();
+    env.qpi._epoch = 200;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 25000);
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.active, 0);
+}
+
+TEST(QuGateConservation, ChainTwoHopConservation)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto gate2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    // routeToGate deducts CHAIN_HOP_FEE (1000) from amount when amount > hop fee
+    env.qpi.reset();
+    env.qpi._invocator = ALICE;
+    auto result = env.routeToGate(gate2.gateId - 1, 10000, 0);
+    EXPECT_TRUE(result.accepted);
+    // 10000 - 1000 hop fee = 9000 forwarded to BOB
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 9000);
+    // 1000 burned as hop fee
+    EXPECT_EQ(env.qpi.totalBurned, QUGATE_CHAIN_HOP_FEE);
+    // Total conserved: 9000 + 1000 = 10000
+    EXPECT_EQ((uint64)env.qpi.totalTransferredTo(BOB) + (uint64)env.qpi.totalBurned, 10000ULL);
+}
+
+// =============================================
+// TIER 2: Mode lifecycle completeness
+// =============================================
+
+TEST(QuGateLifecycle, ThresholdReaccumulation)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 10000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 12000);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 0ULL);
+    EXPECT_EQ(env.getGate(out.gateId).totalForwarded, 12000ULL);
+    // Second cycle
+    env.sendToGate(ALICE, out.gateId, 5000);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 5000ULL);
+    env.sendToGate(ALICE, out.gateId, 6000);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 0ULL);
+    EXPECT_EQ(env.getGate(out.gateId).totalForwarded, 23000ULL);
+}
+
+TEST(QuGateLifecycle, ThresholdExactBoundary)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 5000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 5000);
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.currentBalance, 0ULL);
+    EXPECT_EQ(gate.totalForwarded, 5000ULL);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 5000);
+}
+
+TEST(QuGateLifecycle, ThresholdWithChainTarget)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_THRESHOLD;
+    in.recipientCount = 1;
+    in.recipients.set(0, CHARLIE);
+    in.ratios.set(0, 10000);
+    in.threshold = 10000;
+    in.chainNextGateId = downstream.gateId;
+    auto out = env.createGate(ALICE, 100000, in);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 5000).result, QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 10000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 10000);
+}
+
+TEST(QuGateLifecycle, MultisigQuorumBoundary3of5)
+{
+    QuGateTest env;
+    id recips[] = { DAVE };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB, CHARLIE, DAVE, EVE, QuGateTest::makeId(6) };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 5, 3, 10, 5), QUGATE_SUCCESS);
+    env.sendToGate(BOB, out.gateId, 1000);
+    env.sendToGate(CHARLIE, out.gateId, 1000);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 2000ULL);
+    env.qpi.reset();
+    env.sendToGate(DAVE, out.gateId, 1000);
+    // 3rd vote should trigger release
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.currentBalance, 0ULL);
+}
+
+TEST(QuGateLifecycle, MultisigUnanimity1of1)
+{
+    QuGateTest env;
+    id recips[] = { DAVE };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 1, 1, 10, 5), QUGATE_SUCCESS);
+    env.sendToGate(BOB, out.gateId, 5000);
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.currentBalance, 0ULL);
+    EXPECT_EQ(gate.totalForwarded, 5000ULL);
+    EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 5000);
+}
+
+TEST(QuGateLifecycle, MultisigReconfigureBlockedDuringActiveProposal)
+{
+    QuGateTest env;
+    id recips[] = { DAVE };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB, CHARLIE };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 10, 5), QUGATE_SUCCESS);
+    env.sendToGate(BOB, out.gateId, 1000);
+    auto cfg1 = env.state.get()._multisigConfigs.get(out.gateId - 1);
+    EXPECT_EQ(cfg1.proposalActive, 1);
+    EXPECT_EQ(cfg1.approvalCount, 1);
+    // Reconfigure blocked while proposal is active
+    id newGuardians[] = { BOB, CHARLIE, EVE };
+    EXPECT_EQ(env.configureMultisig(ALICE, out.gateId, newGuardians, 3, 2, 10, 5), QUGATE_MULTISIG_PROPOSAL_ACTIVE);
+    // Original config unchanged
+    auto cfg2 = env.state.get()._multisigConfigs.get(out.gateId - 1);
+    EXPECT_EQ(cfg2.guardianCount, 2);
+}
+
+TEST(QuGateLifecycle, TimeLockMultipleDepositsSingleRelease)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 110, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 3000);
+    env.sendToGate(ALICE, out.gateId, 4000);
+    env.sendToGate(ALICE, out.gateId, 3000);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 10000ULL);
+    env.qpi._epoch = 110;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 10000);
+    EXPECT_EQ(env.getGate(out.gateId).active, 0);
+}
+
+TEST(QuGateLifecycle, TimeLockCancelAfterFireRejected)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 105, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 5000);
+    env.qpi._epoch = 105;
+    env.endEpoch();
+    EXPECT_EQ(env.getGate(out.gateId).active, 0);
+    auto cancelStatus = env.cancelTimeLock(ALICE, out.gateId);
+    EXPECT_NE(cancelStatus, QUGATE_SUCCESS);
+}
+
+TEST(QuGateLifecycle, HeartbeatMultiBeneficiaryShares)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB, CHARLIE, DAVE };
+    uint8 shares[] = { 50, 30, 20 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 1, 100, 0, beneficiaries, shares, 3), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 10000);
+    env.qpi._epoch = 102;
+    env.endEpoch();
+    env.qpi.reset();
+    env.qpi._epoch = 103;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 5000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 3000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 2000);
+}
+
+// =============================================
+// TIER 3: Gate-as-recipient routing
+// =============================================
+
+TEST(QuGateRecipient, SplitMixedWalletAndGateRecipients)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    // Create a split gate where recipient 0 is a wallet, recipient 1 routes to a gate
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 2, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    // Manually set recipients: CHARLIE at wallet, downstream at gate
+    GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
+    gate.recipientCount = 2;
+    gate.recipients.set(0, CHARLIE);
+    gate.recipients.set(1, id::zero());
+    gate.ratios.set(0, 5000);
+    gate.ratios.set(1, 5000);
+    gate.recipientGateIds.set(0, -1);
+    gate.recipientGateIds.set(1, downstream.gateId);
+    env.state.mut()._gates.set(out.gateId - 1, gate);
+    // The harness processSplit doesn't implement gate-as-recipient routing at the
+    // sendToGate level (that's in the contract's routeToGate path), so we test via
+    // the routeToGate function directly
+    env.qpi.reset();
+    env.qpi._invocator = ALICE;
+    auto result = env.routeToGate(out.gateId - 1, 10000, 0);
+    EXPECT_TRUE(result.accepted);
+    EXPECT_GT(result.forwarded, 0);
+}
+
+// =============================================
+// TIER 5: Edge cases and attack vectors
+// =============================================
+
+TEST(QuGateEdge, ZeroRecipientGateWithoutChainRejected)
+{
+    QuGateTest env;
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_SPLIT;
+    in.recipientCount = 0;
+    in.chainNextGateId = -1;
+    auto out = env.createGate(ALICE, 100000, in);
+    EXPECT_NE(out.status, QUGATE_SUCCESS);
+}
+
+TEST(QuGateEdge, MaxRecipientsAccepted)
+{
+    QuGateTest env;
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_SPLIT;
+    in.recipientCount = 8;
+    for (int i = 0; i < 8; i++)
+    {
+        in.recipients.set(i, QuGateTest::makeId(10 + i));
+        in.ratios.set(i, 1250);
+    }
+    in.chainNextGateId = -1;
+    auto out = env.createGate(ALICE, 100000, in);
+    EXPECT_EQ(out.status, QUGATE_SUCCESS);
+}
+
+TEST(QuGateEdge, NineRecipientsRejected)
+{
+    QuGateTest env;
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.mode = MODE_SPLIT;
+    in.recipientCount = 9;
+    in.chainNextGateId = -1;
+    auto out = env.createGate(ALICE, 100000, in);
+    EXPECT_NE(out.status, QUGATE_SUCCESS);
+}
+
+TEST(QuGateEdge, DoubleCloseReturnsNotActive)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.closeGate(ALICE, out.gateId).status, QUGATE_SUCCESS);
+    EXPECT_EQ(env.closeGate(ALICE, out.gateId).status, QUGATE_GATE_NOT_ACTIVE);
+}
+
+TEST(QuGateEdge, SendToGateIdZeroRejected)
+{
+    QuGateTest env;
+    auto out = env.sendToGate(ALICE, 0, 5000);
+    EXPECT_EQ(out.status, QUGATE_INVALID_GATE_ID);
+}
+
+TEST(QuGateEdge, UpdateGateWhileHoldingFunds)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 20000);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 10000);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 10000ULL);
+    // Update to new recipient
+    updateGate_input in;
+    memset(&in, 0, sizeof(in));
+    in.gateId = out.gateId;
+    in.recipientCount = 1;
+    in.recipients.set(0, CHARLIE);
+    in.ratios.set(0, 10000);
+    in.threshold = 20000;
+    auto updateOut = env.updateGate(ALICE, 0, in);
+    EXPECT_EQ(updateOut.status, QUGATE_SUCCESS);
+    // Funds still held
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 10000ULL);
+    // New recipient gets funds on release
+    env.sendToGate(ALICE, out.gateId, 12000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 22000);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 0);
+}
+
+TEST(QuGateEdge, FundGateByNonOwner)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    // BOB funds ALICE's gate — should succeed
+    auto fundOut = env.fundGate(BOB, out.gateId, 5000);
+    EXPECT_EQ(fundOut.result, QUGATE_SUCCESS);
+    EXPECT_EQ(env.getGate(out.gateId).reserve, 5000);
+}
+
+// WithdrawReserveDuringIdleDelinquency — skipped: harness lacks idle delinquency state
+
+// =============================================
+// TIER 6: Governance edge cases
+// =============================================
+
+TEST(QuGateGovernance, AdminGateBlocksCloseWithoutApproval)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 10, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_SUCCESS);
+    // Close without approval — blocked
+    EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_ADMIN_GATE_REQUIRED);
+    // Get approval, then close succeeds
+    env.sendToGate(BOB, admin.gateId, 1000);
+    EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_SUCCESS);
+}
+
+TEST(QuGateGovernance, RouteIntoGovernedGateStillAccepts)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto governed = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 10, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, governed.gateId, admin.gateId), QUGATE_SUCCESS);
+    // Route directly into the governed gate — governance only affects mutations, not receives
+    env.qpi.reset();
+    env.qpi._invocator = ALICE;
+    auto result = env.routeToGate(governed.gateId - 1, 5000, 0);
+    EXPECT_TRUE(result.accepted);
+    // 5000 - 1000 hop fee = 4000 forwarded to BOB
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4000);
+}
+
+TEST(QuGateGovernance, GovernanceRecoveryAfterAdminClose)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 10, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_SUCCESS);
+    // Close admin gate directly
+    ASSERT_EQ(env.closeGate(ALICE, admin.gateId).status, QUGATE_SUCCESS);
+    EXPECT_EQ(env.getGate(admin.gateId).active, 0);
+    // Keep target active by refreshing its activity
+    env.sendToGate(ALICE, target.gateId, 1000);
+    // Owner can self-clear stale admin
+    EXPECT_EQ(env.setAdminGate(ALICE, target.gateId, -1), QUGATE_SUCCESS);
+    // Target is now ungoverned — close should work
+    EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_SUCCESS);
+}
+
+// =============================================
+// IDLE MAINTENANCE LIFECYCLE
+// =============================================
+
+TEST(QuGateIdle, IdleChargeDeductsFromReserve)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 50000).result, QUGATE_SUCCESS);
+    auto gateBefore = env.getGate(out.gateId);
+    EXPECT_EQ(gateBefore.reserve, 50000);
+
+    // Advance past idle window (DEFAULT_MAINTENANCE_INTERVAL_EPOCHS = 4)
+    // Gate created at epoch 100, nextIdleChargeEpoch = 104
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    auto gateAfter = env.getGate(out.gateId);
+    EXPECT_EQ(gateAfter.reserve, 50000 - QUGATE_DEFAULT_MAINTENANCE_FEE);
+    EXPECT_EQ(gateAfter.active, 1);
+    EXPECT_EQ(env.state.get()._totalMaintenanceCharged, QUGATE_DEFAULT_MAINTENANCE_FEE);
+}
+
+TEST(QuGateIdle, IdleChargeSkippedWhenActive)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 50000).result, QUGATE_SUCCESS);
+
+    // Send at epoch 103 — within the idle window
+    env.qpi._epoch = 103;
+    env.sendToGate(ALICE, out.gateId, 1000);
+
+    // Run endEpoch at 104 — gate was recently active, should skip charge
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    auto gate = env.getGate(out.gateId);
+    EXPECT_EQ(gate.reserve, 50000);
+    EXPECT_EQ(env.state.get()._totalMaintenanceCharged, 0ULL);
+}
+
+TEST(QuGateIdle, IdleDelinquencyWhenReserveInsufficient)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    // No reserve funded — gate has 0 reserve
+
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    // Gate should be marked delinquent
+    uint16 delinquentEpoch = env.state.get()._idleDelinquentEpochs.get(out.gateId - 1);
+    EXPECT_EQ(delinquentEpoch, 104);
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+}
+
+TEST(QuGateIdle, IdleDelinquencyCureAfterActivity)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+
+    // Become delinquent
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), 104);
+
+    // Activity cures delinquency (send resets lastActivityEpoch)
+    env.qpi._epoch = 105;
+    env.sendToGate(ALICE, out.gateId, 1000);
+    // endEpoch sees recent activity → clears delinquent flag
+    env.endEpoch();
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), 0);
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+}
+
+TEST(QuGateIdle, IdleGracePeriodToExpiry)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+
+    // Become delinquent at epoch 104
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), 104);
+
+    // Still within grace period (DEFAULT_MAINTENANCE_GRACE_EPOCHS = 4)
+    env.qpi._epoch = 107;
+    env.endEpoch();
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+
+    // Grace period expired: 104 + 4 = 108
+    env.qpi._epoch = 108;
+    env.endEpoch();
+    EXPECT_EQ(env.getGate(out.gateId).active, 0);
+}
+
+TEST(QuGateIdle, IdleFundedReserveCoversMultipleCharges)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 75000).result, QUGATE_SUCCESS);
+
+    // 3 idle cycles: charge at 104, 108, 112
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    EXPECT_EQ(env.getGate(out.gateId).reserve, 50000);
+
+    env.qpi._epoch = 108;
+    env.endEpoch();
+    EXPECT_EQ(env.getGate(out.gateId).reserve, 25000);
+
+    env.qpi._epoch = 112;
+    env.endEpoch();
+    EXPECT_EQ(env.getGate(out.gateId).reserve, 0);
+
+    EXPECT_EQ(env.state.get()._totalMaintenanceCharged, 75000ULL);
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+
+    // Next cycle: reserve is 0, becomes delinquent
+    env.qpi._epoch = 116;
+    env.endEpoch();
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), 116);
+}
+
+TEST(QuGateIdle, IdleActiveHoldExemptionThreshold)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    // Send funds below threshold — gate is holding balance
+    env.sendToGate(ALICE, out.gateId, 10000);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 10000ULL);
+
+    // Advance way past idle window — but threshold gate with balance is exempt
+    env.qpi._epoch = 120;
+    env.endEpoch();
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), 0);
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+}
+
+TEST(QuGateIdle, IdleMaintenanceFeeSplit)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 50000).result, QUGATE_SUCCESS);
+
+    uint64 burnedBefore = env.state.get()._totalMaintenanceBurned;
+    uint64 dividendBefore = env.state.get()._totalMaintenanceDividends;
+
+    env.qpi.reset();
+    env.qpi._epoch = 104;
+    env.endEpoch();
+
+    uint64 fee = QUGATE_DEFAULT_MAINTENANCE_FEE;
+    uint64 expectedBurn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+    uint64 expectedDividend = fee - expectedBurn;
+
+    EXPECT_EQ(env.state.get()._totalMaintenanceBurned - burnedBefore, expectedBurn);
+    EXPECT_EQ(env.state.get()._totalMaintenanceDividends - dividendBefore, expectedDividend);
+    EXPECT_EQ(expectedBurn + expectedDividend, fee);
 }
