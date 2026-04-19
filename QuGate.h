@@ -2208,17 +2208,17 @@ public:
                         output.chainForwardAmount = locals.releaseAmount;
                     }
                     // else: no recipients AND no chain — funds stay in currentBalance
+                    // Always reset proposal after quorum — prevents stuck proposals
+                    locals.msigCfg.approvalBitmap = 0;
+                    locals.msigCfg.approvalCount = 0;
+                    locals.msigCfg.proposalActive = 0;
+                    state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
+
                     if (locals.transferred)
                     {
                         locals.gate.totalForwarded += (uint64)locals.releaseAmount;
                         locals.gate.currentBalance = 0;
                         state.mut()._gates.set(input.slotIdx, locals.gate);
-
-                        // Reset proposal
-                        locals.msigCfg.approvalBitmap = 0;
-                        locals.msigCfg.approvalCount = 0;
-                        locals.msigCfg.proposalActive = 0;
-                        state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
                     }
                 }
 
