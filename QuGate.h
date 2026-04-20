@@ -805,6 +805,7 @@ public:
     struct processSplit_locals
     {
         GateConfig gate;
+        QUGATE_TimeLockConfig targetTlCfg;
         uint64 totalRatio;
         uint64 share;
         uint64 distributed;
@@ -830,6 +831,7 @@ public:
     struct processRoundRobin_locals
     {
         GateConfig gate;
+        QUGATE_TimeLockConfig targetTlCfg;
         QUGATE_LatestExecution latestExec;
         // Gate-as-recipient
         uint64 targetSlot;
@@ -852,6 +854,7 @@ public:
     struct processThreshold_locals
     {
         GateConfig gate;
+        QUGATE_TimeLockConfig targetTlCfg;
         // Gate-as-recipient
         uint64 targetSlot;
         uint64 targetGen;
@@ -873,6 +876,7 @@ public:
     struct processRandom_locals
     {
         GateConfig gate;
+        QUGATE_TimeLockConfig targetTlCfg;
         uint64 recipientIdx;
         QUGATE_LatestExecution latestExec;
         // Gate-as-recipient
@@ -954,6 +958,7 @@ public:
         GateConfig gate;
         QUGATE_MultisigConfig msigCfg;
         QUGATE_AdminApprovalState adminApproval;
+        QUGATE_TimeLockConfig targetTlCfg;
         uint8 foundGuardian;
         uint8 guardianIdx;
         QuGateLogger logger;
@@ -1184,6 +1189,7 @@ public:
         QUGATE_HeartbeatConfig inhCfg;
         sint64 inhBalance;
         sint64 inhPayoutTotal;
+        sint64 inhDistributedTotal;
         sint64 inhShare;
         sint64 inhPriorSum;
         uint8  inhJ;
@@ -1855,10 +1861,21 @@ public:
                         && state.get()._gateGenerations.get(locals.targetSlot) == (uint16)(locals.targetGen - 1)
                         && state.get()._gates.get(locals.targetSlot).active == 1)
                     {
-                        output.deferredGateSlots.set(output.deferredCount, locals.targetSlot);
-                        output.deferredGateAmounts.set(output.deferredCount, (sint64)locals.share);
-                        output.deferredCount++;
-                        locals.distributed += locals.share;
+                        locals.targetTlCfg.active = 1;
+                        locals.targetTlCfg.cancelled = 0;
+                        locals.targetTlCfg.fired = 0;
+                        if (state.get()._gates.get(locals.targetSlot).mode == QUGATE_MODE_TIME_LOCK)
+                        {
+                            locals.targetTlCfg = state.get()._timeLockConfigs.get(locals.targetSlot);
+                        }
+                        if (state.get()._gates.get(locals.targetSlot).mode != QUGATE_MODE_TIME_LOCK
+                            || (locals.targetTlCfg.active == 1 && locals.targetTlCfg.cancelled == 0 && locals.targetTlCfg.fired == 0))
+                        {
+                            output.deferredGateSlots.set(output.deferredCount, locals.targetSlot);
+                            output.deferredGateAmounts.set(output.deferredCount, (sint64)locals.share);
+                            output.deferredCount++;
+                            locals.distributed += locals.share;
+                        }
                     }
                     // else: target gate invalid/closed — share stays in contract (not lost)
                 }
@@ -1908,16 +1925,27 @@ public:
                 && state.get()._gateGenerations.get(locals.targetSlot) == (uint16)(locals.targetGen - 1)
                 && state.get()._gates.get(locals.targetSlot).active == 1)
             {
-                output.deferredToGate = 1;
-                output.deferredGateSlot = locals.targetSlot;
-                output.deferredGateAmount = input.amount;
-                locals.gate.totalForwarded += input.amount;
-                locals.latestExec.outcomeType = QUGATE_EXEC_FORWARDED;
-                locals.latestExec.selectedRecipientIndex = (uint8)locals.gate.roundRobinIndex;
-                locals.latestExec.selectedDownstreamGateId = locals.gate.recipientGateIds.get(locals.gate.roundRobinIndex);
-                locals.latestExec.forwardedAmount = input.amount;
-                locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
-                output.forwarded = input.amount;
+                locals.targetTlCfg.active = 1;
+                locals.targetTlCfg.cancelled = 0;
+                locals.targetTlCfg.fired = 0;
+                if (state.get()._gates.get(locals.targetSlot).mode == QUGATE_MODE_TIME_LOCK)
+                {
+                    locals.targetTlCfg = state.get()._timeLockConfigs.get(locals.targetSlot);
+                }
+                if (state.get()._gates.get(locals.targetSlot).mode != QUGATE_MODE_TIME_LOCK
+                    || (locals.targetTlCfg.active == 1 && locals.targetTlCfg.cancelled == 0 && locals.targetTlCfg.fired == 0))
+                {
+                    output.deferredToGate = 1;
+                    output.deferredGateSlot = locals.targetSlot;
+                    output.deferredGateAmount = input.amount;
+                    locals.gate.totalForwarded += input.amount;
+                    locals.latestExec.outcomeType = QUGATE_EXEC_FORWARDED;
+                    locals.latestExec.selectedRecipientIndex = (uint8)locals.gate.roundRobinIndex;
+                    locals.latestExec.selectedDownstreamGateId = locals.gate.recipientGateIds.get(locals.gate.roundRobinIndex);
+                    locals.latestExec.forwardedAmount = input.amount;
+                    locals.gate.roundRobinIndex = QPI::mod(locals.gate.roundRobinIndex + 1, (uint64)locals.gate.recipientCount);
+                    output.forwarded = input.amount;
+                }
             }
         }
         else
@@ -1959,12 +1987,23 @@ public:
                         && state.get()._gateGenerations.get(locals.targetSlot) == (uint16)(locals.targetGen - 1)
                         && state.get()._gates.get(locals.targetSlot).active == 1)
                     {
-                        output.deferredToGate = 1;
-                        output.deferredGateSlot = locals.targetSlot;
-                        output.deferredGateAmount = (sint64)locals.gate.currentBalance;
-                        output.forwarded = locals.gate.currentBalance;
-                        locals.gate.totalForwarded += locals.gate.currentBalance;
-                        locals.gate.currentBalance = 0;
+                        locals.targetTlCfg.active = 1;
+                        locals.targetTlCfg.cancelled = 0;
+                        locals.targetTlCfg.fired = 0;
+                        if (state.get()._gates.get(locals.targetSlot).mode == QUGATE_MODE_TIME_LOCK)
+                        {
+                            locals.targetTlCfg = state.get()._timeLockConfigs.get(locals.targetSlot);
+                        }
+                        if (state.get()._gates.get(locals.targetSlot).mode != QUGATE_MODE_TIME_LOCK
+                            || (locals.targetTlCfg.active == 1 && locals.targetTlCfg.cancelled == 0 && locals.targetTlCfg.fired == 0))
+                        {
+                            output.deferredToGate = 1;
+                            output.deferredGateSlot = locals.targetSlot;
+                            output.deferredGateAmount = (sint64)locals.gate.currentBalance;
+                            output.forwarded = locals.gate.currentBalance;
+                            locals.gate.totalForwarded += locals.gate.currentBalance;
+                            locals.gate.currentBalance = 0;
+                        }
                     }
                 }
                 else
@@ -2021,15 +2060,26 @@ public:
                 && state.get()._gateGenerations.get(locals.targetSlot) == (uint16)(locals.targetGen - 1)
                 && state.get()._gates.get(locals.targetSlot).active == 1)
             {
-                output.deferredToGate = 1;
-                output.deferredGateSlot = locals.targetSlot;
-                output.deferredGateAmount = input.amount;
-                locals.gate.totalForwarded += input.amount;
-                locals.latestExec.outcomeType = QUGATE_EXEC_FORWARDED;
-                locals.latestExec.selectedRecipientIndex = (uint8)locals.recipientIdx;
-                locals.latestExec.selectedDownstreamGateId = locals.gate.recipientGateIds.get(locals.recipientIdx);
-                locals.latestExec.forwardedAmount = input.amount;
-                output.forwarded = input.amount;
+                locals.targetTlCfg.active = 1;
+                locals.targetTlCfg.cancelled = 0;
+                locals.targetTlCfg.fired = 0;
+                if (state.get()._gates.get(locals.targetSlot).mode == QUGATE_MODE_TIME_LOCK)
+                {
+                    locals.targetTlCfg = state.get()._timeLockConfigs.get(locals.targetSlot);
+                }
+                if (state.get()._gates.get(locals.targetSlot).mode != QUGATE_MODE_TIME_LOCK
+                    || (locals.targetTlCfg.active == 1 && locals.targetTlCfg.cancelled == 0 && locals.targetTlCfg.fired == 0))
+                {
+                    output.deferredToGate = 1;
+                    output.deferredGateSlot = locals.targetSlot;
+                    output.deferredGateAmount = input.amount;
+                    locals.gate.totalForwarded += input.amount;
+                    locals.latestExec.outcomeType = QUGATE_EXEC_FORWARDED;
+                    locals.latestExec.selectedRecipientIndex = (uint8)locals.recipientIdx;
+                    locals.latestExec.selectedDownstreamGateId = locals.gate.recipientGateIds.get(locals.recipientIdx);
+                    locals.latestExec.forwardedAmount = input.amount;
+                    output.forwarded = input.amount;
+                }
             }
         }
         else
@@ -2234,10 +2284,21 @@ public:
                                 && state.get()._gateGenerations.get(locals.targetSlot) == (uint16)(locals.targetGen - 1)
                                 && state.get()._gates.get(locals.targetSlot).active == 1)
                             {
-                                output.deferredToGate = 1;
-                                output.deferredGateSlot = locals.targetSlot;
-                                output.deferredGateAmount = locals.releaseAmount;
-                                locals.transferred = 1;
+                                locals.targetTlCfg.active = 1;
+                                locals.targetTlCfg.cancelled = 0;
+                                locals.targetTlCfg.fired = 0;
+                                if (state.get()._gates.get(locals.targetSlot).mode == QUGATE_MODE_TIME_LOCK)
+                                {
+                                    locals.targetTlCfg = state.get()._timeLockConfigs.get(locals.targetSlot);
+                                }
+                                if (state.get()._gates.get(locals.targetSlot).mode != QUGATE_MODE_TIME_LOCK
+                                    || (locals.targetTlCfg.active == 1 && locals.targetTlCfg.cancelled == 0 && locals.targetTlCfg.fired == 0))
+                                {
+                                    output.deferredToGate = 1;
+                                    output.deferredGateSlot = locals.targetSlot;
+                                    output.deferredGateAmount = locals.releaseAmount;
+                                    locals.transferred = 1;
+                                }
                             }
                         }
                         else
@@ -6513,6 +6574,7 @@ public:
                     if (locals.inhPayoutTotal > 0)
                     {
                         locals.inhBeneCount = locals.inhCfg.beneficiaryCount;
+                        locals.inhDistributedTotal = 0;
 
                         for (locals.inhJ = 0; locals.inhJ < locals.inhBeneCount; locals.inhJ++)
                         {
@@ -6537,13 +6599,66 @@ public:
                                 {
                                     locals.gate.totalForwarded += (uint64)locals.inhShare;
                                     locals.gate.currentBalance -= (uint64)locals.inhShare;
+                                    locals.inhDistributedTotal += locals.inhShare;
                                 }
                             }
                         }
 
-                        state.mut()._gates.set(locals.i, locals.gate);
+                        if (locals.gate.chainNextGateId != -1 && locals.inhPayoutTotal > locals.inhDistributedTotal)
+                        {
+                            locals.chainAmount = locals.inhPayoutTotal - locals.inhDistributedTotal;
+                            locals.gate.totalForwarded += (uint64)locals.chainAmount;
+                            locals.gate.currentBalance -= (uint64)locals.chainAmount;
+                            state.mut()._gates.set(locals.i, locals.gate);
 
-                        // Log payout
+                            locals.currentChainGateId = locals.gate.chainNextGateId;
+                            locals.hop = 0;
+                            while (locals.hop < QUGATE_MAX_CHAIN_DEPTH && locals.currentChainGateId != -1 && locals.chainAmount > 0)
+                            {
+                                locals.nextSlot = (uint64)locals.currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
+                                locals.nextGen = (uint64)locals.currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
+                                if (locals.nextSlot >= state.get()._gateCount || locals.nextGen == 0
+                                    || state.get()._gateGenerations.get(locals.nextSlot) != (uint16)(locals.nextGen - 1))
+                                    break;
+                                locals.rtIn.slotIdx = locals.nextSlot; locals.rtIn.amount = locals.chainAmount; locals.rtIn.hopCount = locals.hop;
+                                routeToGate(qpi, state, locals.rtIn, locals.rtOut, locals.rtLocals);
+                                locals.chainAmount = locals.rtOut.forwarded;
+                                // Dispatch deferred gate-as-recipient routing from chain hop
+                                locals.savedDeferredCount = locals.rtOut.deferredCount;
+                                locals.savedDeferredHopCount = locals.rtOut.deferredHopCount;
+                                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                                {
+                                    locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.rtOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                                    locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.rtOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
+                                }
+                                for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                                {
+                                    locals.rtIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                                    locals.rtIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                                    locals.rtIn.hopCount = locals.savedDeferredHopCount;
+                                    routeToGate(qpi, state, locals.rtIn, locals.rtOut, locals.rtLocals);
+                                }
+                                locals.nextGate = state.get()._gates.get(locals.nextSlot);
+                                locals.currentChainGateId = locals.nextGate.chainNextGateId;
+                                locals.hop++;
+                            }
+                            if (locals.chainAmount > 0 && locals.currentChainGateId != -1)
+                            {
+                                locals.gate = state.get()._gates.get(locals.i);
+                                locals.gate.currentBalance += (uint64)locals.chainAmount;
+                                locals.gate.totalForwarded -= (uint64)locals.chainAmount;
+                                state.mut()._gates.set(locals.i, locals.gate);
+                                locals.logger._type = QUGATE_LOG_CHAIN_HOP_INSUFFICIENT;
+                                locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+                                locals.logger.amount = locals.chainAmount;
+                                LOG_INFO(locals.logger);
+                            }
+                        }
+                        else
+                        {
+                            state.mut()._gates.set(locals.i, locals.gate);
+                        }
+
                         locals.logger._contractIndex = CONTRACT_INDEX;
                         locals.logger._type = QUGATE_LOG_HEARTBEAT_PAYOUT;
                         locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
@@ -6551,55 +6666,9 @@ public:
                         locals.logger.amount = locals.inhPayoutTotal;
                         LOG_INFO(locals.logger);
                     }
-
-                    // Chain forwarding after heartbeat payout
-                    locals.gate = state.get()._gates.get(locals.i);
-                    if (locals.gate.chainNextGateId != -1 && locals.inhPayoutTotal > 0)
+                    else
                     {
-                        locals.chainAmount = locals.inhPayoutTotal;
-                        locals.currentChainGateId = locals.gate.chainNextGateId;
-                        locals.hop = 0;
-                        while (locals.hop < QUGATE_MAX_CHAIN_DEPTH && locals.currentChainGateId != -1 && locals.chainAmount > 0)
-                        {
-                            locals.nextSlot = (uint64)locals.currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
-                            locals.nextGen = (uint64)locals.currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
-                            if (locals.nextSlot >= state.get()._gateCount || locals.nextGen == 0
-                                || state.get()._gateGenerations.get(locals.nextSlot) != (uint16)(locals.nextGen - 1))
-                                break;
-                            locals.rtIn.slotIdx = locals.nextSlot; locals.rtIn.amount = locals.chainAmount; locals.rtIn.hopCount = locals.hop;
-                            routeToGate(qpi, state, locals.rtIn, locals.rtOut, locals.rtLocals);
-                            locals.chainAmount = locals.rtOut.forwarded;
-                            // Dispatch deferred gate-as-recipient routing from chain hop
-                            locals.savedDeferredCount = locals.rtOut.deferredCount;
-                            locals.savedDeferredHopCount = locals.rtOut.deferredHopCount;
-                            for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
-                            {
-                                locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.rtOut.deferredGateSlots.get(locals.deferredDispatchIdx));
-                                locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.rtOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
-                            }
-                            for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
-                            {
-                                locals.rtIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
-                                locals.rtIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
-                                locals.rtIn.hopCount = locals.savedDeferredHopCount;
-                                routeToGate(qpi, state, locals.rtIn, locals.rtOut, locals.rtLocals);
-                            }
-                            locals.nextGate = state.get()._gates.get(locals.nextSlot);
-                            locals.currentChainGateId = locals.nextGate.chainNextGateId;
-                            locals.hop++;
-                        }
-                        // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance.
-                        if (locals.chainAmount > 0 && locals.currentChainGateId != -1)
-                        {
-                            locals.gate = state.get()._gates.get(locals.i);
-                            locals.gate.currentBalance += (uint64)locals.chainAmount;
-                            locals.gate.totalForwarded -= (uint64)locals.chainAmount; // undo the premature forward count
-                            state.mut()._gates.set(locals.i, locals.gate);
-                            locals.logger._type = QUGATE_LOG_CHAIN_HOP_INSUFFICIENT;
-                            locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
-                            locals.logger.amount = locals.chainAmount;
-                            LOG_INFO(locals.logger);
-                        }
+                        state.mut()._gates.set(locals.i, locals.gate);
                     }
 
                     // Auto-close gate if balance dropped to or below minimum
@@ -6781,7 +6850,59 @@ public:
                     }
                     else if (locals.gate.chainNextGateId != -1)
                     {
-                        locals.tlTransferred = 1; // No recipient, chain will handle
+                        locals.chainAmount = locals.tlReleaseAmount;
+                        locals.gate.totalForwarded += (uint64)locals.chainAmount;
+                        locals.gate.currentBalance -= (uint64)locals.chainAmount;
+                        state.mut()._gates.set(locals.i, locals.gate);
+
+                        locals.currentChainGateId = locals.gate.chainNextGateId;
+                        locals.hop = 0;
+                        while (locals.hop < QUGATE_MAX_CHAIN_DEPTH && locals.currentChainGateId != -1 && locals.chainAmount > 0)
+                        {
+                            locals.nextSlot = (uint64)locals.currentChainGateId & QUGATE_GATE_ID_SLOT_MASK;
+                            locals.nextGen = (uint64)locals.currentChainGateId >> QUGATE_GATE_ID_SLOT_BITS;
+                            if (locals.nextSlot >= state.get()._gateCount || locals.nextGen == 0
+                                || state.get()._gateGenerations.get(locals.nextSlot) != (uint16)(locals.nextGen - 1))
+                                break;
+                            locals.rtIn.slotIdx = locals.nextSlot;
+                            locals.rtIn.amount = locals.chainAmount;
+                            locals.rtIn.hopCount = locals.hop;
+                            routeToGate(qpi, state, locals.rtIn, locals.rtOut, locals.rtLocals);
+                            locals.chainAmount = locals.rtOut.forwarded;
+                            locals.savedDeferredCount = locals.rtOut.deferredCount;
+                            locals.savedDeferredHopCount = locals.rtOut.deferredHopCount;
+                            for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                            {
+                                locals.savedDeferredSlots.set(locals.deferredDispatchIdx, locals.rtOut.deferredGateSlots.get(locals.deferredDispatchIdx));
+                                locals.savedDeferredAmounts.set(locals.deferredDispatchIdx, locals.rtOut.deferredGateAmounts.get(locals.deferredDispatchIdx));
+                            }
+                            for (locals.deferredDispatchIdx = 0; locals.deferredDispatchIdx < locals.savedDeferredCount; locals.deferredDispatchIdx++)
+                            {
+                                locals.rtIn.slotIdx = locals.savedDeferredSlots.get(locals.deferredDispatchIdx);
+                                locals.rtIn.amount = locals.savedDeferredAmounts.get(locals.deferredDispatchIdx);
+                                locals.rtIn.hopCount = locals.savedDeferredHopCount;
+                                routeToGate(qpi, state, locals.rtIn, locals.rtOut, locals.rtLocals);
+                            }
+                            locals.nextGate = state.get()._gates.get(locals.nextSlot);
+                            locals.currentChainGateId = locals.nextGate.chainNextGateId;
+                            locals.hop++;
+                        }
+                        if (locals.chainAmount > 0 && locals.currentChainGateId != -1)
+                        {
+                            locals.gate = state.get()._gates.get(locals.i);
+                            locals.gate.currentBalance += (uint64)locals.chainAmount;
+                            locals.gate.totalForwarded -= (uint64)locals.chainAmount;
+                            state.mut()._gates.set(locals.i, locals.gate);
+                            locals.logger._type = QUGATE_LOG_CHAIN_HOP_INSUFFICIENT;
+                            locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+                            locals.logger.amount = locals.chainAmount;
+                            LOG_INFO(locals.logger);
+                        }
+                        locals.gate = state.get()._gates.get(locals.i);
+                        if (locals.gate.currentBalance == 0)
+                        {
+                            locals.tlTransferred = 1;
+                        }
                     }
                     // else: no recipients AND no chain — funds stay in currentBalance
                     if (locals.tlTransferred)
