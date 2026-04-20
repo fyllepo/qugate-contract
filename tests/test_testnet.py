@@ -7,11 +7,15 @@ import requests
 import time
 import base64
 import struct
+import pytest
+
+LIVE_NODE = os.environ.get("QUBIC_NODE")
+pytestmark = pytest.mark.skipif(not LIVE_NODE, reason="Requires live Qubic node (set QUBIC_NODE env var)")
 
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 ID_TOOL = os.environ.get("QUBIC_ID_TOOL", shutil.which("identity_tool") or "identity_tool")
 RPC = "http://localhost:41841"
-CONTRACT_IDX = 24
+CONTRACT_IDX = 25  # Pulse took index 24
 CONTRACT = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
 ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
@@ -52,6 +56,12 @@ def get_fees():
 
 def build_gate_id_hex(gate_id):
     return struct.pack("<Q", gate_id).hex()
+
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
 
 def send_custom_tx(key, amount, target_tick, input_type, hex_data):
     data_bytes = bytes.fromhex(hex_data) if hex_data else b""
@@ -199,14 +209,14 @@ if active2 > active:
     
     # Test 4: Send to gate
     print("\n--- Test 4: Send 10000 QU through SPLIT gate ---")
-    gate_id = 1
+    gate_id = encode_gate_id(total)
     tick = get_tick()
     target = tick + 5
     result = send_custom_tx(ADDR_A_KEY, 10000, target, 2, build_gate_id_hex(gate_id))
     print(f"TX: {result[:100]}")
-    
+
     wait_ticks(20)
-    
+
     b1_after = get_balance(ADDR_B_KEY_ID)
     b2_after = get_balance(ADDR_C_KEY_ID)
     print(f"Address B received: {b1_after - b1:,} QU (expected ~6000)")

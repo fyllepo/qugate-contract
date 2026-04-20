@@ -25,7 +25,7 @@ import random
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
 RPC = "http://127.0.0.1:41841"
-QUGATE_INDEX = 24
+QUGATE_INDEX = 25  # Pulse took index 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
 ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
@@ -43,6 +43,12 @@ MODE_RANDOM = 3
 MODE_CONDITIONAL = 4
 
 MODE_NAMES = ['SPLIT', 'ROUND_ROBIN', 'THRESHOLD', 'RANDOM', 'CONDITIONAL']
+
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
 
 def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
@@ -253,7 +259,7 @@ for batch_start in range(0, len(gate_configs), BATCH_SIZE):
 
 # Record gate IDs
 for i in range(created):
-    gate_ids.append(total_start + i + 1)
+    gate_ids.append(encode_gate_id(total_start + i))
 
 print(f"\n  ✅ Created {created}/50 gates ({failed_creates} send failures)")
 
@@ -337,11 +343,9 @@ if reused > 0:
 else:
     print("  ⚠ No slots reused (free-list may not be working)")
 
-# Clean up reuse gates
-for i in range(5):
-    gid = total_after_reuse - 4 + i
-    send_contract_tx(ADDR_A_KEY, PROC_CLOSE_GATE, 0, struct.pack('<Q', gid))
-wait_ticks(15)
+# Note: reuse gates are not cleaned up here — reused slots have incremented
+# generations whose exact IDs can't be trivially predicted from counts alone.
+# They will auto-expire after QUGATE_DEFAULT_EXPIRY_EPOCHS.
 
 # ============================================================
 print(f"\n{'='*60}")

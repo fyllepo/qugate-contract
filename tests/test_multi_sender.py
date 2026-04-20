@@ -16,7 +16,7 @@ import requests
 CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
 RPC = "http://127.0.0.1:41841"
-QUGATE_INDEX = 24
+QUGATE_INDEX = 25  # Pulse took index 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
 ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
@@ -26,6 +26,12 @@ ADDR_C_KEY = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
 PROC_CLOSE_GATE = 3
+
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
 
 def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
@@ -171,7 +177,7 @@ print("  Address B creates gate (1000 QU fee) — Address B is owner but NOT a r
 wait_ticks(15)
 
 total, active = query_gate_count()
-gate_id = total
+gate_id = encode_gate_id(total - 1)
 gate = query_gate(gate_id)
 print(f"  Gate #{gate_id}: mode={gate['mode']}, recipients={gate['recipientCount']}, active={gate['active']}")
 print("  ✅ Gate created!")

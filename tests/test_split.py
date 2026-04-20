@@ -16,7 +16,7 @@ CLI = os.environ.get("QUBIC_CLI", shutil.which("qubic-cli") or "qubic-cli")
 ID_TOOL = os.environ.get("QUBIC_ID_TOOL", shutil.which("identity_tool") or "identity_tool")
 NODE_ARGS = ["-nodeip", "127.0.0.1", "-nodeport", "31841"]
 RPC = "http://127.0.0.1:41841"
-QUGATE_INDEX = 24
+QUGATE_INDEX = 25  # Pulse took index 24
 CONTRACT_ID = "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMSME"
 
 ADDR_A_KEY = "eraaastggldisjhoojaekgyimrsddjxbvgaawswfvnvaygqmusnkevv"
@@ -27,6 +27,13 @@ ADDR_C_KEY = "xeejtwxqrrlvacapbujaleejhbrsnnpvviknskemmgdihggpssjjkrg"
 PROC_CREATE_GATE = 1
 PROC_SEND_TO_GATE = 2
 PROC_CLOSE_GATE = 3
+
+# Versioned gate ID encoding
+GATE_ID_SLOT_BITS = 20
+
+def encode_gate_id(slot_idx, generation=0):
+    """Encode slot index and generation into a versioned gate ID"""
+    return ((generation + 1) << GATE_ID_SLOT_BITS) | slot_idx
 
 def cli(*args, timeout=15):
     r = subprocess.run([CLI] + NODE_ARGS + list(args), capture_output=True, text=True, timeout=timeout)
@@ -247,16 +254,15 @@ wait_ticks(15)
 total, active = query_gate_count()
 print(f"\n  Gate count: total={total}, active={active}")
 
-# Find the newest gate
-gate = query_gate(total)
-print(f"  Gate #{total}: {gate}")
+# Find the newest gate (versioned ID)
+SPLIT_GATE_ID = encode_gate_id(total - 1)
+gate = query_gate(SPLIT_GATE_ID)
+print(f"  Gate #{SPLIT_GATE_ID}: {gate}")
 
 if gate['active'] and gate['ratios'] == [60, 40]:
     print("  ✅ SPLIT gate created with correct ratios!")
-    SPLIT_GATE_ID = total
 else:
     print(f"  ⚠ Gate created but ratios={gate['ratios']}")
-    SPLIT_GATE_ID = total
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # SCENARIO 2: Send 10000 QU through SPLIT gate
