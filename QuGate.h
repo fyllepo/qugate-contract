@@ -16,9 +16,19 @@ constexpr uint64 QUGATE_DEFAULT_MIN_SEND = 1000;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_FEE = 25000;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS = 4;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS = 4;
-// Fee split: burn vs shareholder dividends (applies to both creation and idle fees)
-constexpr uint64 QUGATE_FEE_BURN_BPS = 5000;             // 50% burned
-constexpr uint64 QUGATE_FEE_DIVIDEND_BPS = 5000;          // 50% to shareholders
+// Fee split defaults: burn vs shareholder dividends (governed via _feeBurnBps state variable)
+constexpr uint64 QUGATE_DEFAULT_FEE_BURN_BPS = 5000;      // 50% burned (default)
+constexpr uint64 QUGATE_MIN_FEE_BURN_BPS = 3000;          // floor: 30% burn minimum
+constexpr uint64 QUGATE_MAX_FEE_BURN_BPS = 7000;          // ceiling: 70% burn maximum
+
+// Complexity-based idle maintenance multipliers (basis points, 10000 = 1x)
+constexpr uint64 QUGATE_IDLE_BASE_MULTIPLIER_BPS = 10000;            // 1x for simple gates
+constexpr uint64 QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD = 3;          // 3+ recipients triggers multiplier
+constexpr uint64 QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS = 15000; // 1.5x for 3+ recipients
+constexpr uint64 QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS = 20000;   // 2x for 8 recipients
+constexpr uint64 QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS = 15000;       // 1.5x for HEARTBEAT
+constexpr uint64 QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS = 15000;        // 1.5x for MULTISIG
+constexpr uint64 QUGATE_IDLE_CHAIN_EXTRA_BPS = 5000;                 // +0.5x if chained
 
 // Escalating fee: fee = baseFee * (1 + QPI::div(activeGates, FEE_ESCALATION_STEP))
 constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
@@ -696,11 +706,12 @@ public:
     {
         uint64 creationFee;         // base fee
         uint64 currentCreationFee;  // actual fee right now (after escalation)
-        uint64 idleFee;
+        uint64 feeBurnBps;          // burn portion in basis points (3000-7000)
+        uint64 idleFee;             // base idle maintenance fee (before complexity scaling)
         uint64 idleWindowEpochs;
         uint64 idleGraceEpochs;
         uint64 minSendAmount;
-        uint64 expiryEpochs;       //
+        uint64 expiryEpochs;
     };
 
 public:
@@ -724,7 +735,8 @@ public:
 
         // Shareholder-adjustable parameters
         uint64 _creationFee;        // base creation fee
-        uint64 _idleFee;     // inactivity maintenance charge
+        uint64 _feeBurnBps;         // burn portion of fees in basis points (3000-7000)
+        uint64 _idleFee;     // base inactivity maintenance charge (scaled by gate complexity)
         uint64 _idleWindowEpochs; // idle-window / recurring inactivity cadence
         uint64 _idleGraceEpochs;
         uint64 _minSendAmount;
@@ -1179,6 +1191,8 @@ public:
         GateConfig gate;
         uint8  maintenanceEligible;
         uint16 delinquentEpoch;
+        uint64 effectiveIdleFee;
+        uint64 idleMultiplierBps;
         uint64 maintenanceBurnAmount;
         uint64 maintenanceDividendAmount;
         uint64 maintenanceDistributed;
@@ -1792,7 +1806,7 @@ public:
         state.mut()._activeGates += 1;
 
         // Split creation fee: burn + shareholder dividends
-        locals.creationBurnAmount = QPI::div(locals.currentFee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        locals.creationBurnAmount = QPI::div(locals.currentFee * state.get()._feeBurnBps, 10000ULL);
         locals.creationDividendAmount = locals.currentFee - locals.creationBurnAmount;
         qpi.burn(locals.creationBurnAmount);
         state.mut()._totalBurned += locals.creationBurnAmount;
@@ -4341,6 +4355,7 @@ public:
     {
         output.creationFee = state.get()._creationFee;
         output.currentCreationFee = state.get()._creationFee * (1 + QPI::div(state.get()._activeGates, QUGATE_FEE_ESCALATION_STEP));
+        output.feeBurnBps = state.get()._feeBurnBps;
         output.idleFee = state.get()._idleFee;
         output.idleWindowEpochs = state.get()._idleWindowEpochs;
         output.idleGraceEpochs = state.get()._idleGraceEpochs;
@@ -6245,6 +6260,7 @@ public:
         state.mut()._freeCount = 0;
         state.mut()._totalBurned = 0;                           //
         state.mut()._creationFee = QUGATE_DEFAULT_CREATION_FEE;  //
+        state.mut()._feeBurnBps = QUGATE_DEFAULT_FEE_BURN_BPS;
         state.mut()._idleFee = QUGATE_DEFAULT_MAINTENANCE_FEE;
         state.mut()._idleWindowEpochs = QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS;
         state.mut()._idleGraceEpochs = QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS;
@@ -6380,22 +6396,46 @@ public:
             }
 
             // Charge inactivity maintenance when an idle gate reaches its own due epoch.
+            // Fee scales with gate complexity: mode, recipient count, chain linkage.
             if (state.get()._idleWindowEpochs > 0
                 && qpi.epoch() > 0
                 && locals.gate.nextIdleChargeEpoch > 0
                 && qpi.epoch() >= locals.gate.nextIdleChargeEpoch)
             {
-                if (locals.gate.reserve >= (sint64)state.get()._idleFee)
+                // Compute complexity multiplier
+                locals.idleMultiplierBps = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
+                if (locals.gate.recipientCount >= QUGATE_MAX_RECIPIENTS)
                 {
-                    locals.gate.reserve -= state.get()._idleFee;
+                    locals.idleMultiplierBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
+                }
+                else if (locals.gate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD)
+                {
+                    locals.idleMultiplierBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
+                }
+                if (locals.gate.mode == QUGATE_MODE_HEARTBEAT && locals.idleMultiplierBps < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS)
+                {
+                    locals.idleMultiplierBps = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
+                }
+                if (locals.gate.mode == QUGATE_MODE_MULTISIG && locals.idleMultiplierBps < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS)
+                {
+                    locals.idleMultiplierBps = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
+                }
+                if (locals.gate.chainNextGateId >= 0)
+                {
+                    locals.idleMultiplierBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
+                }
+                locals.effectiveIdleFee = QPI::div(state.get()._idleFee * locals.idleMultiplierBps, 10000ULL);
+
+                if (locals.gate.reserve >= (sint64)locals.effectiveIdleFee)
+                {
+                    locals.gate.reserve -= locals.effectiveIdleFee;
                     locals.gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
                     state.mut()._gates.set(locals.i, locals.gate);
                     state.mut()._idleDelinquentEpochs.set(locals.i, 0);
-                    state.mut()._totalMaintenanceCharged += state.get()._idleFee;
+                    state.mut()._totalMaintenanceCharged += locals.effectiveIdleFee;
 
-                    // Idle maintenance: 80% burn, 20% shareholder dividends
-                    locals.maintenanceBurnAmount = QPI::div(state.get()._idleFee * QUGATE_FEE_BURN_BPS, 10000ULL);
-                    locals.maintenanceDividendAmount = state.get()._idleFee - locals.maintenanceBurnAmount;
+                    locals.maintenanceBurnAmount = QPI::div(locals.effectiveIdleFee * state.get()._feeBurnBps, 10000ULL);
+                    locals.maintenanceDividendAmount = locals.effectiveIdleFee - locals.maintenanceBurnAmount;
                     qpi.burn(locals.maintenanceBurnAmount);
                     state.mut()._totalBurned += locals.maintenanceBurnAmount;
                     state.mut()._totalMaintenanceBurned += locals.maintenanceBurnAmount;
@@ -6406,7 +6446,7 @@ public:
                     locals.logger._type = (locals.delinquentEpoch > 0 ? QUGATE_LOG_MAINTENANCE_CURED : QUGATE_LOG_MAINTENANCE_CHARGED);
                     locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i) + 1) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
                     locals.logger.sender = locals.gate.owner;
-                    locals.logger.amount = state.get()._idleFee;
+                    locals.logger.amount = locals.effectiveIdleFee;
                     LOG_INFO(locals.logger);
                 }
                 else if (locals.delinquentEpoch == 0)

@@ -255,8 +255,19 @@ constexpr uint8 MODE_HEARTBEAT = 6;
 constexpr uint8 MODE_MULTISIG = 7;
 constexpr uint8 MODE_TIME_LOCK = 8;
 
-// Fee split: burn vs shareholder dividends
-constexpr uint64 QUGATE_FEE_BURN_BPS = 5000;        // 50% burned
+// Fee split defaults
+constexpr uint64 QUGATE_DEFAULT_FEE_BURN_BPS = 5000;
+constexpr uint64 QUGATE_MIN_FEE_BURN_BPS = 3000;
+constexpr uint64 QUGATE_MAX_FEE_BURN_BPS = 7000;
+
+// Complexity-based idle fee multipliers
+constexpr uint64 QUGATE_IDLE_BASE_MULTIPLIER_BPS = 10000;
+constexpr uint64 QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD = 3;
+constexpr uint64 QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS = 15000;
+constexpr uint64 QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS = 20000;
+constexpr uint64 QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS = 15000;
+constexpr uint64 QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS = 15000;
+constexpr uint64 QUGATE_IDLE_CHAIN_EXTRA_BPS = 5000;
 constexpr uint64 QUGATE_FEE_DIVIDEND_BPS = 5000;     // 50% to shareholders
 
 // Idle maintenance defaults
@@ -390,6 +401,7 @@ struct QuGateState {
     Array<uint64, QUGATE_MAX_GATES> _freeSlots;
     uint64 _freeCount;
     uint64 _creationFee;
+    uint64 _feeBurnBps;
     uint64 _minSendAmount;
     uint64 _expiryEpochs;
     Array<QUGATE_AllowedSendersConfig, QUGATE_MAX_GATES> _allowedSendersConfigs;
@@ -545,6 +557,7 @@ public:
         state.mut()._freeCount = 0;
         state.mut()._totalBurned = 0;
         state.mut()._creationFee = QUGATE_DEFAULT_CREATION_FEE;
+        state.mut()._feeBurnBps = QUGATE_DEFAULT_FEE_BURN_BPS;
         state.mut()._minSendAmount = QUGATE_DEFAULT_MIN_SEND;
         state.mut()._expiryEpochs = QUGATE_DEFAULT_EXPIRY_EPOCHS;
         state.mut()._idleFee = QUGATE_DEFAULT_MAINTENANCE_FEE;
@@ -877,7 +890,7 @@ public:
         state.mut()._activeGates += 1;
 
         // Split creation fee: burn 50% + shareholder dividends 50%
-        uint64 creationBurnAmount = QPI::div(currentFee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 creationBurnAmount = QPI::div(currentFee * state.get()._feeBurnBps, 10000ULL);
         uint64 creationDividendAmount = currentFee - creationBurnAmount;
         qpi.burn(creationBurnAmount);
         state.mut()._totalBurned += creationBurnAmount;
@@ -1439,17 +1452,30 @@ public:
                 && gate.nextIdleChargeEpoch > 0
                 && qpi.epoch() >= gate.nextIdleChargeEpoch)
             {
-                if (gate.reserve >= (sint64)state.get()._idleFee)
+                // Compute complexity-based effective fee
+                uint64 idleMultiplierBps = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
+                if (gate.recipientCount >= QUGATE_MAX_RECIPIENTS)
+                    idleMultiplierBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
+                else if (gate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD)
+                    idleMultiplierBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
+                if (gate.mode == MODE_HEARTBEAT && idleMultiplierBps < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS)
+                    idleMultiplierBps = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
+                if (gate.mode == MODE_MULTISIG && idleMultiplierBps < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS)
+                    idleMultiplierBps = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
+                if (gate.chainNextGateId >= 0)
+                    idleMultiplierBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
+                uint64 effectiveIdleFee = QPI::div(state.get()._idleFee * idleMultiplierBps, 10000ULL);
+
+                if (gate.reserve >= (sint64)effectiveIdleFee)
                 {
-                    gate.reserve -= state.get()._idleFee;
+                    gate.reserve -= effectiveIdleFee;
                     gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
                     state.mut()._gates.set(i, gate);
                     state.mut()._idleDelinquentEpochs.set(i, 0);
-                    state.mut()._totalMaintenanceCharged += state.get()._idleFee;
+                    state.mut()._totalMaintenanceCharged += effectiveIdleFee;
 
-                    // Idle maintenance: 50% burn, 50% shareholder dividends
-                    uint64 maintenanceBurnAmount = QPI::div(state.get()._idleFee * QUGATE_FEE_BURN_BPS, 10000ULL);
-                    uint64 maintenanceDividendAmount = state.get()._idleFee - maintenanceBurnAmount;
+                    uint64 maintenanceBurnAmount = QPI::div(effectiveIdleFee * state.get()._feeBurnBps, 10000ULL);
+                    uint64 maintenanceDividendAmount = effectiveIdleFee - maintenanceBurnAmount;
                     qpi.burn(maintenanceBurnAmount);
                     state.mut()._totalBurned += maintenanceBurnAmount;
                     state.mut()._totalMaintenanceBurned += maintenanceBurnAmount;
@@ -1458,7 +1484,6 @@ public:
                 }
                 else if (delinquentEpoch == 0)
                 {
-                    // Insufficient reserve — mark delinquent
                     state.mut()._idleDelinquentEpochs.set(i, qpi.epoch());
                 }
             }
@@ -4032,7 +4057,7 @@ TEST(QuGateFinancial, CreationFee80_20Split)
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
     ASSERT_EQ(out.feePaid, fee);
 
-    uint64 expectedBurn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL); // 50000
+    uint64 expectedBurn = QPI::div(fee * QUGATE_DEFAULT_FEE_BURN_BPS, 10000ULL); // 50000
     uint64 expectedDividend = fee - expectedBurn;                         // 50000
 
     EXPECT_EQ(expectedBurn, 50000ULL);
@@ -4068,7 +4093,7 @@ TEST(QuGateFinancial, CreationFeeEscalatedSplitStillBalances)
     auto out = makeSimpleGate(env, ALICE, (sint64)fee, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
 
-    uint64 expectedBurn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL); // 100000
+    uint64 expectedBurn = QPI::div(fee * QUGATE_DEFAULT_FEE_BURN_BPS, 10000ULL); // 100000
     uint64 expectedDividend = fee - expectedBurn;                         // 100000
 
     EXPECT_EQ(expectedBurn, 100000ULL);
@@ -4116,7 +4141,7 @@ TEST(QuGateFinancial, IdleMaintenanceFee80_20Split)
     env.endEpoch();
 
     uint64 idleFee = QUGATE_DEFAULT_MAINTENANCE_FEE;
-    uint64 expectedBurn = QPI::div(idleFee * QUGATE_FEE_BURN_BPS, 10000ULL); // 12500
+    uint64 expectedBurn = QPI::div(idleFee * QUGATE_DEFAULT_FEE_BURN_BPS, 10000ULL); // 12500
     uint64 expectedDividend = idleFee - expectedBurn;                         // 5000
 
     EXPECT_EQ(expectedBurn, 12500ULL);
@@ -4157,7 +4182,7 @@ TEST(QuGateFinancial, IdleMaintenanceMultipleCycles)
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
 
     uint64 idleFee = QUGATE_DEFAULT_MAINTENANCE_FEE;
-    uint64 burnPerCycle = QPI::div(idleFee * QUGATE_FEE_BURN_BPS, 10000ULL);
+    uint64 burnPerCycle = QPI::div(idleFee * QUGATE_DEFAULT_FEE_BURN_BPS, 10000ULL);
     uint64 divPerCycle = idleFee - burnPerCycle;
 
     // Run 3 idle charge cycles (epochs 104, 108, 112)
@@ -4185,7 +4210,7 @@ TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
     // fee = 1: burn = 0, dividend = 1
     {
         uint64 fee = 1;
-        uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 burn = QPI::div(fee * QUGATE_DEFAULT_FEE_BURN_BPS, 10000ULL);
         uint64 div = fee - burn;
         EXPECT_EQ(burn, 0ULL);
         EXPECT_EQ(div, 1ULL);
@@ -4195,7 +4220,7 @@ TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
     // fee = 7: burn = 3, dividend = 4
     {
         uint64 fee = 7;
-        uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 burn = QPI::div(fee * QUGATE_DEFAULT_FEE_BURN_BPS, 10000ULL);
         uint64 div = fee - burn;
         EXPECT_EQ(burn, 3ULL);
         EXPECT_EQ(div, 4ULL);
@@ -4205,7 +4230,7 @@ TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
     // fee = 99999: burn = 49999, dividend = 50000
     {
         uint64 fee = 99999;
-        uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 burn = QPI::div(fee * QUGATE_DEFAULT_FEE_BURN_BPS, 10000ULL);
         uint64 div = fee - burn;
         EXPECT_EQ(burn, 49999ULL);
         EXPECT_EQ(div, 50000ULL);
@@ -4215,7 +4240,7 @@ TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
     // fee = 100000: burn = 50000, dividend = 50000 (default creation fee)
     {
         uint64 fee = 100000;
-        uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 burn = QPI::div(fee * QUGATE_DEFAULT_FEE_BURN_BPS, 10000ULL);
         uint64 div = fee - burn;
         EXPECT_EQ(burn, 50000ULL);
         EXPECT_EQ(div, 50000ULL);
@@ -4225,7 +4250,7 @@ TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
     // fee = 25000: burn = 12500, dividend = 12500 (idle maintenance fee)
     {
         uint64 fee = 25000;
-        uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 burn = QPI::div(fee * QUGATE_DEFAULT_FEE_BURN_BPS, 10000ULL);
         uint64 div = fee - burn;
         EXPECT_EQ(burn, 12500ULL);
         EXPECT_EQ(div, 12500ULL);
@@ -4235,7 +4260,7 @@ TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
     // fee = 3: burn = 1, dividend = 2
     {
         uint64 fee = 3;
-        uint64 burn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+        uint64 burn = QPI::div(fee * QUGATE_DEFAULT_FEE_BURN_BPS, 10000ULL);
         uint64 div = fee - burn;
         EXPECT_EQ(burn, 1ULL);
         EXPECT_EQ(div, 2ULL);
@@ -6660,10 +6685,152 @@ TEST(QuGateIdle, IdleMaintenanceFeeSplit)
     env.endEpoch();
 
     uint64 fee = QUGATE_DEFAULT_MAINTENANCE_FEE;
-    uint64 expectedBurn = QPI::div(fee * QUGATE_FEE_BURN_BPS, 10000ULL);
+    uint64 expectedBurn = QPI::div(fee * QUGATE_DEFAULT_FEE_BURN_BPS, 10000ULL);
     uint64 expectedDividend = fee - expectedBurn;
 
     EXPECT_EQ(env.state.get()._totalMaintenanceBurned - burnedBefore, expectedBurn);
     EXPECT_EQ(env.state.get()._totalMaintenanceDividends - dividendBefore, expectedDividend);
     EXPECT_EQ(expectedBurn + expectedDividend, fee);
+}
+
+// Simple 1-recipient split pays 1x base idle fee
+TEST(QuGateComplexity, SimpleGatePaysBaseFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 100000).result, QUGATE_SUCCESS);
+    uint64 reserveBefore = env.getGate(out.gateId).reserve;
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    uint64 charged = reserveBefore - (uint64)env.getGate(out.gateId).reserve;
+    EXPECT_EQ(charged, QUGATE_DEFAULT_MAINTENANCE_FEE);
+}
+
+// Gate with 3 recipients pays 1.5x idle fee
+TEST(QuGateComplexity, MultiRecipientGatePaysHigherFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB, CHARLIE, DAVE };
+    uint64 ratios[] = { 3333, 3333, 3334 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 3, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 200000).result, QUGATE_SUCCESS);
+    uint64 reserveBefore = env.getGate(out.gateId).reserve;
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    uint64 charged = reserveBefore - (uint64)env.getGate(out.gateId).reserve;
+    uint64 expected = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS, 10000ULL);
+    EXPECT_EQ(charged, expected);
+}
+
+// Gate with 8 recipients pays 2x idle fee
+TEST(QuGateComplexity, MaxRecipientGatePaysDoubleFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB, CHARLIE, DAVE, EVE, QuGateTest::makeId(6), QuGateTest::makeId(7), QuGateTest::makeId(8), QuGateTest::makeId(9) };
+    uint64 ratios[] = { 1250, 1250, 1250, 1250, 1250, 1250, 1250, 1250 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 8, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 200000).result, QUGATE_SUCCESS);
+    uint64 reserveBefore = env.getGate(out.gateId).reserve;
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    uint64 charged = reserveBefore - (uint64)env.getGate(out.gateId).reserve;
+    uint64 expected = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS, 10000ULL);
+    EXPECT_EQ(charged, expected);
+}
+
+// Heartbeat gate pays 1.5x idle fee
+TEST(QuGateComplexity, HeartbeatGatePaysHigherFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 200000).result, QUGATE_SUCCESS);
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    uint64 charged = 200000 - (uint64)env.getGate(out.gateId).reserve;
+    uint64 expected = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS, 10000ULL);
+    EXPECT_EQ(charged, expected);
+}
+
+// Multisig gate pays 1.5x idle fee
+TEST(QuGateComplexity, MultisigGatePaysHigherFee)
+{
+    QuGateTest env;
+    id recips[] = { DAVE };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 200000).result, QUGATE_SUCCESS);
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    uint64 charged = 200000 - (uint64)env.getGate(out.gateId).reserve;
+    uint64 expected = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS, 10000ULL);
+    EXPECT_EQ(charged, expected);
+}
+
+// Chained gate pays base + 0.5x extra
+TEST(QuGateComplexity, ChainedGatePaysExtraFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    for (uint8 _ri = 0; _ri < 8; _ri++) in.recipientGateIds.set(_ri, -1);
+    in.mode = MODE_SPLIT;
+    in.recipientCount = 1;
+    in.recipients.set(0, CHARLIE);
+    in.ratios.set(0, 10000);
+    in.chainNextGateId = downstream.gateId;
+    auto out = env.createGate(ALICE, 100000, in);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 200000).result, QUGATE_SUCCESS);
+    uint64 reserveBefore = env.getGate(out.gateId).reserve;
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    uint64 charged = reserveBefore - (uint64)env.getGate(out.gateId).reserve;
+    uint64 expected = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * (QUGATE_IDLE_BASE_MULTIPLIER_BPS + QUGATE_IDLE_CHAIN_EXTRA_BPS), 10000ULL);
+    EXPECT_EQ(charged, expected);
+}
+
+// Governed burn BPS is used for creation fee split
+TEST(QuGateComplexity, GovernedBurnBpsAffectsCreationSplit)
+{
+    QuGateTest env;
+    env.state.mut()._feeBurnBps = 7000;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    uint64 dividendBefore = env.state.get()._earnedMaintenanceDividends;
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    uint64 fee = out.feePaid;
+    uint64 burned = env.state.get()._totalBurned - burnedBefore;
+    uint64 dividend = env.state.get()._earnedMaintenanceDividends - dividendBefore;
+    EXPECT_EQ(burned, QPI::div(fee * 7000, 10000ULL));
+    EXPECT_EQ(dividend, fee - burned);
+    EXPECT_EQ(burned + dividend, fee);
+}
+
+// Governed burn BPS is used for idle maintenance split
+TEST(QuGateComplexity, GovernedBurnBpsAffectsIdleSplit)
+{
+    QuGateTest env;
+    env.state.mut()._feeBurnBps = 3000;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 100000).result, QUGATE_SUCCESS);
+    uint64 burnedBefore = env.state.get()._totalMaintenanceBurned;
+    uint64 dividendBefore = env.state.get()._totalMaintenanceDividends;
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    uint64 fee = QUGATE_DEFAULT_MAINTENANCE_FEE;
+    uint64 burned = env.state.get()._totalMaintenanceBurned - burnedBefore;
+    uint64 dividend = env.state.get()._totalMaintenanceDividends - dividendBefore;
+    EXPECT_EQ(burned, QPI::div(fee * 3000, 10000ULL));
+    EXPECT_EQ(dividend, fee - burned);
 }
