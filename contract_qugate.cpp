@@ -1,12 +1,11 @@
-// QuGate contract tests V3 — standalone (no ContractTesting framework)
-// Tests: escalating fees, expiry, dust burn, status codes, free-list, all modes
+// QuGate contract unit tests — standalone harness (no ContractTesting framework)
 
 #include <gtest/gtest.h>
 #include <cstring>
 #include <cstdlib>
 #include <cstdint>
 
-// ---- Self-contained m256i (avoids upstream UEFI headers) ----
+// Self-contained m256i (avoids upstream UEFI headers)
 union m256i {
     int8_t   m256i_i8[32];
     uint8_t  m256i_u8[32];
@@ -30,10 +29,7 @@ static inline bool operator==(const m256i& a, const m256i& b)
     return memcmp(&a, &b, 32) == 0;
 }
 
-// =============================================
 // Minimal QPI shim for test harness
-// =============================================
-
 namespace QPI {
     typedef m256i id;
     typedef unsigned long long uint64;
@@ -138,10 +134,7 @@ namespace QPI {
 
 using namespace QPI;
 
-// =============================================
 // Test QPI context — tracks transfers, burns, ticks
-// =============================================
-
 struct TestQpiContext {
     id _invocator;
     sint64 _reward;
@@ -229,16 +222,10 @@ struct TestQpiContext {
     }
 };
 
-// =============================================
 // Stub macros for LOG_INFO / LOG_WARNING
-// =============================================
 #define LOG_INFO(x) ((void)0)
 #define LOG_WARNING(x) ((void)0)
 #define CONTRACT_INDEX 0
-
-// =============================================
-// Macro shims that expand QuGate.h into testable C++
-// =============================================
 
 // We need to define macros that QuGate.h uses, then include it.
 // The contract body uses PUBLIC_PROCEDURE_WITH_LOCALS, etc.
@@ -315,10 +302,7 @@ constexpr sint64 QUGATE_INVALID_ADMIN_CYCLE = -29;
 constexpr sint64 QUGATE_MULTISIG_PROPOSAL_ACTIVE = -30;
 constexpr sint64 QUGATE_INVALID_PARAMS = -31;
 
-// =============================================
-// V3 GateConfig (matches QuGate.h exactly)
-// =============================================
-
+// GateConfig (matches QuGate.h exactly)
 struct GateConfig {
     id owner;
     uint8 mode;
@@ -353,10 +337,6 @@ struct QUGATE_AllowedSendersConfig {
     Array<id, 8> senders;
     uint8 count;
 };
-
-// =============================================
-// V3 QuGateState
-// =============================================
 
 // Minimal multisig config for test harness
 struct QUGATE_MultisigConfig_Test {
@@ -433,10 +413,7 @@ struct QuGateState {
     Array<QUGATE_AdminApprovalState_Test, QUGATE_MAX_GATES> _adminApprovalStates;
 };
 
-// =============================================
 // Procedure I/O structs (match QuGate.h)
-// =============================================
-
 struct createGate_input {
     uint8 mode;
     uint8 recipientCount;
@@ -550,10 +527,7 @@ struct getFees_output {
     uint64 expiryEpochs;
 };
 
-// =============================================
-// Test harness — implements V3 contract logic faithfully
-// =============================================
-
+// Test harness — implements contract logic faithfully
 class QuGateTest {
 public:
     // Use ContractState wrapper for dirty-tracking pattern (Issue #7)
@@ -2632,19 +2606,14 @@ public:
     }
 };
 
-// =============================================
 // Test identities
-// =============================================
-
 static const id ALICE = QuGateTest::makeId(1);
 static const id BOB = QuGateTest::makeId(2);
 static const id CHARLIE = QuGateTest::makeId(3);
 static const id DAVE = QuGateTest::makeId(4);
 static const id EVE = QuGateTest::makeId(5);
 
-// =============================================
-// Helper to create a simple split gate
-// =============================================
+// Helper to create a simple gate
 static createGate_output makeSimpleGate(QuGateTest& env, const id& owner, sint64 fee,
                                          uint8 mode, uint8 recipientCount,
                                          id* recips, uint64* ratios,
@@ -2654,10 +2623,7 @@ static createGate_output makeSimpleGate(QuGateTest& env, const id& owner, sint64
     return env.createGateSimple(owner, fee, mode, recipientCount, recips, ratios, threshold, allowed, allowedCount);
 }
 
-// =============================================
-// ORIGINAL TESTS (updated for V3 harness)
-// =============================================
-
+// Split gate distributes evenly to two recipients
 TEST(QuGate, SplitEvenTwo)
 {
     QuGateTest env;
@@ -2672,6 +2638,7 @@ TEST(QuGate, SplitEvenTwo)
     EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 500);
 }
 
+// Split gate distributes proportionally with uneven 50/30/20 ratios
 TEST(QuGate, SplitUnevenThree)
 {
     QuGateTest env;
@@ -2686,6 +2653,7 @@ TEST(QuGate, SplitUnevenThree)
     EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 2000);
 }
 
+// Split gate assigns rounding remainder to last recipient
 TEST(QuGate, SplitHandlesRoundingDust)
 {
     QuGateTest env;
@@ -2700,6 +2668,7 @@ TEST(QuGate, SplitHandlesRoundingDust)
     EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 3334);
 }
 
+// Round-robin gate cycles through recipients in order
 TEST(QuGate, RoundRobinCycles)
 {
     QuGateTest env;
@@ -2721,6 +2690,7 @@ TEST(QuGate, RoundRobinCycles)
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4000);
 }
 
+// Random gate selects recipient deterministically from tick entropy
 TEST(QuGate, RandomSelectionTracksTickDeterministically)
 {
     QuGateTest env;
@@ -2747,6 +2717,7 @@ TEST(QuGate, RandomSelectionTracksTickDeterministically)
     EXPECT_EQ(gate.totalForwarded, 2000ULL);
 }
 
+// Threshold gate accumulates until target then releases all at once
 TEST(QuGate, ThresholdAccumulatesAndReleases)
 {
     QuGateTest env;
@@ -2765,6 +2736,7 @@ TEST(QuGate, ThresholdAccumulatesAndReleases)
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 6000);
 }
 
+// Conditional gate forwards from whitelisted senders
 TEST(QuGate, ConditionalAllowsWhitelisted)
 {
     QuGateTest env;
@@ -2778,6 +2750,7 @@ TEST(QuGate, ConditionalAllowsWhitelisted)
     EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 5000);
 }
 
+// Conditional gate bounces payment from non-whitelisted sender
 TEST(QuGate, ConditionalBouncesUnauthorised)
 {
     QuGateTest env;
@@ -2792,6 +2765,7 @@ TEST(QuGate, ConditionalBouncesUnauthorised)
     EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 5000);
 }
 
+// Sending to a non-existent gate ID bounces funds back
 TEST(QuGate, InvalidGateIdBounces)
 {
     QuGateTest env;
@@ -2800,6 +2774,7 @@ TEST(QuGate, InvalidGateIdBounces)
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 1000);
 }
 
+// Gate creation fails when fee is below the required amount
 TEST(QuGate, CreationFailsWithInsufficientFee)
 {
     QuGateTest env;
@@ -2810,6 +2785,7 @@ TEST(QuGate, CreationFailsWithInsufficientFee)
     EXPECT_EQ(out.gateId, 0ULL);
 }
 
+// Sending zero amount returns DUST_AMOUNT with no transfers
 TEST(QuGate, ZeroAmountDoesNothing)
 {
     QuGateTest env;
@@ -2822,6 +2798,7 @@ TEST(QuGate, ZeroAmountDoesNothing)
     EXPECT_EQ(env.qpi.transferCount, 0);
 }
 
+// Gate count and active gates track correctly across creations
 TEST(QuGate, GateCountTracking)
 {
     QuGateTest env;
@@ -2836,12 +2813,7 @@ TEST(QuGate, GateCountTracking)
     EXPECT_EQ(env.state.get()._activeGates, 3ULL);
 }
 
-// =============================================
-// NEW V3 TESTS
-// =============================================
-
-// ---- Escalating fee ----
-
+// Escalating fee equals base fee when no gates are active
 TEST(QuGateV3, EscalatingFeeAtZeroGates)
 {
     QuGateTest env;
@@ -2856,6 +2828,7 @@ TEST(QuGateV3, EscalatingFeeAtZeroGates)
     EXPECT_EQ(out.feePaid, 100000ULL);
 }
 
+// Escalating fee doubles at 1024 active gates
 TEST(QuGateV3, EscalatingFeeAt1024Gates)
 {
     QuGateTest env;
@@ -2878,6 +2851,7 @@ TEST(QuGateV3, EscalatingFeeAt1024Gates)
     EXPECT_EQ(out2.status, QUGATE_INSUFFICIENT_FEE);
 }
 
+// Escalating fee triples at 2048 active gates
 TEST(QuGateV3, EscalatingFeeAt2048Gates)
 {
     QuGateTest env;
@@ -2893,8 +2867,7 @@ TEST(QuGateV3, EscalatingFeeAt2048Gates)
     EXPECT_EQ(out.feePaid, 300000ULL);
 }
 
-// ---- Fee overpayment refund ----
-
+// Excess creation fee above the required amount seeds gate reserve
 TEST(QuGateV3, FeeOverpaymentSeedsReserve)
 {
     QuGateTest env;
@@ -2910,8 +2883,7 @@ TEST(QuGateV3, FeeOverpaymentSeedsReserve)
     EXPECT_EQ(gate.reserve, 400000);
 }
 
-// ---- Dust burn ----
-
+// Amounts below minimum send are burned as dust
 TEST(QuGateV3, DustBurnBelowMinSend)
 {
     QuGateTest env;
@@ -2927,6 +2899,7 @@ TEST(QuGateV3, DustBurnBelowMinSend)
     EXPECT_EQ(env.state.get()._totalBurned, 50000 + 5); // creation fee burn (50%) + dust
 }
 
+// Sending exactly the minimum amount forwards successfully
 TEST(QuGateV3, ExactMinSendNotDust)
 {
     QuGateTest env;
@@ -2940,8 +2913,7 @@ TEST(QuGateV3, ExactMinSendNotDust)
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 1000);
 }
 
-// ---- Status codes on all procedures ----
-
+// Creating a gate with invalid mode returns INVALID_MODE
 TEST(QuGateV3, StatusCodeCreateInvalidMode)
 {
     QuGateTest env;
@@ -2951,6 +2923,7 @@ TEST(QuGateV3, StatusCodeCreateInvalidMode)
     EXPECT_EQ(out.status, QUGATE_INVALID_MODE);
 }
 
+// Creating a split gate with zero recipients returns INVALID_RECIPIENT_COUNT
 TEST(QuGateV3, StatusCodeCreateInvalidRecipientCount)
 {
     QuGateTest env;
@@ -2960,6 +2933,7 @@ TEST(QuGateV3, StatusCodeCreateInvalidRecipientCount)
     EXPECT_EQ(out.status, QUGATE_INVALID_RECIPIENT_COUNT);
 }
 
+// Creating a split gate with zero total ratio returns INVALID_RATIO
 TEST(QuGateV3, StatusCodeCreateInvalidRatio)
 {
     QuGateTest env;
@@ -2969,6 +2943,7 @@ TEST(QuGateV3, StatusCodeCreateInvalidRatio)
     EXPECT_EQ(out.status, QUGATE_INVALID_RATIO);
 }
 
+// Creating a threshold gate with zero threshold returns INVALID_THRESHOLD
 TEST(QuGateV3, StatusCodeCreateInvalidThreshold)
 {
     QuGateTest env;
@@ -2978,6 +2953,7 @@ TEST(QuGateV3, StatusCodeCreateInvalidThreshold)
     EXPECT_EQ(out.status, QUGATE_INVALID_THRESHOLD);
 }
 
+// Sending to a closed gate returns GATE_NOT_ACTIVE
 TEST(QuGateV3, StatusCodeSendToInactiveGate)
 {
     QuGateTest env;
@@ -2990,6 +2966,7 @@ TEST(QuGateV3, StatusCodeSendToInactiveGate)
     EXPECT_EQ(sendOut.status, QUGATE_GATE_NOT_ACTIVE);
 }
 
+// Non-owner cannot close another owner's gate
 TEST(QuGateV3, StatusCodeCloseUnauthorized)
 {
     QuGateTest env;
@@ -3001,6 +2978,7 @@ TEST(QuGateV3, StatusCodeCloseUnauthorized)
     EXPECT_EQ(closeOut.status, QUGATE_UNAUTHORIZED);
 }
 
+// Closing a non-existent gate returns INVALID_GATE_ID
 TEST(QuGateV3, StatusCodeCloseInvalidGateId)
 {
     QuGateTest env;
@@ -3008,6 +2986,7 @@ TEST(QuGateV3, StatusCodeCloseInvalidGateId)
     EXPECT_EQ(closeOut.status, QUGATE_INVALID_GATE_ID);
 }
 
+// Updating a non-existent gate returns INVALID_GATE_ID
 TEST(QuGateV3, StatusCodeUpdateInvalidGateId)
 {
     QuGateTest env;
@@ -3021,6 +3000,7 @@ TEST(QuGateV3, StatusCodeUpdateInvalidGateId)
     EXPECT_EQ(out.status, QUGATE_INVALID_GATE_ID);
 }
 
+// Non-owner cannot update another owner's gate
 TEST(QuGateV3, StatusCodeUpdateUnauthorized)
 {
     QuGateTest env;
@@ -3038,8 +3018,7 @@ TEST(QuGateV3, StatusCodeUpdateUnauthorized)
     EXPECT_EQ(out.status, QUGATE_UNAUTHORIZED);
 }
 
-// ---- Free-list slot reuse ----
-
+// Closed gate slot is reused by the next creation
 TEST(QuGateV3, FreeListSlotReuse)
 {
     QuGateTest env;
@@ -3065,8 +3044,7 @@ TEST(QuGateV3, FreeListSlotReuse)
     EXPECT_EQ(env.state.get()._activeGates, 2ULL);
 }
 
-// ---- Gate expiry ----
-
+// Inactive gate is auto-closed by endEpoch after expiry period
 TEST(QuGateV3, GateExpiryAutoClose)
 {
     QuGateTest env;
@@ -3088,6 +3066,7 @@ TEST(QuGateV3, GateExpiryAutoClose)
     EXPECT_EQ(env.state.get()._freeCount, 1ULL);
 }
 
+// Expired threshold gate refunds held balance to owner
 TEST(QuGateV3, GateExpiryRefundsBalance)
 {
     QuGateTest env;
@@ -3113,6 +3092,7 @@ TEST(QuGateV3, GateExpiryRefundsBalance)
     EXPECT_EQ(gateAfter.active, 0);
 }
 
+// Gate with recent activity is not expired by endEpoch
 TEST(QuGateV3, GateNotExpiredIfActive)
 {
     QuGateTest env;
@@ -3135,8 +3115,7 @@ TEST(QuGateV3, GateNotExpiredIfActive)
     EXPECT_EQ(gate.active, 1); // still active
 }
 
-// ---- totalBurned tracking ----
-
+// Total burned tracks creation fee burns and dust burns cumulatively
 TEST(QuGateV3, TotalBurnedTracking)
 {
     QuGateTest env;
@@ -3159,8 +3138,7 @@ TEST(QuGateV3, TotalBurnedTracking)
     EXPECT_EQ(count.totalBurned, 100005ULL);
 }
 
-// ---- getFees returns correct values ----
-
+// getFees returns base and escalated creation fee correctly
 TEST(QuGateV3, GetFeesReturnsCorrectValues)
 {
     QuGateTest env;
@@ -3176,8 +3154,7 @@ TEST(QuGateV3, GetFeesReturnsCorrectValues)
     EXPECT_EQ(fees.currentCreationFee, 300000ULL);
 }
 
-// ---- lastActivityEpoch updates ----
-
+// Sending to a gate updates its lastActivityEpoch
 TEST(QuGateV3, LastActivityEpochUpdatesOnSend)
 {
     QuGateTest env;
@@ -3197,6 +3174,7 @@ TEST(QuGateV3, LastActivityEpochUpdatesOnSend)
     EXPECT_EQ(gate.lastActivityEpoch, 120);
 }
 
+// Updating a gate updates its lastActivityEpoch
 TEST(QuGateV3, LastActivityEpochUpdatesOnUpdate)
 {
     QuGateTest env;
@@ -3219,8 +3197,7 @@ TEST(QuGateV3, LastActivityEpochUpdatesOnUpdate)
     EXPECT_EQ(gate.lastActivityEpoch, 130);
 }
 
-// ---- createGate_output.feePaid matches escalated fee ----
-
+// feePaid output matches the escalated fee at each tier
 TEST(QuGateV3, FeePaidMatchesEscalatedFee)
 {
     QuGateTest env;
@@ -3241,8 +3218,7 @@ TEST(QuGateV3, FeePaidMatchesEscalatedFee)
     EXPECT_EQ(out3.feePaid, 400000ULL);
 }
 
-// ---- Close gate refunds invocation reward ----
-
+// Owner can close their own active gate
 TEST(QuGateV3, CloseGateSuccess)
 {
     QuGateTest env;
@@ -3255,6 +3231,7 @@ TEST(QuGateV3, CloseGateSuccess)
     EXPECT_EQ(env.state.get()._activeGates, 0ULL);
 }
 
+// Closing an already-closed gate returns GATE_NOT_ACTIVE
 TEST(QuGateV3, CloseAlreadyClosedGate)
 {
     QuGateTest env;
@@ -3267,8 +3244,7 @@ TEST(QuGateV3, CloseAlreadyClosedGate)
     EXPECT_EQ(closeOut2.status, QUGATE_GATE_NOT_ACTIVE);
 }
 
-// ---- Ratio overflow protection ----
-
+// Ratio exceeding MAX_RATIO is rejected at creation
 TEST(QuGateV3, RatioOverMaxRejected)
 {
     QuGateTest env;
@@ -3278,8 +3254,7 @@ TEST(QuGateV3, RatioOverMaxRejected)
     EXPECT_EQ(out.status, QUGATE_INVALID_RATIO);
 }
 
-// ---- AllowedSenderCount > max rejected ----
-
+// Allowed sender count exceeding max is rejected at creation
 TEST(QuGateV3, InvalidSenderCountRejected)
 {
     QuGateTest env;
@@ -3290,8 +3265,7 @@ TEST(QuGateV3, InvalidSenderCountRejected)
     EXPECT_EQ(out.status, QUGATE_INVALID_SENDER_COUNT);
 }
 
-// ---- Insufficient fee refunds ----
-
+// Insufficient creation fee is refunded to the caller
 TEST(QuGateV3, InsufficientFeeRefundsPayment)
 {
     QuGateTest env;
@@ -3303,10 +3277,7 @@ TEST(QuGateV3, InsufficientFeeRefundsPayment)
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 500);
 }
 
-// =============================================
-// FUND GATE TESTS
-// =============================================
-
+// Anyone can fund a gate's reserve
 TEST(QuGateFund, FundGateSuccess)
 {
     QuGateTest env;
@@ -3323,6 +3294,7 @@ TEST(QuGateFund, FundGateSuccess)
     EXPECT_EQ(gate.reserve, 3000);
 }
 
+// Funding a non-existent gate returns INVALID_GATE_ID
 TEST(QuGateFund, FundGateInvalidId)
 {
     QuGateTest env;
@@ -3330,10 +3302,7 @@ TEST(QuGateFund, FundGateInvalidId)
     EXPECT_EQ(fundOut.result, QUGATE_INVALID_GATE_ID);
 }
 
-// =============================================
-// CHAIN GATE TESTS
-// =============================================
-
+// Gate can be created with a chain link to an existing gate
 TEST(QuGateChain, CreateGateWithChain)
 {
     QuGateTest env;
@@ -3360,6 +3329,7 @@ TEST(QuGateChain, CreateGateWithChain)
     EXPECT_EQ(gate.chainDepth, 1);
 }
 
+// Creating a gate chained to a non-existent target fails
 TEST(QuGateChain, CreateGateChainInvalidTarget)
 {
     QuGateTest env;
@@ -3374,6 +3344,7 @@ TEST(QuGateChain, CreateGateChainInvalidTarget)
     EXPECT_EQ(out.status, QUGATE_INVALID_CHAIN);
 }
 
+// Chain depth exceeding MAX_CHAIN_DEPTH is rejected
 TEST(QuGateChain, CreateGateChainDepthLimit)
 {
     QuGateTest env;
@@ -3405,6 +3376,7 @@ TEST(QuGateChain, CreateGateChainDepthLimit)
     EXPECT_EQ(g4.status, QUGATE_INVALID_CHAIN);
 }
 
+// setChain links one gate to another as a chain target
 TEST(QuGateChain, SetChainSuccess)
 {
     QuGateTest env;
@@ -3423,6 +3395,7 @@ TEST(QuGateChain, SetChainSuccess)
     EXPECT_EQ(gate.chainDepth, 1);
 }
 
+// setChain with -1 clears the chain link and resets depth
 TEST(QuGateChain, SetChainClearChain)
 {
     QuGateTest env;
@@ -3442,6 +3415,7 @@ TEST(QuGateChain, SetChainClearChain)
     EXPECT_EQ(env.getGate(g2.gateId).chainDepth, 0);
 }
 
+// Non-owner cannot set chain on another owner's gate
 TEST(QuGateChain, SetChainUnauthorized)
 {
     QuGateTest env;
@@ -3456,6 +3430,7 @@ TEST(QuGateChain, SetChainUnauthorized)
     EXPECT_EQ(out.result, QUGATE_UNAUTHORIZED);
 }
 
+// Cycle detection rejects circular chains and preserves existing links
 TEST(QuGateChain, SetChainCycleRejectedPreservesExistingLinks)
 {
     QuGateTest env;
@@ -3477,6 +3452,7 @@ TEST(QuGateChain, SetChainCycleRejectedPreservesExistingLinks)
     EXPECT_EQ(env.getGate(g2.gateId).chainDepth, 1);
 }
 
+// setChain below hop fee threshold returns INSUFFICIENT_FEE
 TEST(QuGateChain, SetChainInsufficientFee)
 {
     QuGateTest env;
@@ -3490,6 +3466,7 @@ TEST(QuGateChain, SetChainInsufficientFee)
     EXPECT_EQ(out.result, QUGATE_INSUFFICIENT_FEE);
 }
 
+// routeToGate deducts hop fee and forwards remainder via split
 TEST(QuGateChain, RouteToGateSingleHop)
 {
     QuGateTest env;
@@ -3505,6 +3482,7 @@ TEST(QuGateChain, RouteToGateSingleHop)
     EXPECT_EQ(env.qpi.totalBurned, 1000); // hop fee burned
 }
 
+// Two-hop chain deducts a hop fee at each gate
 TEST(QuGateChain, RouteToGateTwoHopChain)
 {
     QuGateTest env;
@@ -3530,6 +3508,7 @@ TEST(QuGateChain, RouteToGateTwoHopChain)
     EXPECT_EQ(env.qpi.totalBurned, 2000);
 }
 
+// Routed threshold gate accumulates after hop fee deduction
 TEST(QuGateChain, RouteToGateThresholdAccumulatesAfterHopFee)
 {
     QuGateTest env;
@@ -3552,6 +3531,7 @@ TEST(QuGateChain, RouteToGateThresholdAccumulatesAfterHopFee)
     EXPECT_EQ(env.getGate(thresholdGate.gateId).currentBalance, 0ULL);
 }
 
+// Amount at or below hop fee with no reserve strands in gate balance
 TEST(QuGateChain, InsufficientFundsStrand)
 {
     QuGateTest env;
@@ -3570,6 +3550,7 @@ TEST(QuGateChain, InsufficientFundsStrand)
     EXPECT_EQ(gate.currentBalance, 500ULL); // accumulated in currentBalance
 }
 
+// Gate reserve covers hop fee when routed amount is too small
 TEST(QuGateChain, ReserveCoversHopFee)
 {
     QuGateTest env;
@@ -3593,6 +3574,7 @@ TEST(QuGateChain, ReserveCoversHopFee)
     EXPECT_EQ(env.getGate(g2.gateId).reserve, 4000); // 5000 - 1000
 }
 
+// fundGate adds to unified reserve on both chained and unchained gates
 TEST(QuGateChain, FundGateReserve)
 {
     QuGateTest env;
@@ -3614,6 +3596,7 @@ TEST(QuGateChain, FundGateReserve)
     EXPECT_EQ(env.getGate(g1.gateId).reserve, 1000);
 }
 
+// Chain routing handles a closed downstream gate without crashing
 TEST(QuGateChain, DeadLinkChainedGateClosed)
 {
     QuGateTest env;
@@ -3636,6 +3619,7 @@ TEST(QuGateChain, DeadLinkChainedGateClosed)
     // routeChain would handle this — just verify routeToGate doesn't crash
 }
 
+// getGate returns chain link, depth, and reserve fields
 TEST(QuGateChain, GetGateReturnsChainFields)
 {
     QuGateTest env;
@@ -3659,6 +3643,7 @@ TEST(QuGateChain, GetGateReturnsChainFields)
     EXPECT_EQ(gate1.reserve, 0);
 }
 
+// Closing a gate refunds its reserve to the owner
 TEST(QuGateChain, CloseGateRefundsReserve)
 {
     QuGateTest env;
@@ -3676,8 +3661,7 @@ TEST(QuGateChain, CloseGateRefundsReserve)
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 3000);
 }
 
-// ---- END_EPOCH comprehensive expiry test (cyber-pc review request) ----
-
+// endEpoch expiry marks gate inactive, refunds balance, adds to free-list, and increments generation
 TEST(QuGateV3, EndEpochExpiryFullLifecycle)
 {
     // Verifies all END_EPOCH expiry side-effects:
@@ -3736,12 +3720,7 @@ TEST(QuGateV3, EndEpochExpiryFullLifecycle)
     EXPECT_EQ(env.state.get()._freeCount, 0ULL); // slot was reused from free-list
 }
 
-// =============================================
-// FINANCIAL MODEL TESTS
-// =============================================
-
-// ---- 1. Creation fee 80/20 split ----
-
+// Creation fee splits 50% burn and 50% shareholder dividends
 TEST(QuGateFinancial, CreationFee80_20Split)
 {
     // When a gate is created with 100,000 QU fee:
@@ -3784,6 +3763,7 @@ TEST(QuGateFinancial, CreationFee80_20Split)
     EXPECT_EQ(env.qpi.totalBurned, (sint64)expectedBurn);
 }
 
+// Escalated creation fee burn plus dividends still equals the total fee
 TEST(QuGateFinancial, CreationFeeEscalatedSplitStillBalances)
 {
     // With active gates, the escalated fee also splits correctly
@@ -3809,8 +3789,7 @@ TEST(QuGateFinancial, CreationFeeEscalatedSplitStillBalances)
     EXPECT_EQ(env.state.get()._totalBurned + env.state.get()._earnedMaintenanceDividends, fee);
 }
 
-// ---- 2. Idle maintenance fee 80/20 split ----
-
+// Idle maintenance fee splits 50% burn and 50% dividends from reserve
 TEST(QuGateFinancial, IdleMaintenanceFee80_20Split)
 {
     // When a gate is charged 25,000 QU idle fee:
@@ -3873,6 +3852,7 @@ TEST(QuGateFinancial, IdleMaintenanceFee80_20Split)
     EXPECT_EQ(expectedBurn + expectedDividend, idleFee);
 }
 
+// Multiple idle charge cycles accumulate maintenance totals correctly
 TEST(QuGateFinancial, IdleMaintenanceMultipleCycles)
 {
     // Verify multiple idle charge cycles accumulate correctly
@@ -3907,8 +3887,7 @@ TEST(QuGateFinancial, IdleMaintenanceMultipleCycles)
     EXPECT_EQ(gate.reserve, (sint64)(reserveAmount - idleFee * 3));
 }
 
-// ---- 3. Rounding correctness ----
-
+// Burn plus dividend equals fee exactly for various fee amounts
 TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
 {
     // For various fee amounts, verify burn + dividend = fee exactly
@@ -3975,8 +3954,7 @@ TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
     }
 }
 
-// ---- 4. cancelTimeLock refunds reserve ----
-
+// Cancelling a time-lock gate refunds both balance and reserve to owner
 TEST(QuGateFinancial, CancelTimeLockRefundsReserve)
 {
     // Create a TIME_LOCK gate, fund its reserve, cancel it
@@ -4030,6 +4008,7 @@ TEST(QuGateFinancial, CancelTimeLockRefundsReserve)
     EXPECT_EQ(gateAfter.reserve, 0);
 }
 
+// Cancelling a non-cancellable time-lock gate is rejected
 TEST(QuGateFinancial, CancelTimeLockNonCancellableRejected)
 {
     // Verify that cancelling a non-cancellable TIME_LOCK is rejected
@@ -4060,6 +4039,7 @@ TEST(QuGateFinancial, CancelTimeLockNonCancellableRejected)
     EXPECT_EQ(gate.reserve, 50000);
 }
 
+// Close gate transfer failure keeps gate active and does not recycle slot
 TEST(QuGateRegression, CloseGateTransferFailureDoesNotRecycleSlot)
 {
     QuGateTest env;
@@ -4083,6 +4063,7 @@ TEST(QuGateRegression, CloseGateTransferFailureDoesNotRecycleSlot)
     EXPECT_EQ(env.state.get()._freeCount, 0ULL);
 }
 
+// Lazy expiry during close with transfer failure does not recycle slot
 TEST(QuGateRegression, CloseGateLazyExpiryTransferFailureDoesNotRecycleSlot)
 {
     QuGateTest env;
@@ -4112,6 +4093,7 @@ TEST(QuGateRegression, CloseGateLazyExpiryTransferFailureDoesNotRecycleSlot)
     EXPECT_EQ(env.state.get()._freeCount, 0ULL);
 }
 
+// endEpoch expiry with transfer failure does not recycle slot
 TEST(QuGateRegression, ExpiryTransferFailureDoesNotRecycleSlot)
 {
     QuGateTest env;
@@ -4131,6 +4113,7 @@ TEST(QuGateRegression, ExpiryTransferFailureDoesNotRecycleSlot)
     EXPECT_EQ(env.state.get()._freeCount, 0ULL);
 }
 
+// Lazy expiry during send with transfer failure does not recycle slot
 TEST(QuGateRegression, SendToGateLazyExpiryTransferFailureDoesNotRecycleSlot)
 {
     QuGateTest env;
@@ -4161,6 +4144,7 @@ TEST(QuGateRegression, SendToGateLazyExpiryTransferFailureDoesNotRecycleSlot)
     EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 40000);
 }
 
+// Lazy expiry during update with transfer failure does not recycle slot
 TEST(QuGateRegression, UpdateGateLazyExpiryTransferFailureDoesNotRecycleSlot)
 {
     QuGateTest env;
@@ -4198,6 +4182,7 @@ TEST(QuGateRegression, UpdateGateLazyExpiryTransferFailureDoesNotRecycleSlot)
     EXPECT_EQ(env.state.get()._freeCount, 0ULL);
 }
 
+// Lazy expiry during fund with transfer failure does not recycle slot
 TEST(QuGateRegression, FundGateLazyExpiryTransferFailureDoesNotRecycleSlot)
 {
     QuGateTest env;
@@ -4227,6 +4212,7 @@ TEST(QuGateRegression, FundGateLazyExpiryTransferFailureDoesNotRecycleSlot)
     EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 40000);
 }
 
+// Lazy expiry during setChain with transfer failure does not recycle slot
 TEST(QuGateRegression, SetChainLazyExpiryTransferFailureDoesNotRecycleSlot)
 {
     QuGateTest env;
@@ -4257,6 +4243,7 @@ TEST(QuGateRegression, SetChainLazyExpiryTransferFailureDoesNotRecycleSlot)
     EXPECT_EQ(env.state.get()._freeCount, 0ULL);
 }
 
+// cancelTimeLock transfer failure keeps gate active and does not recycle slot
 TEST(QuGateRegression, CancelTimeLockTransferFailureDoesNotRecycleSlot)
 {
     QuGateTest env;
@@ -4279,6 +4266,7 @@ TEST(QuGateRegression, CancelTimeLockTransferFailureDoesNotRecycleSlot)
     EXPECT_EQ(env.state.get()._freeCount, 0ULL);
 }
 
+// Sending to a fired time-lock gate does not mutate accounting fields
 TEST(QuGateRegression, TimeLockRejectedDirectSendDoesNotMutateAccounting)
 {
     QuGateTest env;
@@ -4303,6 +4291,7 @@ TEST(QuGateRegression, TimeLockRejectedDirectSendDoesNotMutateAccounting)
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 30000);
 }
 
+// routeToGate on a fired time-lock gate silently rejects without refund
 TEST(QuGateRegression, TimeLockRejectedChainDoesNotRefundInvocator)
 {
     QuGateTest env;
@@ -4326,6 +4315,7 @@ TEST(QuGateRegression, TimeLockRejectedChainDoesNotRefundInvocator)
     EXPECT_EQ(env.getGate(out.gateId).currentBalance, 0ULL);
 }
 
+// Time-lock release transfer failure leaves gate active and unfired
 TEST(QuGateRegression, TimeLockReleaseFailureDoesNotFireOrClose)
 {
     QuGateTest env;
@@ -4348,6 +4338,7 @@ TEST(QuGateRegression, TimeLockReleaseFailureDoesNotFireOrClose)
     EXPECT_EQ(env.state.get()._freeCount, 0ULL);
 }
 
+// Heartbeat gate accepts valid configuration with beneficiaries
 TEST(QuGateHeartbeat, HeartbeatConfigureSuccess)
 {
     QuGateTest env;
@@ -4367,6 +4358,7 @@ TEST(QuGateHeartbeat, HeartbeatConfigureSuccess)
     EXPECT_EQ(hb.beneficiaryCount, 2);
 }
 
+// configureHeartbeat on a non-heartbeat gate returns HEARTBEAT_NOT_ACTIVE
 TEST(QuGateHeartbeat, HeartbeatConfigureWrongMode)
 {
     QuGateTest env;
@@ -4379,6 +4371,7 @@ TEST(QuGateHeartbeat, HeartbeatConfigureWrongMode)
     EXPECT_EQ(env.configureHeartbeat(ALICE, out.gateId, 3, 25, 10, beneficiaries, shares, 1), QUGATE_HEARTBEAT_NOT_ACTIVE);
 }
 
+// Non-owner cannot configure heartbeat on another owner's gate
 TEST(QuGateHeartbeat, HeartbeatConfigureUnauthorized)
 {
     QuGateTest env;
@@ -4391,6 +4384,7 @@ TEST(QuGateHeartbeat, HeartbeatConfigureUnauthorized)
     EXPECT_EQ(env.configureHeartbeat(BOB, out.gateId, 3, 25, 10, beneficiaries, shares, 1), QUGATE_UNAUTHORIZED);
 }
 
+// sendHeartbeat resets the last heartbeat epoch timer
 TEST(QuGateHeartbeat, HeartbeatPingResetsTimer)
 {
     QuGateTest env;
@@ -4406,6 +4400,7 @@ TEST(QuGateHeartbeat, HeartbeatPingResetsTimer)
     EXPECT_EQ(env.getHeartbeat(out.gateId).lastHeartbeatEpoch, 150U);
 }
 
+// Heartbeat triggers after threshold epochs of inactivity
 TEST(QuGateHeartbeat, HeartbeatTriggerAfterInactivity)
 {
     QuGateTest env;
@@ -4423,6 +4418,7 @@ TEST(QuGateHeartbeat, HeartbeatTriggerAfterInactivity)
     EXPECT_EQ(hb.triggerEpoch, 104U);
 }
 
+// Triggered heartbeat distributes payout proportionally to beneficiaries
 TEST(QuGateHeartbeat, HeartbeatPayoutDistribution)
 {
     QuGateTest env;
@@ -4442,6 +4438,7 @@ TEST(QuGateHeartbeat, HeartbeatPayoutDistribution)
     EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 2000);
 }
 
+// Triggered heartbeat pays out progressively across multiple epochs
 TEST(QuGateHeartbeat, HeartbeatPayoutMultipleEpochs)
 {
     QuGateTest env;
@@ -4464,6 +4461,7 @@ TEST(QuGateHeartbeat, HeartbeatPayoutMultipleEpochs)
     EXPECT_EQ(gate.currentBalance, 1000ULL);
 }
 
+// Heartbeat gate auto-closes when balance drops to minimum
 TEST(QuGateHeartbeat, HeartbeatAutoCloseAtMinimum)
 {
     QuGateTest env;
@@ -4484,6 +4482,7 @@ TEST(QuGateHeartbeat, HeartbeatAutoCloseAtMinimum)
     EXPECT_EQ(env.state.get()._freeCount, 1ULL);
 }
 
+// Heartbeat auto-close transfer failure keeps gate active with balance intact
 TEST(QuGateHeartbeat, HeartbeatAutoCloseFailedTransferKeepsGateActive)
 {
     QuGateTest env;
@@ -4506,6 +4505,7 @@ TEST(QuGateHeartbeat, HeartbeatAutoCloseFailedTransferKeepsGateActive)
     EXPECT_EQ(env.state.get()._freeCount, 0ULL);
 }
 
+// sendHeartbeat after trigger returns HEARTBEAT_TRIGGERED and does not reset
 TEST(QuGateHeartbeat, HeartbeatPingAfterTriggerDoesNotReset)
 {
     QuGateTest env;
@@ -4521,6 +4521,7 @@ TEST(QuGateHeartbeat, HeartbeatPingAfterTriggerDoesNotReset)
     EXPECT_EQ(env.getHeartbeat(out.gateId).triggered, 1);
 }
 
+// Triggered heartbeat with zero beneficiaries refunds remaining balance to owner
 TEST(QuGateHeartbeat, HeartbeatZeroBeneficiariesRefundsOwner)
 {
     QuGateTest env;
@@ -4540,6 +4541,7 @@ TEST(QuGateHeartbeat, HeartbeatZeroBeneficiariesRefundsOwner)
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 1000);
 }
 
+// Guardian vote on multisig gate increments approval count
 TEST(QuGateMultisig, MultisigVoteAccumulatesApproval)
 {
     QuGateTest env;
@@ -4554,6 +4556,7 @@ TEST(QuGateMultisig, MultisigVoteAccumulatesApproval)
     EXPECT_EQ(cfg.proposalActive, 1);
 }
 
+// Reaching multisig quorum releases accumulated balance to recipient
 TEST(QuGateMultisig, MultisigQuorumRelease)
 {
     QuGateTest env;
@@ -4569,6 +4572,7 @@ TEST(QuGateMultisig, MultisigQuorumRelease)
     EXPECT_EQ(env.getGate(out.gateId).currentBalance, 0ULL);
 }
 
+// Non-guardian send accumulates balance but does not count as a vote
 TEST(QuGateMultisig, MultisigNonGuardianVoteIgnored)
 {
     QuGateTest env;
@@ -4583,6 +4587,7 @@ TEST(QuGateMultisig, MultisigNonGuardianVoteIgnored)
     EXPECT_EQ(env.getGate(out.gateId).currentBalance, 5000ULL);
 }
 
+// Expired proposal resets approval so new votes start a fresh round
 TEST(QuGateMultisig, MultisigProposalExpiry)
 {
     QuGateTest env;
@@ -4598,6 +4603,7 @@ TEST(QuGateMultisig, MultisigProposalExpiry)
     EXPECT_EQ(cfg.approvalCount, 1);
 }
 
+// Duplicate vote by same guardian returns ALREADY_VOTED
 TEST(QuGateMultisig, MultisigDuplicateVoteIgnored)
 {
     QuGateTest env;
@@ -4613,6 +4619,7 @@ TEST(QuGateMultisig, MultisigDuplicateVoteIgnored)
     EXPECT_EQ(env.getGate(out.gateId).currentBalance, 3000ULL);
 }
 
+// Multisig release transfer failure preserves the gate balance
 TEST(QuGateMultisig, MultisigReleaseFailureKeepsBalance)
 {
     QuGateTest env;
@@ -4627,6 +4634,7 @@ TEST(QuGateMultisig, MultisigReleaseFailureKeepsBalance)
     EXPECT_EQ(env.getGate(out.gateId).currentBalance, 5000ULL);
 }
 
+// Multisig quorum release forwards through chain to downstream gate
 TEST(QuGateMultisig, MultisigChainForwardOnRelease)
 {
     QuGateTest env;
@@ -4650,6 +4658,7 @@ TEST(QuGateMultisig, MultisigChainForwardOnRelease)
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4000);
 }
 
+// Owner can assign a multisig gate as admin for another gate
 TEST(QuGateAdmin, SetAdminGateSuccess)
 {
     QuGateTest env;
@@ -4663,6 +4672,7 @@ TEST(QuGateAdmin, SetAdminGateSuccess)
     EXPECT_EQ(env.getGate(target.gateId).hasAdminGate, 1);
 }
 
+// Non-multisig gate cannot be used as an admin gate
 TEST(QuGateAdmin, SetAdminGateRequiresMultisig)
 {
     QuGateTest env;
@@ -4673,6 +4683,7 @@ TEST(QuGateAdmin, SetAdminGateRequiresMultisig)
     EXPECT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_INVALID_ADMIN_GATE);
 }
 
+// Circular admin gate chain is rejected with INVALID_ADMIN_CYCLE
 TEST(QuGateAdmin, SetAdminGateCycleRejected)
 {
     QuGateTest env;
@@ -4691,6 +4702,7 @@ TEST(QuGateAdmin, SetAdminGateCycleRejected)
     EXPECT_EQ(env.setAdminGate(ALICE, c.gateId, a.gateId), QUGATE_INVALID_ADMIN_CYCLE);
 }
 
+// Gate mutation is blocked until admin gate approval is obtained
 TEST(QuGateAdmin, AdminApprovalRequired)
 {
     QuGateTest env;
@@ -4712,6 +4724,7 @@ TEST(QuGateAdmin, AdminApprovalRequired)
     EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_SUCCESS);
 }
 
+// Owner can clear admin gate after admin gate is closed
 TEST(QuGateAdmin, AdminApprovalBypass)
 {
     QuGateTest env;
@@ -4726,6 +4739,7 @@ TEST(QuGateAdmin, AdminApprovalBypass)
     EXPECT_EQ(env.setAdminGate(ALICE, target.gateId, -1), QUGATE_SUCCESS);
 }
 
+// Recycled slot with new generation does not inherit old admin approval
 TEST(QuGateAdmin, StaleAdminGateIgnored)
 {
     QuGateTest env;
@@ -4754,6 +4768,7 @@ TEST(QuGateAdmin, StaleAdminGateIgnored)
     EXPECT_EQ(adminState.adminApprovalActive, 0);
 }
 
+// Owner can self-clear a stale admin gate after slot recycling
 TEST(QuGateAdmin, StaleAdminGateOwnerCanSelfClear)
 {
     QuGateTest env;
@@ -4770,6 +4785,7 @@ TEST(QuGateAdmin, StaleAdminGateOwnerCanSelfClear)
     EXPECT_EQ(env.setAdminGate(ALICE, target.gateId, -1), QUGATE_SUCCESS);
 }
 
+// Owner can withdraw a partial amount from gate reserve
 TEST(QuGateReserve, WithdrawReserveSuccess)
 {
     QuGateTest env;
@@ -4783,6 +4799,7 @@ TEST(QuGateReserve, WithdrawReserveSuccess)
     EXPECT_EQ(env.getGate(gate.gateId).reserve, 3000);
 }
 
+// Withdrawing with amount 0 withdraws the full reserve
 TEST(QuGateReserve, WithdrawReserveFullAmount)
 {
     QuGateTest env;
@@ -4795,6 +4812,7 @@ TEST(QuGateReserve, WithdrawReserveFullAmount)
     EXPECT_EQ(env.getGate(gate.gateId).reserve, 0);
 }
 
+// Withdrawing more than reserve returns INVALID_PARAMS
 TEST(QuGateReserve, WithdrawReserveExceedsBalance)
 {
     QuGateTest env;
@@ -4807,6 +4825,7 @@ TEST(QuGateReserve, WithdrawReserveExceedsBalance)
     EXPECT_EQ(env.getGate(gate.gateId).reserve, 5000);
 }
 
+// Non-owner cannot withdraw from gate reserve
 TEST(QuGateReserve, WithdrawReserveUnauthorized)
 {
     QuGateTest env;
@@ -4818,6 +4837,7 @@ TEST(QuGateReserve, WithdrawReserveUnauthorized)
     EXPECT_EQ(out.status, QUGATE_UNAUTHORIZED);
 }
 
+// Transfer failure during withdraw leaves reserve unchanged
 TEST(QuGateReserve, WithdrawReserveTransferFailure)
 {
     QuGateTest env;
@@ -4831,6 +4851,7 @@ TEST(QuGateReserve, WithdrawReserveTransferFailure)
     EXPECT_EQ(env.getGate(gate.gateId).reserve, 5000);
 }
 
+// Absolute time-lock releases funds at the specified epoch
 TEST(QuGateTimeLock, TimeLockAbsoluteRelease)
 {
     QuGateTest env;
@@ -4845,6 +4866,7 @@ TEST(QuGateTimeLock, TimeLockAbsoluteRelease)
     EXPECT_EQ(env.getGate(out.gateId).active, 0);
 }
 
+// Relative time-lock anchors unlock epoch on first deposit
 TEST(QuGateTimeLock, TimeLockRelativeAnchorOnFirstFund)
 {
     QuGateTest env;
@@ -4858,6 +4880,7 @@ TEST(QuGateTimeLock, TimeLockRelativeAnchorOnFirstFund)
     EXPECT_EQ(env.state.get()._timeLockConfigs.get(out.gateId - 1).unlockEpoch, 115U);
 }
 
+// Relative time-lock releases funds after delay epochs from first deposit
 TEST(QuGateTimeLock, TimeLockRelativeRelease)
 {
     QuGateTest env;
@@ -4873,6 +4896,7 @@ TEST(QuGateTimeLock, TimeLockRelativeRelease)
     EXPECT_EQ(env.getGate(out.gateId).active, 0);
 }
 
+// Time-lock release routes through gate-as-recipient to downstream gate
 TEST(QuGateTimeLock, TimeLockGateAsRecipientRelease)
 {
     QuGateTest env;
@@ -4891,6 +4915,7 @@ TEST(QuGateTimeLock, TimeLockGateAsRecipientRelease)
     EXPECT_EQ(env.getGate(out.gateId).active, 0);
 }
 
+// Time-lock with no recipient forwards via chain on release
 TEST(QuGateTimeLock, TimeLockNoRecipientChainForward)
 {
     QuGateTest env;
@@ -4912,6 +4937,7 @@ TEST(QuGateTimeLock, TimeLockNoRecipientChainForward)
     EXPECT_EQ(env.getGate(out.gateId).active, 0);
 }
 
+// getGatesByOwner excludes closed gates from results
 TEST(QuGateQuery, GetGatesByOwnerFiltersInactive)
 {
     QuGateTest env;
@@ -4925,6 +4951,7 @@ TEST(QuGateQuery, GetGatesByOwnerFiltersInactive)
     EXPECT_EQ(gates.get(1), 0);
 }
 
+// getGateBySlot returns historical gate ID for inactive slot
 TEST(QuGateQuery, GetGateBySlotInactiveReturnsHistoricalId)
 {
     QuGateTest env;
@@ -4937,6 +4964,7 @@ TEST(QuGateQuery, GetGateBySlotInactiveReturnsHistoricalId)
     EXPECT_EQ(slotOut.gateId, 1);
 }
 
+// getGateBySlot returns current versioned gate ID for active slot
 TEST(QuGateQuery, GetGateBySlotActiveReturnsCurrentId)
 {
     QuGateTest env;
@@ -4948,8 +4976,7 @@ TEST(QuGateQuery, GetGateBySlotActiveReturnsCurrentId)
     EXPECT_EQ(slotOut.gateId, 1);
 }
 
-// ---- 5. Admin-only MULTISIG vote burns QU ----
-
+// Admin-only multisig burns vote QU instead of accumulating balance
 TEST(QuGateFinancial, AdminOnlyMultisigVoteBurnsQU)
 {
     // Create admin-only MULTISIG (recipientCount=0, chainNextGateId=-1,
@@ -4988,6 +5015,7 @@ TEST(QuGateFinancial, AdminOnlyMultisigVoteBurnsQU)
     EXPECT_EQ(gate.currentBalance, 0ULL);
 }
 
+// Multiple guardian votes on admin-only multisig each burn independently
 TEST(QuGateFinancial, AdminOnlyMultisigMultipleVotesBurn)
 {
     // Multiple guardian votes each burn their QU independently
@@ -5022,8 +5050,7 @@ TEST(QuGateFinancial, AdminOnlyMultisigMultipleVotesBurn)
     EXPECT_EQ(gate.currentBalance, 0ULL);
 }
 
-// ---- 6. Chain hop fee tracked in _totalBurned ----
-
+// Chain routing burns hop fee at each hop in the chain
 TEST(QuGateFinancial, ChainHopFeeBurnedAndTracked)
 {
     // Create two chained gates, send QU through the chain
@@ -5067,6 +5094,7 @@ TEST(QuGateFinancial, ChainHopFeeBurnedAndTracked)
     EXPECT_EQ(env.qpi.totalBurned, 2 * QUGATE_CHAIN_HOP_FEE);
 }
 
+// setChain burns the hop fee from the invocation reward
 TEST(QuGateFinancial, SetChainBurnsHopFee)
 {
     // Verify that setChain burns QUGATE_CHAIN_HOP_FEE and tracks it
@@ -5087,6 +5115,7 @@ TEST(QuGateFinancial, SetChainBurnsHopFee)
     EXPECT_EQ(env.qpi.totalBurned, QUGATE_CHAIN_HOP_FEE);
 }
 
+// setChain refunds excess fee above the hop cost
 TEST(QuGateFinancial, SetChainExcessFeeRefunded)
 {
     // If more than QUGATE_CHAIN_HOP_FEE is paid, excess is refunded
@@ -5110,8 +5139,7 @@ TEST(QuGateFinancial, SetChainExcessFeeRefunded)
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 4000);
 }
 
-// ---- 7. Excess creation fee seeds reserve ----
-
+// Excess creation fee above required amount goes to gate reserve
 TEST(QuGateFinancial, ExcessCreationFeeSeedsReserve)
 {
     // Create a gate with 150,000 QU when fee is 100,000
@@ -5132,6 +5160,7 @@ TEST(QuGateFinancial, ExcessCreationFeeSeedsReserve)
     EXPECT_EQ(gate.reserve, (sint64)(payment - creationFee)); // 50000
 }
 
+// Paying exactly the creation fee results in zero reserve
 TEST(QuGateFinancial, ExactCreationFeeZeroReserve)
 {
     // Paying exactly the fee should result in zero reserve
@@ -5147,6 +5176,7 @@ TEST(QuGateFinancial, ExactCreationFeeZeroReserve)
     EXPECT_EQ(gate.reserve, 0);
 }
 
+// Large overpayment at creation all goes to reserve with no refund
 TEST(QuGateFinancial, LargeExcessSeedsLargeReserve)
 {
     // Verify large overpayment all goes to reserve
@@ -5166,10 +5196,7 @@ TEST(QuGateFinancial, LargeExcessSeedsLargeReserve)
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 0);
 }
 
-// =============================================
-// TIER 1: Fund conservation invariants
-// =============================================
-
+// Split gate conserves total input across all recipient transfers
 TEST(QuGateConservation, SplitConservation)
 {
     QuGateTest env;
@@ -5186,6 +5213,7 @@ TEST(QuGateConservation, SplitConservation)
     EXPECT_EQ(gate.currentBalance, 0ULL);
 }
 
+// Round-robin gate conserves total across multiple sends
 TEST(QuGateConservation, RoundRobinConservation)
 {
     QuGateTest env;
@@ -5203,6 +5231,7 @@ TEST(QuGateConservation, RoundRobinConservation)
     EXPECT_EQ(gate.currentBalance, 0ULL);
 }
 
+// Threshold gate conserves funds through accumulation and release
 TEST(QuGateConservation, ThresholdConservation)
 {
     QuGateTest env;
@@ -5221,6 +5250,7 @@ TEST(QuGateConservation, ThresholdConservation)
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 23000);
 }
 
+// Random gate conserves total across multiple sends
 TEST(QuGateConservation, RandomConservation)
 {
     QuGateTest env;
@@ -5239,6 +5269,7 @@ TEST(QuGateConservation, RandomConservation)
     EXPECT_EQ(gate.currentBalance, 0ULL);
 }
 
+// Conditional gate conserves total for whitelisted sender
 TEST(QuGateConservation, ConditionalConservation)
 {
     QuGateTest env;
@@ -5254,6 +5285,7 @@ TEST(QuGateConservation, ConditionalConservation)
     EXPECT_EQ(gate.currentBalance, 0ULL);
 }
 
+// Heartbeat gate conserves total through trigger and full payout
 TEST(QuGateConservation, HeartbeatConservation)
 {
     QuGateTest env;
@@ -5275,6 +5307,7 @@ TEST(QuGateConservation, HeartbeatConservation)
     EXPECT_EQ(total, 10000);
 }
 
+// Multisig gate conserves total through quorum release
 TEST(QuGateConservation, MultisigConservation)
 {
     QuGateTest env;
@@ -5292,6 +5325,7 @@ TEST(QuGateConservation, MultisigConservation)
     EXPECT_EQ(gate.totalForwarded, 5000ULL);
 }
 
+// Time-lock gate conserves total through deposit and epoch release
 TEST(QuGateConservation, TimeLockConservation)
 {
     QuGateTest env;
@@ -5312,6 +5346,7 @@ TEST(QuGateConservation, TimeLockConservation)
     EXPECT_EQ(gateAfter.active, 0);
 }
 
+// Closing a gate refunds both balance and reserve completely
 TEST(QuGateConservation, CloseGateAccountingComplete)
 {
     QuGateTest env;
@@ -5333,6 +5368,7 @@ TEST(QuGateConservation, CloseGateAccountingComplete)
     EXPECT_EQ(gateAfter.reserve, 0);
 }
 
+// Expiry refunds both balance and reserve to owner
 TEST(QuGateConservation, ExpiryAccountingComplete)
 {
     QuGateTest env;
@@ -5350,6 +5386,7 @@ TEST(QuGateConservation, ExpiryAccountingComplete)
     EXPECT_EQ(gate.active, 0);
 }
 
+// Single-hop chain conserves total as forwarded plus hop fee burned
 TEST(QuGateConservation, ChainTwoHopConservation)
 {
     QuGateTest env;
@@ -5369,10 +5406,7 @@ TEST(QuGateConservation, ChainTwoHopConservation)
     EXPECT_EQ((uint64)env.qpi.totalTransferredTo(BOB) + (uint64)env.qpi.totalBurned, 10000ULL);
 }
 
-// =============================================
-// TIER 2: Mode lifecycle completeness
-// =============================================
-
+// Threshold gate re-accumulates correctly after release
 TEST(QuGateLifecycle, ThresholdReaccumulation)
 {
     QuGateTest env;
@@ -5391,6 +5425,7 @@ TEST(QuGateLifecycle, ThresholdReaccumulation)
     EXPECT_EQ(env.getGate(out.gateId).totalForwarded, 23000ULL);
 }
 
+// Threshold gate releases immediately when deposit exactly meets target
 TEST(QuGateLifecycle, ThresholdExactBoundary)
 {
     QuGateTest env;
@@ -5405,6 +5440,7 @@ TEST(QuGateLifecycle, ThresholdExactBoundary)
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 5000);
 }
 
+// Threshold gate releases to primary recipient ignoring chain target
 TEST(QuGateLifecycle, ThresholdWithChainTarget)
 {
     QuGateTest env;
@@ -5426,6 +5462,7 @@ TEST(QuGateLifecycle, ThresholdWithChainTarget)
     EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 10000);
 }
 
+// 3-of-5 multisig releases on exactly the third guardian vote
 TEST(QuGateLifecycle, MultisigQuorumBoundary3of5)
 {
     QuGateTest env;
@@ -5444,6 +5481,7 @@ TEST(QuGateLifecycle, MultisigQuorumBoundary3of5)
     EXPECT_EQ(gate.currentBalance, 0ULL);
 }
 
+// 1-of-1 multisig releases immediately on single guardian vote
 TEST(QuGateLifecycle, MultisigUnanimity1of1)
 {
     QuGateTest env;
@@ -5459,6 +5497,7 @@ TEST(QuGateLifecycle, MultisigUnanimity1of1)
     EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 5000);
 }
 
+// Reconfiguring multisig is blocked while a proposal is active
 TEST(QuGateLifecycle, MultisigReconfigureBlockedDuringActiveProposal)
 {
     QuGateTest env;
@@ -5479,6 +5518,7 @@ TEST(QuGateLifecycle, MultisigReconfigureBlockedDuringActiveProposal)
     EXPECT_EQ(cfg2.guardianCount, 2);
 }
 
+// Multiple deposits into time-lock are released as one sum
 TEST(QuGateLifecycle, TimeLockMultipleDepositsSingleRelease)
 {
     QuGateTest env;
@@ -5496,6 +5536,7 @@ TEST(QuGateLifecycle, TimeLockMultipleDepositsSingleRelease)
     EXPECT_EQ(env.getGate(out.gateId).active, 0);
 }
 
+// Cancelling a time-lock after it has fired is rejected
 TEST(QuGateLifecycle, TimeLockCancelAfterFireRejected)
 {
     QuGateTest env;
@@ -5511,6 +5552,7 @@ TEST(QuGateLifecycle, TimeLockCancelAfterFireRejected)
     EXPECT_NE(cancelStatus, QUGATE_SUCCESS);
 }
 
+// Heartbeat distributes payout to three beneficiaries by share ratios
 TEST(QuGateLifecycle, HeartbeatMultiBeneficiaryShares)
 {
     QuGateTest env;
@@ -5531,10 +5573,7 @@ TEST(QuGateLifecycle, HeartbeatMultiBeneficiaryShares)
     EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 2000);
 }
 
-// =============================================
-// TIER 3: Gate-as-recipient routing
-// =============================================
-
+// Split gate routes to mixed wallet and gate recipients via routeToGate
 TEST(QuGateRecipient, SplitMixedWalletAndGateRecipients)
 {
     QuGateTest env;
@@ -5564,10 +5603,7 @@ TEST(QuGateRecipient, SplitMixedWalletAndGateRecipients)
     EXPECT_GT(result.forwarded, 0);
 }
 
-// =============================================
-// TIER 5: Edge cases and attack vectors
-// =============================================
-
+// Split gate with zero recipients and no chain is rejected
 TEST(QuGateEdge, ZeroRecipientGateWithoutChainRejected)
 {
     QuGateTest env;
@@ -5580,6 +5616,7 @@ TEST(QuGateEdge, ZeroRecipientGateWithoutChainRejected)
     EXPECT_NE(out.status, QUGATE_SUCCESS);
 }
 
+// Gate with maximum 8 recipients is accepted
 TEST(QuGateEdge, MaxRecipientsAccepted)
 {
     QuGateTest env;
@@ -5597,6 +5634,7 @@ TEST(QuGateEdge, MaxRecipientsAccepted)
     EXPECT_EQ(out.status, QUGATE_SUCCESS);
 }
 
+// Gate with 9 recipients is rejected
 TEST(QuGateEdge, NineRecipientsRejected)
 {
     QuGateTest env;
@@ -5609,6 +5647,7 @@ TEST(QuGateEdge, NineRecipientsRejected)
     EXPECT_NE(out.status, QUGATE_SUCCESS);
 }
 
+// Closing an already-closed gate returns GATE_NOT_ACTIVE
 TEST(QuGateEdge, DoubleCloseReturnsNotActive)
 {
     QuGateTest env;
@@ -5619,6 +5658,7 @@ TEST(QuGateEdge, DoubleCloseReturnsNotActive)
     EXPECT_EQ(env.closeGate(ALICE, out.gateId).status, QUGATE_GATE_NOT_ACTIVE);
 }
 
+// Sending to gate ID zero returns INVALID_GATE_ID
 TEST(QuGateEdge, SendToGateIdZeroRejected)
 {
     QuGateTest env;
@@ -5626,6 +5666,7 @@ TEST(QuGateEdge, SendToGateIdZeroRejected)
     EXPECT_EQ(out.status, QUGATE_INVALID_GATE_ID);
 }
 
+// Updating recipient while holding threshold funds redirects future releases
 TEST(QuGateEdge, UpdateGateWhileHoldingFunds)
 {
     QuGateTest env;
@@ -5653,6 +5694,7 @@ TEST(QuGateEdge, UpdateGateWhileHoldingFunds)
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 0);
 }
 
+// Non-owner can fund a gate's reserve
 TEST(QuGateEdge, FundGateByNonOwner)
 {
     QuGateTest env;
@@ -5668,10 +5710,7 @@ TEST(QuGateEdge, FundGateByNonOwner)
 
 // WithdrawReserveDuringIdleDelinquency — skipped: harness lacks idle delinquency state
 
-// =============================================
-// TIER 6: Governance edge cases
-// =============================================
-
+// Admin gate blocks close until multisig approval is obtained
 TEST(QuGateGovernance, AdminGateBlocksCloseWithoutApproval)
 {
     QuGateTest env;
@@ -5689,6 +5728,7 @@ TEST(QuGateGovernance, AdminGateBlocksCloseWithoutApproval)
     EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_SUCCESS);
 }
 
+// Routing into a governed gate succeeds without admin approval
 TEST(QuGateGovernance, RouteIntoGovernedGateStillAccepts)
 {
     QuGateTest env;
@@ -5708,6 +5748,7 @@ TEST(QuGateGovernance, RouteIntoGovernedGateStillAccepts)
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4000);
 }
 
+// Owner recovers governance after admin gate is closed by self-clearing
 TEST(QuGateGovernance, GovernanceRecoveryAfterAdminClose)
 {
     QuGateTest env;
@@ -5729,10 +5770,7 @@ TEST(QuGateGovernance, GovernanceRecoveryAfterAdminClose)
     EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_SUCCESS);
 }
 
-// =============================================
-// IDLE MAINTENANCE LIFECYCLE
-// =============================================
-
+// Idle maintenance charge deducts fee from gate reserve
 TEST(QuGateIdle, IdleChargeDeductsFromReserve)
 {
     QuGateTest env;
@@ -5753,6 +5791,7 @@ TEST(QuGateIdle, IdleChargeDeductsFromReserve)
     EXPECT_EQ(env.state.get()._totalMaintenanceCharged, QUGATE_DEFAULT_MAINTENANCE_FEE);
 }
 
+// Idle charge is skipped for gates with recent activity
 TEST(QuGateIdle, IdleChargeSkippedWhenActive)
 {
     QuGateTest env;
@@ -5773,6 +5812,7 @@ TEST(QuGateIdle, IdleChargeSkippedWhenActive)
     EXPECT_EQ(env.state.get()._totalMaintenanceCharged, 0ULL);
 }
 
+// Gate becomes delinquent when reserve is insufficient for idle charge
 TEST(QuGateIdle, IdleDelinquencyWhenReserveInsufficient)
 {
     QuGateTest env;
@@ -5789,6 +5829,7 @@ TEST(QuGateIdle, IdleDelinquencyWhenReserveInsufficient)
     EXPECT_EQ(env.getGate(out.gateId).active, 1);
 }
 
+// Gate activity clears delinquency flag
 TEST(QuGateIdle, IdleDelinquencyCureAfterActivity)
 {
     QuGateTest env;
@@ -5810,6 +5851,7 @@ TEST(QuGateIdle, IdleDelinquencyCureAfterActivity)
     EXPECT_EQ(env.getGate(out.gateId).active, 1);
 }
 
+// Delinquent gate expires after grace period ends
 TEST(QuGateIdle, IdleGracePeriodToExpiry)
 {
     QuGateTest env;
@@ -5833,6 +5875,7 @@ TEST(QuGateIdle, IdleGracePeriodToExpiry)
     EXPECT_EQ(env.getGate(out.gateId).active, 0);
 }
 
+// Funded reserve covers multiple idle charge cycles before delinquency
 TEST(QuGateIdle, IdleFundedReserveCoversMultipleCharges)
 {
     QuGateTest env;
@@ -5863,6 +5906,7 @@ TEST(QuGateIdle, IdleFundedReserveCoversMultipleCharges)
     EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), 116);
 }
 
+// Threshold gate with held balance is exempt from idle charge
 TEST(QuGateIdle, IdleActiveHoldExemptionThreshold)
 {
     QuGateTest env;
@@ -5880,6 +5924,7 @@ TEST(QuGateIdle, IdleActiveHoldExemptionThreshold)
     EXPECT_EQ(env.getGate(out.gateId).active, 1);
 }
 
+// Idle maintenance fee splits into burn and dividend portions
 TEST(QuGateIdle, IdleMaintenanceFeeSplit)
 {
     QuGateTest env;
