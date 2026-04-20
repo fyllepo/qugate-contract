@@ -5,7 +5,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'feature/**']
+    branches: [main, v2.5, 'feature/**']
   pull_request:
 
 jobs:
@@ -27,10 +27,6 @@ jobs:
         uses: actions/checkout@v4
       - name: Contract verify
         uses: Franziska-Mueller/qubic-contract-verify@v0.3.0-beta
-        # Known limitation: v0.3.0-beta does not support template syntax
-        # (OracleNotificationInput<OI::Price>) used by the Qubic oracle API.
-        # Allow failure until verifier supports oracle contracts.
-        continue-on-error: true
         with:
           filepaths: 'QuGate.h'
 
