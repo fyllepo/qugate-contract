@@ -1,4 +1,4 @@
-// QuGate contract unit tests — standalone harness (no ContractTesting framework)
+// QuGate contract unit tests
 
 #include <gtest/gtest.h>
 #include <cstring>
@@ -111,7 +111,7 @@ namespace QPI {
 
     struct ContractBase {};
 
-    // ContractState wrapper for dirty-tracking (Issue #7)
+    // ContractState wrapper for dirty-tracking
     template<typename T>
     struct TestContractState {
         T _data;
@@ -527,10 +527,10 @@ struct getFees_output {
     uint64 expiryEpochs;
 };
 
-// Test harness — implements contract logic faithfully
+// Test harness
 class QuGateTest {
 public:
-    // Use ContractState wrapper for dirty-tracking pattern (Issue #7)
+    // ContractState wrapper for dirty-tracking
     QPI::TestContractState<QuGateState>* stateWrapperPtr;
     QPI::TestContractState<QuGateState>& state;
     TestQpiContext qpi;

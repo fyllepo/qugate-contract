@@ -5074,7 +5074,7 @@ public:
             return;
         }
 
-        // Prevent reconfiguration while a proposal is active (#79)
+        // Prevent reconfiguration while a proposal is active
         locals.cfg = state.get()._multisigConfigs.get(locals.slotIdx);
         if (locals.cfg.proposalActive == 1)
         {
@@ -6444,7 +6444,7 @@ public:
             // active==1 guard prevents double-close / activeGates underflow (intentional)
             if (locals.gate.active == 1 && state.get()._expiryEpochs > 0)
             {
-                // Exempt long-duration modes from inactivity expiry (#77)
+                // Exempt long-duration modes from inactivity expiry
                 if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
                 {
                     locals.tlCfg = state.get()._timeLockConfigs.get(locals.i);
