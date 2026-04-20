@@ -2,7 +2,7 @@
 
 QuGate is a **network primitive** — shared, permissionless payment routing infrastructure for the Qubic network. One shared contract that the entire ecosystem can use, instead of every project building its own payment logic. Creation, dust, and chain-hop fees are burned. Idle gates maintain a reserve-backed inactivity budget, with upkeep split between burn and dividends.
 
-**Status**: Testnet verified. 187 unit tests passing, 132/132 integration scenarios passing. Preparing for mainnet proposal.
+**Status**: Testnet verified. 187 unit tests passing, 132/132 integration scenarios passing.
 **Author**: fyllepo (Discord: phileepphilop)
 **Repository**: [github.com/fyllepo/qugate-contract](https://github.com/fyllepo/qugate-contract)
 
