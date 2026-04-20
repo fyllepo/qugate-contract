@@ -29,7 +29,7 @@ static inline bool operator==(const m256i& a, const m256i& b)
     return memcmp(&a, &b, 32) == 0;
 }
 
-// Minimal QPI shim for test harness
+// QPI shim
 namespace QPI {
     typedef m256i id;
     typedef unsigned long long uint64;
@@ -57,7 +57,7 @@ namespace QPI {
 
     typedef signed int sint32;
 
-    // HashMap mock — linear scan (sufficient for test)
+    // HashMap — linear scan
     template<typename K, typename V, unsigned long long capacity>
     struct HashMap {
         struct Entry { K key; V value; bool occupied; };
@@ -222,7 +222,7 @@ struct TestQpiContext {
     }
 };
 
-// Stub macros for LOG_INFO / LOG_WARNING
+// Log macros (no-op in tests)
 #define LOG_INFO(x) ((void)0)
 #define LOG_WARNING(x) ((void)0)
 #define CONTRACT_INDEX 0
@@ -339,7 +339,7 @@ struct QUGATE_AllowedSendersConfig {
     uint8 count;
 };
 
-// Minimal multisig config for test harness
+// Multisig config
 struct QUGATE_MultisigConfig_Test {
     Array<id, 8> guardians;
     uint8        guardianCount;
@@ -365,7 +365,7 @@ struct QUGATE_HeartbeatConfig_Test {
     Array<uint8, 8> beneficiaryShares;
 };
 
-// Minimal time lock config for test harness
+// Time lock config
 struct QUGATE_TimeLockConfig_Test {
     uint32 unlockEpoch;
     uint32 delayEpochs;
@@ -2587,7 +2587,7 @@ public:
             amountAfterFee = amount - QUGATE_CHAIN_HOP_FEE;
         }
 
-        // Dispatch through mode (simplified for test)
+        // Dispatch through mode
         if (gate.mode == MODE_SPLIT)
         {
             uint64 totalRatio = 0;
@@ -2690,7 +2690,7 @@ static const id CHARLIE = QuGateTest::makeId(3);
 static const id DAVE = QuGateTest::makeId(4);
 static const id EVE = QuGateTest::makeId(5);
 
-// Helper to create a simple gate
+// Create a gate with default params
 static createGate_output makeSimpleGate(QuGateTest& env, const id& owner, sint64 fee,
                                          uint8 mode, uint8 recipientCount,
                                          id* recips, uint64* ratios,
@@ -3909,7 +3909,7 @@ TEST(QuGateFinancial, IdleMaintenanceFee80_20Split)
     env.qpi.reset();
     env.endEpoch();
 
-    uint64 idleFee = QUGATE_DEFAULT_MAINTENANCE_FEE; // 25000
+    uint64 idleFee = QUGATE_DEFAULT_MAINTENANCE_FEE;
     uint64 expectedBurn = QPI::div(idleFee * QUGATE_FEE_BURN_BPS, 10000ULL); // 12500
     uint64 expectedDividend = idleFee - expectedBurn;                         // 5000
 
@@ -5667,7 +5667,7 @@ TEST(QuGateConservation, ChainTwoHopConservation)
     id recips[] = { BOB };
     uint64 ratios[] = { 10000 };
     auto gate2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
-    // routeToGate deducts CHAIN_HOP_FEE (1000) from amount when amount > hop fee
+    // routeToGate deducts hop fee from the forwarded amount
     env.qpi.reset();
     env.qpi._invocator = ALICE;
     auto result = env.routeToGate(gate2.gateId - 1, 10000, 0);
@@ -6060,7 +6060,7 @@ TEST(QuGateIdle, IdleChargeDeductsFromReserve)
     auto gateBefore = env.getGate(out.gateId);
     EXPECT_EQ(gateBefore.reserve, 50000);
 
-    // Advance past idle window (DEFAULT_MAINTENANCE_INTERVAL_EPOCHS = 4)
+    // Advance past idle window
     // Gate created at epoch 100, nextIdleChargeEpoch = 104
     env.qpi._epoch = 104;
     env.endEpoch();
@@ -6143,7 +6143,7 @@ TEST(QuGateIdle, IdleGracePeriodToExpiry)
     env.endEpoch();
     EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), 104);
 
-    // Still within grace period (DEFAULT_MAINTENANCE_GRACE_EPOCHS = 4)
+    // Still within grace period
     env.qpi._epoch = 107;
     env.endEpoch();
     EXPECT_EQ(env.getGate(out.gateId).active, 1);
