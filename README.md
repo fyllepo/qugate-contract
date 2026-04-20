@@ -2,7 +2,7 @@
 
 QuGate is a **network primitive** — shared, permissionless payment routing infrastructure for the Qubic network. One shared contract that the entire ecosystem can use, instead of every project building its own payment logic. Creation, dust, and chain-hop fees are burned. Idle gates maintain a reserve-backed inactivity budget, with upkeep split between burn and dividends.
 
-**Status**: Testnet verified. 128/128 integration scenarios passing. Preparing for mainnet proposal.
+**Status**: Testnet verified. 187 unit tests passing, 132/132 integration scenarios passing. Preparing for mainnet proposal.
 **Author**: fyllepo (Discord: phileepphilop)
 **Repository**: [github.com/fyllepo/qugate-contract](https://github.com/fyllepo/qugate-contract)
 
@@ -1525,7 +1525,7 @@ g++ -std=c++17 -I. contract_qugate.cpp -lgtest -lgtest_main -o qugate_tests
 ./qugate_tests
 ```
 
-The test suite (`contract_qugate.cpp`) contains 73 unit tests covering:
+The test suite (`contract_qugate.cpp`) contains 187 unit tests covering:
 - All 8 active gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, heartbeat dead-man's switch, M-of-N multisig approval, epoch-based time lock)
 - Chain gates (hop fees, chain reserve, depth limits, cycle detection)
 - Versioned gate IDs and sendToGateVerified
@@ -1594,7 +1594,8 @@ python3 tests/test_attack_vectors.py   # Security edge cases
 ### Testnet Results
 
 Tested on Qubic Core-Lite v1.283.0 (local testnet, 2026-04-03):
-- **128/128 integration scenarios passing** across 8 parallel wallet lanes
+- **187 unit tests passing** (fund conservation, mode lifecycle, governance, idle maintenance, edge cases, regression)
+- **132/132 integration scenarios passing** across 8 parallel wallet lanes
 - All 8 active gate modes verified: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK
 - Full governance lifecycle: admin gate attachment, approval windows, governed mutations, expiry recovery
 - Complete lifecycle coverage: idle charging, delinquency, expiry, stale-ID rejection, slot reuse
