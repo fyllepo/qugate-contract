@@ -1555,6 +1555,38 @@ public:
                                 gate.currentBalance -= (uint64)share;
                             }
                         }
+
+                        if (gate.chainNextGateId != -1 && payoutTotal > distributed)
+                        {
+                            sint64 chainAmount = payoutTotal - distributed;
+                            gate.totalForwarded += (uint64)chainAmount;
+                            gate.currentBalance -= (uint64)chainAmount;
+                            state.mut()._gates.set(i, gate);
+
+                            sint64 currentChainGateId = gate.chainNextGateId;
+                            uint8 hop = 0;
+                            while (hop < QUGATE_MAX_CHAIN_DEPTH && currentChainGateId != -1 && chainAmount > 0)
+                            {
+                                uint64 nextIdx = slotFromGateId(currentChainGateId);
+                                if (nextIdx >= state.get()._gateCount || !gateIdMatchesCurrentGeneration(currentChainGateId))
+                                {
+                                    break;
+                                }
+
+                                RouteResult routed = routeToGate(nextIdx, chainAmount, hop);
+                                chainAmount = routed.forwarded;
+                                GateConfig nextGate = state.get()._gates.get(nextIdx);
+                                currentChainGateId = nextGate.chainNextGateId;
+                                hop++;
+                            }
+
+                            if (chainAmount > 0 && currentChainGateId != -1)
+                            {
+                                gate = state.get()._gates.get(i);
+                                gate.currentBalance += (uint64)chainAmount;
+                                gate.totalForwarded -= (uint64)chainAmount;
+                            }
+                        }
                     }
                     state.mut()._gates.set(i, gate);
                 }
@@ -1670,15 +1702,48 @@ public:
                     }
                     else if (gate.chainNextGateId != -1)
                     {
-                        transferred = true;
-                        routeChain((uint64)gate.chainNextGateId, releaseAmount);
+                        sint64 chainAmount = releaseAmount;
+                        gate.totalForwarded += (uint64)chainAmount;
+                        gate.currentBalance -= (uint64)chainAmount;
+                        state.mut()._gates.set(i, gate);
+
+                        sint64 currentChainGateId = gate.chainNextGateId;
+                        uint8 hop = 0;
+                        while (hop < QUGATE_MAX_CHAIN_DEPTH && currentChainGateId != -1 && chainAmount > 0)
+                        {
+                            uint64 nextIdx = slotFromGateId(currentChainGateId);
+                            if (nextIdx >= state.get()._gateCount || !gateIdMatchesCurrentGeneration(currentChainGateId))
+                            {
+                                break;
+                            }
+
+                            RouteResult routed = routeToGate(nextIdx, chainAmount, hop);
+                            chainAmount = routed.forwarded;
+                            GateConfig nextGate = state.get()._gates.get(nextIdx);
+                            currentChainGateId = nextGate.chainNextGateId;
+                            hop++;
+                        }
+
+                        if (chainAmount > 0 && currentChainGateId != -1)
+                        {
+                            gate = state.get()._gates.get(i);
+                            gate.currentBalance += (uint64)chainAmount;
+                            gate.totalForwarded -= (uint64)chainAmount;
+                            state.mut()._gates.set(i, gate);
+                        }
+
+                        gate = state.get()._gates.get(i);
+                        transferred = (gate.currentBalance == 0);
                     }
 
                     if (transferred)
                     {
-                        gate.totalForwarded += gate.currentBalance;
-                        gate.currentBalance = 0;
-                        state.mut()._gates.set(i, gate);
+                        if (gate.currentBalance > 0)
+                        {
+                            gate.totalForwarded += gate.currentBalance;
+                            gate.currentBalance = 0;
+                            state.mut()._gates.set(i, gate);
+                        }
                     }
                 }
 
@@ -2372,10 +2437,22 @@ public:
                         if (gate.recipientGateIds.get(0) > 0)
                         {
                             uint64 targetSlot = slotFromGateId(gate.recipientGateIds.get(0));
-                            if (targetSlot < state.get()._gateCount)
+                            if (targetSlot < state.get()._gateCount
+                                && gateIdMatchesCurrentGeneration(gate.recipientGateIds.get(0))
+                                && state.get()._gates.get(targetSlot).active == 1)
                             {
-                                RouteResult routed = routeToGate(targetSlot, releaseAmount, 0);
-                                released = routed.accepted;
+                                GateConfig targetGate = state.get()._gates.get(targetSlot);
+                                bool targetAccepts = true;
+                                if (targetGate.mode == MODE_TIME_LOCK)
+                                {
+                                    QUGATE_TimeLockConfig_Test cfg = state.get()._timeLockConfigs.get(targetSlot);
+                                    targetAccepts = (cfg.active == 1 && cfg.cancelled == 0 && cfg.fired == 0);
+                                }
+                                if (targetAccepts)
+                                {
+                                    RouteResult routed = routeToGate(targetSlot, releaseAmount, 0);
+                                    released = routed.accepted;
+                                }
                             }
                         }
                         else if (qpi.transfer(gate.recipients.get(0), releaseAmount) >= 0)
@@ -2603,8 +2680,35 @@ public:
                     share = QPI::div((uint64)amountAfterFee * gate.ratios.get(i), totalRatio);
                 if (share > 0)
                 {
-                    qpi.transfer(gate.recipients.get(i), share);
-                    distributed += share;
+                    if (gate.recipientGateIds.get(i) >= 0)
+                    {
+                        uint64 targetSlot = slotFromGateId(gate.recipientGateIds.get(i));
+                        if (targetSlot < state.get()._gateCount
+                            && gateIdMatchesCurrentGeneration(gate.recipientGateIds.get(i))
+                            && state.get()._gates.get(targetSlot).active == 1)
+                        {
+                            GateConfig targetGate = state.get()._gates.get(targetSlot);
+                            bool accepts = true;
+                            if (targetGate.mode == MODE_TIME_LOCK)
+                            {
+                                QUGATE_TimeLockConfig_Test cfg = state.get()._timeLockConfigs.get(targetSlot);
+                                accepts = (cfg.active == 1 && cfg.cancelled == 0 && cfg.fired == 0);
+                            }
+                            if (accepts)
+                            {
+                                RouteResult deferred = routeToGate(targetSlot, (sint64)share, hopCount + 1);
+                                if (deferred.accepted)
+                                {
+                                    distributed += share;
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        qpi.transfer(gate.recipients.get(i), share);
+                        distributed += share;
+                    }
                 }
             }
             gate = state.get()._gates.get(slotIdx);
@@ -2615,25 +2719,126 @@ public:
         }
         else if (gate.mode == MODE_ROUND_ROBIN)
         {
-            qpi.transfer(gate.recipients.get(gate.roundRobinIndex), amountAfterFee);
-            gate.totalForwarded += amountAfterFee;
-            gate.roundRobinIndex = QPI::mod(gate.roundRobinIndex + 1, (uint64)gate.recipientCount);
+            bool accepted = false;
+            if (gate.recipientGateIds.get(gate.roundRobinIndex) >= 0)
+            {
+                uint64 targetSlot = slotFromGateId(gate.recipientGateIds.get(gate.roundRobinIndex));
+                if (targetSlot < state.get()._gateCount
+                    && gateIdMatchesCurrentGeneration(gate.recipientGateIds.get(gate.roundRobinIndex))
+                    && state.get()._gates.get(targetSlot).active == 1)
+                {
+                    GateConfig targetGate = state.get()._gates.get(targetSlot);
+                    bool targetAccepts = true;
+                    if (targetGate.mode == MODE_TIME_LOCK)
+                    {
+                        QUGATE_TimeLockConfig_Test cfg = state.get()._timeLockConfigs.get(targetSlot);
+                        targetAccepts = (cfg.active == 1 && cfg.cancelled == 0 && cfg.fired == 0);
+                    }
+                    if (targetAccepts)
+                    {
+                        RouteResult deferred = routeToGate(targetSlot, amountAfterFee, hopCount + 1);
+                        accepted = deferred.accepted;
+                    }
+                }
+            }
+            else
+            {
+                qpi.transfer(gate.recipients.get(gate.roundRobinIndex), amountAfterFee);
+                accepted = true;
+            }
+
+            if (accepted)
+            {
+                gate.totalForwarded += amountAfterFee;
+                gate.roundRobinIndex = QPI::mod(gate.roundRobinIndex + 1, (uint64)gate.recipientCount);
+                result.forwarded = amountAfterFee;
+                result.accepted = true;
+            }
             state.mut()._gates.set(slotIdx, gate);
-            result.forwarded = amountAfterFee;
-            result.accepted = true;
         }
         else if (gate.mode == MODE_THRESHOLD)
         {
             gate.currentBalance += amountAfterFee;
+            bool accepted = false;
             if (gate.currentBalance >= gate.threshold)
             {
-                qpi.transfer(gate.recipients.get(0), gate.currentBalance);
-                gate.totalForwarded += gate.currentBalance;
-                gate.currentBalance = 0;
+                if (gate.recipientGateIds.get(0) >= 0)
+                {
+                    uint64 targetSlot = slotFromGateId(gate.recipientGateIds.get(0));
+                    if (targetSlot < state.get()._gateCount
+                        && gateIdMatchesCurrentGeneration(gate.recipientGateIds.get(0))
+                        && state.get()._gates.get(targetSlot).active == 1)
+                    {
+                        GateConfig targetGate = state.get()._gates.get(targetSlot);
+                        bool targetAccepts = true;
+                        if (targetGate.mode == MODE_TIME_LOCK)
+                        {
+                            QUGATE_TimeLockConfig_Test cfg = state.get()._timeLockConfigs.get(targetSlot);
+                            targetAccepts = (cfg.active == 1 && cfg.cancelled == 0 && cfg.fired == 0);
+                        }
+                        if (targetAccepts)
+                        {
+                            RouteResult deferred = routeToGate(targetSlot, (sint64)gate.currentBalance, hopCount + 1);
+                            accepted = deferred.accepted;
+                        }
+                    }
+                }
+                else
+                {
+                    qpi.transfer(gate.recipients.get(0), gate.currentBalance);
+                    accepted = true;
+                }
+                if (accepted)
+                {
+                    gate.totalForwarded += gate.currentBalance;
+                    gate.currentBalance = 0;
+                }
             }
             state.mut()._gates.set(slotIdx, gate);
             result.forwarded = amountAfterFee;
             result.accepted = true;
+        }
+        else if (gate.mode == MODE_RANDOM)
+        {
+            uint64 ridx = QPI::mod(gate.totalReceived + qpi.tick(), (uint64)gate.recipientCount);
+            bool accepted = false;
+            if (gate.recipientGateIds.get(ridx) >= 0)
+            {
+                uint64 targetSlot = slotFromGateId(gate.recipientGateIds.get(ridx));
+                if (targetSlot < state.get()._gateCount
+                    && gateIdMatchesCurrentGeneration(gate.recipientGateIds.get(ridx))
+                    && state.get()._gates.get(targetSlot).active == 1)
+                {
+                    GateConfig targetGate = state.get()._gates.get(targetSlot);
+                    bool targetAccepts = true;
+                    if (targetGate.mode == MODE_TIME_LOCK)
+                    {
+                        QUGATE_TimeLockConfig_Test cfg = state.get()._timeLockConfigs.get(targetSlot);
+                        targetAccepts = (cfg.active == 1 && cfg.cancelled == 0 && cfg.fired == 0);
+                    }
+                    if (targetAccepts)
+                    {
+                        RouteResult deferred = routeToGate(targetSlot, amountAfterFee, hopCount + 1);
+                        accepted = deferred.accepted;
+                    }
+                }
+            }
+            else
+            {
+                qpi.transfer(gate.recipients.get(ridx), amountAfterFee);
+                accepted = true;
+            }
+            if (accepted)
+            {
+                gate.totalForwarded += amountAfterFee;
+                state.mut()._gates.set(slotIdx, gate);
+                result.forwarded = amountAfterFee;
+                result.accepted = true;
+            }
+            else
+            {
+                state.mut()._gates.set(slotIdx, gate);
+            }
         }
         else if (gate.mode == MODE_HEARTBEAT || gate.mode == MODE_MULTISIG)
         {
@@ -3603,13 +3808,14 @@ TEST(QuGateChain, RouteToGateThresholdAccumulatesAfterHopFee)
 
     env.qpi.reset();
     auto first = env.routeToGate(thresholdGate.gateId - 1, 4000, 0);
+    EXPECT_TRUE(first.accepted);
     EXPECT_EQ(first.forwarded, 3000);
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 0);
     EXPECT_EQ(env.getGate(thresholdGate.gateId).currentBalance, 3000ULL);
 
     env.qpi.reset();
     auto second = env.routeToGate(thresholdGate.gateId - 1, 3000, 0);
-    EXPECT_EQ(second.forwarded, 2000);
+    EXPECT_TRUE(second.accepted);
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 5000);
     EXPECT_EQ(env.getGate(thresholdGate.gateId).currentBalance, 0ULL);
 }
@@ -4608,6 +4814,38 @@ TEST(QuGateHeartbeat, HeartbeatAutoCloseFailedTransferKeepsGateActive)
     EXPECT_EQ(env.state.get()._freeCount, 0ULL);
 }
 
+TEST(QuGateHeartbeat, HeartbeatChainUsesOnlyUndeliveredPayoutRemainder)
+{
+    QuGateTest env;
+    id heartbeatRecips[] = { BOB };
+    uint64 heartbeatRatios[] = { 0 };
+    id downstreamRecips[] = { DAVE };
+    uint64 downstreamRatios[] = { 100 };
+    id beneficiaries[] = { BOB, CHARLIE };
+    uint8 shares[] = { 50, 50 };
+
+    auto source = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, heartbeatRecips, heartbeatRatios);
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, downstreamRecips, downstreamRatios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, source.gateId, 1, 50, 10, beneficiaries, shares, 2), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setChain(ALICE, source.gateId, downstream.gateId, QUGATE_CHAIN_HOP_FEE).result, QUGATE_SUCCESS);
+    ASSERT_EQ(env.sendToGate(ALICE, source.gateId, 10000).status, QUGATE_SUCCESS);
+
+    env.qpi._epoch = 102;
+    env.endEpoch();
+
+    env.qpi.reset();
+    env.qpi.failTransfersTo(CHARLIE, 1);
+    env.qpi._epoch = 103;
+    env.endEpoch();
+
+    auto gate = env.getGate(source.gateId);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 2500);
+    EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 0);
+    EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 1500);
+    EXPECT_EQ(gate.currentBalance, 5000ULL);
+    EXPECT_EQ(gate.totalForwarded, 5000ULL);
+}
+
 // sendHeartbeat after trigger returns HEARTBEAT_TRIGGERED and does not reset
 TEST(QuGateHeartbeat, HeartbeatPingAfterTriggerDoesNotReset)
 {
@@ -5164,6 +5402,208 @@ TEST(QuGateTimeLock, TimeLockNoRecipientChainForward)
     env.endEpoch();
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4000);
     EXPECT_EQ(env.getGate(out.gateId).active, 0);
+    EXPECT_EQ(env.getGate(out.gateId).totalForwarded, 5000ULL);
+}
+
+TEST(QuGateTimeLock, TimeLockNoRecipientFailedChainKeepsGateLive)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    for (uint8 _ri = 0; _ri < 8; _ri++) in.recipientGateIds.set(_ri, -1);
+    in.mode = MODE_TIME_LOCK;
+    in.recipientCount = 0;
+    in.chainNextGateId = downstream.gateId;
+    auto out = env.createGate(ALICE, 100000, in);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 105, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    ASSERT_EQ(env.closeGate(ALICE, downstream.gateId).status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.sendToGate(ALICE, out.gateId, 5000).status, QUGATE_SUCCESS);
+
+    env.qpi._epoch = 105;
+    env.endEpoch();
+
+    auto gate = env.getGate(out.gateId);
+    auto tl = env.state.get()._timeLockConfigs.get(out.gateId - 1);
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(gate.currentBalance, 5000ULL);
+    EXPECT_EQ(gate.totalForwarded, 0ULL);
+    EXPECT_EQ(tl.fired, 0);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 0);
+}
+
+TEST(QuGateDeferred, SplitGateRecipientSkipsCancelledTimeLockTarget)
+{
+    QuGateTest env;
+    id walletRecips[] = { BOB, id::zero() };
+    uint64 ratios[] = { 50, 50 };
+    auto split = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 2, walletRecips, ratios);
+
+    createGate_input tlIn;
+    memset(&tlIn, 0, sizeof(tlIn));
+    for (uint8 _ri = 0; _ri < 8; _ri++) tlIn.recipientGateIds.set(_ri, -1);
+    tlIn.mode = MODE_TIME_LOCK;
+    tlIn.recipientCount = 0;
+    tlIn.chainNextGateId = -1;
+    auto target = env.createGate(ALICE, 100000, tlIn);
+    ASSERT_EQ(target.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, target.gateId, 120, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    ASSERT_EQ(env.cancelTimeLock(ALICE, target.gateId), QUGATE_SUCCESS);
+
+    GateConfig splitGate = env.state.get()._gates.get(split.gateId - 1);
+    splitGate.recipientGateIds.set(1, (sint64)target.gateId);
+    env.state.mut()._gates.set(split.gateId - 1, splitGate);
+
+    auto result = env.routeToGate(split.gateId - 1, 10000, 0);
+    auto updatedSplit = env.getGate(split.gateId);
+    auto updatedTarget = env.getGate(target.gateId);
+    EXPECT_TRUE(result.accepted);
+    EXPECT_EQ(result.forwarded, 4500);
+    EXPECT_EQ(updatedSplit.totalForwarded, 4500ULL);
+    EXPECT_EQ(updatedTarget.currentBalance, 0ULL);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4500);
+}
+
+TEST(QuGateDeferred, RoundRobinGateRecipientSkipsCancelledTimeLockTarget)
+{
+    QuGateTest env;
+    id walletRecips[] = { id::zero(), BOB };
+    uint64 ratios[] = { 0, 0 };
+    auto rr = makeSimpleGate(env, ALICE, 100000, MODE_ROUND_ROBIN, 2, walletRecips, ratios);
+
+    createGate_input tlIn;
+    memset(&tlIn, 0, sizeof(tlIn));
+    for (uint8 _ri = 0; _ri < 8; _ri++) tlIn.recipientGateIds.set(_ri, -1);
+    tlIn.mode = MODE_TIME_LOCK;
+    tlIn.recipientCount = 0;
+    tlIn.chainNextGateId = -1;
+    auto target = env.createGate(ALICE, 100000, tlIn);
+    ASSERT_EQ(target.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, target.gateId, 120, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    ASSERT_EQ(env.cancelTimeLock(ALICE, target.gateId), QUGATE_SUCCESS);
+
+    GateConfig rrGate = env.state.get()._gates.get(rr.gateId - 1);
+    rrGate.recipientGateIds.set(0, (sint64)target.gateId);
+    env.state.mut()._gates.set(rr.gateId - 1, rrGate);
+
+    auto first = env.routeToGate(rr.gateId - 1, 9000, 0);
+    auto afterFirst = env.getGate(rr.gateId);
+    auto afterFirstRaw = env.state.get()._gates.get(rr.gateId - 1);
+    auto targetAfterFirst = env.getGate(target.gateId);
+    EXPECT_FALSE(first.accepted);
+    EXPECT_EQ(first.forwarded, 0);
+    EXPECT_EQ(afterFirst.totalForwarded, 0ULL);
+    EXPECT_EQ(afterFirstRaw.roundRobinIndex, 0ULL);
+    EXPECT_EQ(targetAfterFirst.currentBalance, 0ULL);
+
+    auto second = env.routeToGate(rr.gateId - 1, 9000, 0);
+    auto afterSecond = env.getGate(rr.gateId);
+    EXPECT_FALSE(second.accepted);
+    EXPECT_EQ(second.forwarded, 0);
+    EXPECT_EQ(afterSecond.totalForwarded, 0ULL);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 0);
+}
+
+TEST(QuGateDeferred, ThresholdGateRecipientSkipsCancelledTimeLockTarget)
+{
+    QuGateTest env;
+    id walletRecips[] = { id::zero() };
+    uint64 ratios[] = { 0 };
+    auto threshold = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, walletRecips, ratios, 4000);
+
+    createGate_input tlIn;
+    memset(&tlIn, 0, sizeof(tlIn));
+    for (uint8 _ri = 0; _ri < 8; _ri++) tlIn.recipientGateIds.set(_ri, -1);
+    tlIn.mode = MODE_TIME_LOCK;
+    tlIn.recipientCount = 0;
+    tlIn.chainNextGateId = -1;
+    auto target = env.createGate(ALICE, 100000, tlIn);
+    ASSERT_EQ(target.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, target.gateId, 120, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    ASSERT_EQ(env.cancelTimeLock(ALICE, target.gateId), QUGATE_SUCCESS);
+
+    GateConfig thresholdGate = env.state.get()._gates.get(threshold.gateId - 1);
+    thresholdGate.recipientGateIds.set(0, (sint64)target.gateId);
+    env.state.mut()._gates.set(threshold.gateId - 1, thresholdGate);
+
+    auto result = env.routeToGate(threshold.gateId - 1, 5000, 0);
+    auto updatedThreshold = env.getGate(threshold.gateId);
+    auto updatedTarget = env.getGate(target.gateId);
+    // Threshold accepts custody but can't release to cancelled TIME_LOCK target
+    EXPECT_TRUE(result.accepted);
+    EXPECT_EQ(result.forwarded, 4000);
+    EXPECT_EQ(updatedThreshold.currentBalance, 4000ULL);
+    EXPECT_EQ(updatedThreshold.totalForwarded, 0ULL);
+    EXPECT_EQ(updatedTarget.currentBalance, 0ULL);
+}
+
+TEST(QuGateDeferred, RandomGateRecipientSkipsCancelledTimeLockTarget)
+{
+    QuGateTest env;
+    id walletRecips[] = { id::zero(), id::zero() };
+    uint64 ratios[] = { 0, 0 };
+    auto random = makeSimpleGate(env, ALICE, 100000, MODE_RANDOM, 2, walletRecips, ratios);
+
+    createGate_input tlIn;
+    memset(&tlIn, 0, sizeof(tlIn));
+    for (uint8 _ri = 0; _ri < 8; _ri++) tlIn.recipientGateIds.set(_ri, -1);
+    tlIn.mode = MODE_TIME_LOCK;
+    tlIn.recipientCount = 0;
+    tlIn.chainNextGateId = -1;
+    auto target = env.createGate(ALICE, 100000, tlIn);
+    ASSERT_EQ(target.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, target.gateId, 120, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    ASSERT_EQ(env.cancelTimeLock(ALICE, target.gateId), QUGATE_SUCCESS);
+
+    GateConfig randomGate = env.state.get()._gates.get(random.gateId - 1);
+    randomGate.recipientGateIds.set(0, (sint64)target.gateId);
+    randomGate.recipientGateIds.set(1, (sint64)target.gateId);
+    env.state.mut()._gates.set(random.gateId - 1, randomGate);
+
+    auto result = env.routeToGate(random.gateId - 1, 5000, 0);
+    auto updatedRandom = env.getGate(random.gateId);
+    auto updatedTarget = env.getGate(target.gateId);
+    EXPECT_FALSE(result.accepted);
+    EXPECT_EQ(result.forwarded, 0);
+    EXPECT_EQ(updatedRandom.totalForwarded, 0ULL);
+    EXPECT_EQ(updatedTarget.currentBalance, 0ULL);
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 0);
+}
+
+TEST(QuGateDeferred, MultisigGateRecipientSkipsCancelledTimeLockTarget)
+{
+    QuGateTest env;
+    id recips[] = { id::zero() };
+    uint64 ratios[] = { 0 };
+    auto multisig = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, multisig.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+
+    createGate_input tlIn;
+    memset(&tlIn, 0, sizeof(tlIn));
+    for (uint8 _ri = 0; _ri < 8; _ri++) tlIn.recipientGateIds.set(_ri, -1);
+    tlIn.mode = MODE_TIME_LOCK;
+    tlIn.recipientCount = 0;
+    tlIn.chainNextGateId = -1;
+    auto target = env.createGate(ALICE, 100000, tlIn);
+    ASSERT_EQ(target.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, target.gateId, 120, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    ASSERT_EQ(env.cancelTimeLock(ALICE, target.gateId), QUGATE_SUCCESS);
+
+    GateConfig multisigGate = env.state.get()._gates.get(multisig.gateId - 1);
+    multisigGate.recipientGateIds.set(0, (sint64)target.gateId);
+    env.state.mut()._gates.set(multisig.gateId - 1, multisigGate);
+
+    auto result = env.sendToMultisigGate(BOB, multisig.gateId, 5000);
+    auto updatedMultisig = env.getGate(multisig.gateId);
+    auto updatedTarget = env.getGate(target.gateId);
+    EXPECT_EQ(result.status, QUGATE_SUCCESS);
+    EXPECT_EQ(updatedMultisig.currentBalance, 5000ULL);
+    EXPECT_EQ(updatedMultisig.totalForwarded, 0ULL);
+    EXPECT_EQ(updatedTarget.currentBalance, 0ULL);
 }
 
 // getGatesByOwner excludes closed gates from results
