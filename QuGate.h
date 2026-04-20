@@ -1,52 +1,11 @@
-// QuGate.h - Programmable Payment Gate Contract
-// Short name: QUGATE
-// Description: Universal payment routing with predefined gate modes.
-//   Create gates with configurable rules, point payments at them,
-//   and QU flows according to the logic.
-//
-// Gate Modes:
-//   SPLIT       - Distribute to N addresses by ratio (e.g. 40:30:20:10)
-//   ROUND_ROBIN - Cycle through addresses, one per payment
-//   THRESHOLD   - Accumulate until amount reached, then forward
-//   RANDOM      - Select one recipient per payment using tick-based entropy
-//   CONDITIONAL - Only forward if sender matches whitelist, else bounce
-//   _(slot 5)_  - Reserved for future use
-//   HEARTBEAT   - Dead-man's switch; distributes if not pinged within N epochs
-//                 Recipients configured via configureHeartbeat (recipientCount=0 at creation)
-//   MULTISIG    - M-of-N guardian approval before funds release
-//                 Guardians configured via configureMultisig (recipientCount=0 at creation)
-//   TIME_LOCK   - Funds locked until a target epoch, then released
-//                 Unlock configured via configureTimeLock (recipientCount=0 at creation)
-//
-// Anti-Spam / Lifecycle:
-//   - Escalating creation fee: cost increases as capacity fills
-//   - Inactivity reserve fee: idle gates consume reserve-backed upkeep
-//   - Gate expiry: inactive or delinquent gates auto-expire after grace conditions
-//   - Dust burn: sends below minimum are burned
-
-//
-// Architecture:
-//   Gates are stored in a flat Array<GateConfig, QUGATE_MAX_GATES> indexed by slot (0-based
-//   internally). External callers use versioned gate IDs:
-//     gateId = ((generation + 1) << QUGATE_GATE_ID_SLOT_BITS) | slotIndex
-//   The generation counter increments each time a slot is recycled, making stale IDs invalid.
-//
-//   Chain gates link up to QUGATE_MAX_CHAIN_DEPTH gates in sequence. After a gate distributes
-//   funds, the forwarded amount is passed to the next gate in the chain (routeToGate). Each hop
-//   burns QUGATE_CHAIN_HOP_FEE QU as an anti-spam measure.
-//
-//   Creation, dust, and chain-hop fees are burned via qpi.burn(). Maintenance fees are split
-//   between burn and dividend/distribution paths during END_EPOCH.
-//
+// QuGate.h - QUGATE payment routing contract
 
 using namespace QPI;
 
-// Contract index — assigned by core after proposal approval.
-// When building testnet locally, pass -DCONTRACT_INDEX=26 via cmake flags
-// instead of modifying this file (qubic-contract-verify rejects preprocessor directives).
+// Contract index is assigned by core.
 
 // Capacity scales with network via X_MULTIPLIER
-constexpr uint64 QUGATE_INITIAL_MAX_GATES = 2048;  // testnet size; scale up for mainnet
+constexpr uint64 QUGATE_INITIAL_MAX_GATES = 2048;
 constexpr uint64 QUGATE_MAX_GATES = QUGATE_INITIAL_MAX_GATES * X_MULTIPLIER;
 constexpr uint64 QUGATE_MAX_RECIPIENTS = 8;
 constexpr uint64 QUGATE_MAX_RATIO = 10000;       // Max ratio per recipient (prevents overflow)
@@ -244,15 +203,12 @@ struct QUGATE_TimeLockConfig
     uint8  active;         // 1 = time lock is configured on this gate
 };
 
-// Per-gate allowed-senders configuration (CONDITIONAL mode whitelist)
-// Stored outside GateConfig to reduce per-gate footprint.
+// Per-gate allowed-senders configuration.
 struct QUGATE_AllowedSendersConfig
 {
     Array<id, 8> senders;  // Whitelist addresses
     uint8 count;           // Number of active entries (0-8)
 };
-
-// HeartbeatBeneficiary removed — beneficiaries are now stored inline in QUGATE_HeartbeatConfig
 
 struct QUGATE : public ContractBase
 {
@@ -1497,7 +1453,7 @@ public:
         // Validate mode
         if (input.mode > QUGATE_MODE_TIME_LOCK || input.mode == QUGATE_MODE_ORACLE)
         {
-            // Refund all — mode 5 is reserved for future use
+            // Refund all.
             qpi.transfer(qpi.invocator(), locals.invReward);
             output.status = QUGATE_INVALID_MODE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
@@ -1514,8 +1470,7 @@ public:
             LOG_WARNING(locals.logger);
             return;
         }
-        // Modes 6 (HEARTBEAT), 7 (MULTISIG), 8 (TIME_LOCK) configure recipients
-        // via separate procedures, so recipientCount == 0 is valid at creation time.
+        // HEARTBEAT, MULTISIG, and TIME_LOCK configure recipients separately.
         if (input.recipientCount == 0 && input.chainNextGateId == -1
             && input.mode != QUGATE_MODE_HEARTBEAT
             && input.mode != QUGATE_MODE_MULTISIG
@@ -1694,11 +1649,9 @@ public:
                 || locals.chainTargetGen == 0
                 || state.get()._gateGenerations.get(locals.chainTargetSlot) != (uint16)(locals.chainTargetGen - 1))
             {
-                // Rollback: fresh slot decrements _gateCount; recycled slot returns to free-list.
-                // Undo slot allocation — return slot to free-list or decrement gateCount
+                // Undo slot allocation.
                 if (locals.slotIdx < state.get()._gateCount - 1)
                 {
-                    // Slot was from free-list — push back
                     state.mut()._freeSlots.set(state.get()._freeCount, locals.slotIdx);
                     state.mut()._freeCount += 1;
                 }
@@ -2058,7 +2011,6 @@ public:
             return;
         }
 
-        // NOTE: entropy is publicly observable — not cryptographically random
         locals.recipientIdx = QPI::mod(locals.gate.totalReceived + qpi.tick(), (uint64)locals.gate.recipientCount);
         if (locals.gate.recipientGateIds.get(locals.recipientIdx) >= 0)
         {
@@ -2117,7 +2069,6 @@ public:
         {
             if (locals.gate.recipientCount == 0)
             {
-                // No recipients — chain forwarding will handle delivery
                 locals.gate.totalForwarded += input.amount;
                 output.forwarded = input.amount;
             }
@@ -2262,7 +2213,6 @@ public:
                     locals.adminApproval.validUntilEpoch = (uint32)qpi.epoch() + locals.msigCfg.adminApprovalWindowEpochs - 1;
                     state.mut()._adminApprovalStates.set(input.slotIdx, locals.adminApproval);
 
-                    // Reset proposal after explicit admin approval is granted.
                     locals.msigCfg.approvalBitmap = 0;
                     locals.msigCfg.approvalCount = 0;
                     locals.msigCfg.proposalActive = 0;
@@ -2304,8 +2254,6 @@ public:
                         output.chainForward = 1;
                         output.chainForwardAmount = locals.releaseAmount;
                     }
-                    // else: no recipients AND no chain — funds stay in currentBalance
-                    // Always reset proposal after quorum — prevents stuck proposals
                     locals.msigCfg.approvalBitmap = 0;
                     locals.msigCfg.approvalCount = 0;
                     locals.msigCfg.proposalActive = 0;
@@ -2329,15 +2277,6 @@ public:
         }
     }
 
-    // is responsible for iterating subsequent hops.
-    //
-    // Hop fee priority:
-    //   1. Deducted from forwarded amount if amount > QUGATE_CHAIN_HOP_FEE
-    //   2. Deducted from gate.reserve if amount <= QUGATE_CHAIN_HOP_FEE and reserve is sufficient
-    //   3. Funds stranded in gate.currentBalance if both are insufficient (QUGATE_LOG_CHAIN_HOP_INSUFFICIENT)
-    //
-    // input.hopCount is checked against QUGATE_MAX_CHAIN_DEPTH as a runtime safety guard.
-    // The caller should never exceed this, but the guard prevents runaway execution if it does.
     PRIVATE_PROCEDURE_WITH_LOCALS(routeToGate)
     {
         output.forwarded = 0;
@@ -2515,8 +2454,6 @@ public:
                 output.accepted = 1;
             }
         }
-        // NOTE: CONDITIONAL mode as chain target requires SELF in allowedSenders — invocator here is the contract, not an external sender.
-
         // Log hop
         locals.logger._contractIndex = CONTRACT_INDEX;
         locals.logger._type = QUGATE_LOG_CHAIN_HOP;
@@ -2982,8 +2919,6 @@ public:
                     locals.hop += 1;
                 }
                 // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance.
-                // Natural termination at a terminal gate leaves currentChainGateId == -1
-                // and must not be treated as delivery failure.
                 if (locals.chainAmount > 0 && locals.currentChainGateId != -1)
                 {
                     locals.gate = state.get()._gates.get(locals.slotIdx);
@@ -3464,8 +3399,6 @@ public:
                     locals.hop += 1;
                 }
                 // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance.
-                // Natural termination at a terminal gate leaves currentChainGateId == -1
-                // and must not be treated as delivery failure.
                 if (locals.chainAmount > 0 && locals.currentChainGateId != -1)
                 {
                     locals.gate = state.get()._gates.get(locals.slotIdx);
@@ -5713,8 +5646,7 @@ public:
         locals.adminApprovalUsed = 0;
         if (qpi.invocator() != locals.gate.owner || locals.gate.adminGateId >= 0)
         {
-            // Once an admin gate is set, any change to admin governance requires
-            // an active approval window from that admin gate.
+            // Changes require an active approval window from the current admin gate.
             if (locals.gate.adminGateId < 0)
             {
                 output.status = QUGATE_UNAUTHORIZED;
@@ -5722,9 +5654,7 @@ public:
                 LOG_WARNING(locals.logger);
                 return;
             }
-            // Special case: the owner may always clear a dead admin gate reference.
-            // This prevents permanent lockout if the referenced admin gate has expired,
-            // been closed, become stale, or is no longer MULTISIG.
+            // The owner may clear a dead admin gate reference.
             if (qpi.invocator() == locals.gate.owner && input.adminGateId == -1)
             {
                 locals.adminSlot = (uint64)(locals.gate.adminGateId) & QUGATE_GATE_ID_SLOT_MASK;
@@ -5794,9 +5724,6 @@ public:
                 return;
             }
         }
-        // If no admin gate is set, the owner may set one directly.
-        // Once an admin gate is set, changing or clearing it requires approval.
-
         // Clear admin gate
         if (input.adminGateId == -1)
         {
@@ -6278,7 +6205,6 @@ public:
 
     BEGIN_EPOCH_WITH_LOCALS()
     {
-        // No per-epoch processing needed (oracle subscriptions removed)
     }
 
     END_EPOCH_WITH_LOCALS()
@@ -6549,12 +6475,6 @@ public:
             }
         }
 
-        // TODO: Check shareholder proposals and apply fee/expiry changes
-        // When DEFINE_SHAREHOLDER_PROPOSAL_STORAGE is enabled:
-        //   - Check if any proposal passed quorum
-        //   - If so, update state.mut()._creationFee, state.mut()._minSendAmount, state.mut()._expiryEpochs
-        //   - Log fee change event
-
         // =============================================
         // Heartbeat gate processing — epoch-based trigger
         // =============================================
@@ -6584,7 +6504,7 @@ public:
                 {
                     locals.inhPayoutTotal = (sint64)QPI::div((uint64)(locals.inhBalance * (sint64)locals.inhCfg.payoutPercentPerEpoch), (uint64)100);
 
-                    // Zeno fix: if payout rounds to 0 but balance remains, sweep remaining balance
+                    // Sweep the remainder if rounding would otherwise produce a zero payout.
                     if (locals.inhPayoutTotal == 0 && locals.inhBalance > 0)
                     {
                         locals.inhPayoutTotal = locals.inhBalance;
@@ -6669,8 +6589,6 @@ public:
                             locals.hop++;
                         }
                         // Failsafe: if chain forwarding couldn't deliver, revert to currentBalance.
-                        // Natural termination at a terminal gate leaves currentChainGateId == -1
-                        // and must not be treated as delivery failure.
                         if (locals.chainAmount > 0 && locals.currentChainGateId != -1)
                         {
                             locals.gate = state.get()._gates.get(locals.i);
@@ -6688,7 +6606,7 @@ public:
                     locals.gate = state.get()._gates.get(locals.i);
                     if ((sint64)locals.gate.currentBalance <= locals.inhCfg.minimumBalance)
                     {
-                        // Distribute remaining balance to beneficiaries (owner may be deceased in inheritance use case)
+                        // Distribute the remaining balance to beneficiaries.
                         if (locals.gate.currentBalance > 0 && locals.inhCfg.beneficiaryCount > 0)
                         {
                             locals.dustTotal = (sint64)locals.gate.currentBalance;
