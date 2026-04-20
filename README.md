@@ -48,9 +48,10 @@ Gate-to-gate forwarding can happen in two ways:
 | `QUGATE_MAX_RECIPIENTS` | 8 | Max recipients per gate |
 | `QUGATE_MAX_RATIO` | 10,000 | Max ratio value per recipient |
 | `QUGATE_DEFAULT_CREATION_FEE` | 100,000 QU | Initial base creation fee |
-| `QUGATE_DEFAULT_MAINTENANCE_FEE` | 25,000 QU | Inactivity maintenance fee charged to idle gates |
+| `QUGATE_DEFAULT_MAINTENANCE_FEE` | 25,000 QU | Base inactivity maintenance fee (scaled by gate complexity) |
 | `QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS` | 4 | Idle window before reserve-backed inactivity billing |
 | `QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS` | 4 | Grace epochs before delinquent gates expire |
+| `QUGATE_DEFAULT_FEE_BURN_BPS` | 5,000 (50%) | Default burn/dividend split ratio in basis points |
 | `QUGATE_DEFAULT_MIN_SEND` | 1,000 QU | Initial minimum send amount |
 | `QUGATE_FEE_ESCALATION_STEP` | 1,024 | Active gates per fee multiplier step |
 | `QUGATE_DEFAULT_EXPIRY_EPOCHS` | 50 | Epochs of inactivity before auto-close |
@@ -1185,14 +1186,27 @@ Default inactivity expiry: 50 epochs (approximately 1 year at current epoch leng
 
 ### Maintenance delinquency
 
-Idle gates are expected to maintain a funded `reserve`. If a gate has no qualifying activity for `4` epochs and is not in an active hold state, the contract charges `25,000 QU` from the reserve. If the reserve cannot cover the fee:
+Idle gates are expected to maintain a funded `reserve`. If a gate has no qualifying activity for `4` epochs and is not in an active hold state, the contract charges a **complexity-scaled maintenance fee** from the reserve. The base fee is 25,000 QU, scaled by the gate's complexity:
+
+| Gate type | Multiplier | Effective fee |
+|-----------|-----------|---------------|
+| Simple (1-2 recipients) | 1.0x | 25,000 QU |
+| 3-7 recipients | 1.5x | 37,500 QU |
+| 8 recipients (max) | 2.0x | 50,000 QU |
+| HEARTBEAT mode | 1.5x | 37,500 QU |
+| MULTISIG mode | 1.5x | 37,500 QU |
+| Any gate with chain link | +0.5x | +12,500 QU |
+
+The multipliers reflect the computational cost each gate type imposes on `END_EPOCH` processing. A simple 1-recipient split is cheap to process; an 8-recipient multisig with a chain link requires more work from computors and pays proportionally more.
+
+If the reserve cannot cover the effective fee:
 
 - the gate is marked delinquent
 - a `4` epoch grace window begins
 - if the reserve is funded before grace ends, the gate cures and continues normally
 - if not, the gate expires and reserves/balances are refunded to the owner
 
-This makes maintenance predictable and reserve-backed instead of silently draining operational balances.
+This makes maintenance predictable, reserve-backed, and proportional to the resources consumed.
 
 ### Dust Burn
 
@@ -1202,21 +1216,47 @@ Sends below `_minSendAmount` (default: 1,000 QU) are burned via `qpi.burn()` and
 
 ## Fee Economics
 
-QuGate uses a hybrid fee model:
+QuGate uses a hybrid fee model with a governed burn/dividend split:
 
-- **Creation fees**: burned on successful gate creation
-- **Dust amounts**: burned when sends are below minimum
-- **Chain hop fees**: burned on each routed hop
-- **Inactivity maintenance**: charged from `reserve` and split:
-  - `80%` burned
-  - `20%` routed through the standard dividend/shareholder distribution path
+- **Creation fees**: split between burn and shareholder dividends (default 50/50)
+- **Dust amounts**: 100% burned when sends are below minimum
+- **Chain hop fees**: 100% burned on each routed hop
+- **Inactivity maintenance**: charged from `reserve`, complexity-scaled, and split between burn and dividends
+
+### Burn/Dividend Split
+
+The split ratio is stored as a state variable `_feeBurnBps` (basis points, default 5000 = 50%). It applies to both creation fees and idle maintenance fees. The ratio is bounded between 30% burn minimum (`QUGATE_MIN_FEE_BURN_BPS = 3000`) and 70% burn maximum (`QUGATE_MAX_FEE_BURN_BPS = 7000`), ensuring the contract remains significantly deflationary while maintaining meaningful shareholder returns.
+
+```
+burnAmount    = fee * _feeBurnBps / 10000
+dividendAmount = fee - burnAmount
+```
+
+This split is governance-ready — when Qubic's shareholder voting mechanism is wired, computors can vote to adjust it within the 30-70% range without a code upgrade.
+
+### Complexity-Based Maintenance
+
+Idle maintenance fees scale with gate complexity. The base fee (default 25,000 QU) is multiplied based on the gate's mode, recipient count, and chain linkage. This ensures that gates imposing higher computational costs on `END_EPOCH` processing pay proportionally more:
+
+| Gate type | Multiplier | Effective fee |
+|-----------|-----------|---------------|
+| Simple (1-2 recipients) | 1.0x | 25,000 QU |
+| 3-7 recipients | 1.5x | 37,500 QU |
+| 8 recipients (max) | 2.0x | 50,000 QU |
+| HEARTBEAT mode | 1.5x | 37,500 QU |
+| MULTISIG mode | 1.5x | 37,500 QU |
+| Any gate with chain link | +0.5x | +12,500 QU |
+
+Multipliers stack: an 8-recipient split with a chain link pays 2.5x (62,500 QU). A multisig with a chain link pays 2.0x (50,000 QU).
+
+### Tracking
 
 The contract tracks cumulative:
 
-- burned QU
-- maintenance charged
-- maintenance burned
-- maintenance dividends earned and distributed
+- burned QU (`_totalBurned`)
+- maintenance charged (`_totalMaintenanceCharged`)
+- maintenance burned (`_totalMaintenanceBurned`)
+- maintenance dividends earned and distributed (`_earnedMaintenanceDividends`, `_distributedMaintenanceDividends`)
 
 These values are queryable via `getGateCount()`.
 
@@ -1224,15 +1264,21 @@ These values are queryable via `getGateCount()`.
 
 ## Shareholder Governance
 
-Three parameters are stored as state variables and designed to be adjustable via shareholder vote:
+The following parameters are stored as state variables and designed to be adjustable via shareholder vote:
 
-| Parameter | State Variable | Default |
-|-----------|----------------|---------|
-| Base creation fee | `_creationFee` | 100,000 QU |
-| Minimum send amount | `_minSendAmount` | 1,000 QU |
-| Expiry period | `_expiryEpochs` | 50 epochs |
+| Parameter | State Variable | Default | Range |
+|-----------|----------------|---------|-------|
+| Base creation fee | `_creationFee` | 100,000 QU | > 0 |
+| Burn/dividend split | `_feeBurnBps` | 5,000 (50%) | 3,000 - 7,000 |
+| Base idle maintenance fee | `_idleFee` | 25,000 QU | > 0 |
+| Idle window | `_idleWindowEpochs` | 4 epochs | > 0 |
+| Idle grace period | `_idleGraceEpochs` | 4 epochs | > 0 |
+| Minimum send amount | `_minSendAmount` | 1,000 QU | > 0 |
+| Expiry period | `_expiryEpochs` | 50 epochs | 0 = disabled |
 
-**Current status**: The `END_EPOCH` handler contains a stub for processing shareholder proposals. Full wiring requires `DEFINE_SHAREHOLDER_PROPOSAL_STORAGE` with a valid `QUGATE_CONTRACT_ASSET_NAME`, which needs `assetNameFromString("QUGATE")` at contract registration. The mechanism is the same pattern used by QUtil and MsVault.
+The burn/dividend split (`_feeBurnBps`) is bounded between 30% and 70% to ensure the contract remains significantly deflationary while providing meaningful shareholder returns. All other parameters have no upper bound — governance is trusted to set sensible values.
+
+**Current status**: Full wiring requires `DEFINE_SHAREHOLDER_PROPOSAL_STORAGE` with a valid `QUGATE_CONTRACT_ASSET_NAME`, which needs `assetNameFromString("QUGATE")` at contract registration. The mechanism is the same pattern used by QUtil and MsVault.
 
 Until the shareholder infrastructure is wired, fees are set during `INITIALIZE` and cannot be changed without a contract upgrade.
 

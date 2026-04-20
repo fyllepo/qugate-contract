@@ -25,6 +25,8 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 - **Deferred routing pattern**: Mode processors can't call `routeToGate` directly (circular struct). They populate `deferredGateSlots/deferredGateAmounts` in output. Callers dispatch.
 - **Chain forwarding**: `chainNextGateId` forwards remaining balance after distribution. Max 3 hops. All active modes supported.
 - **Unified reserve**: Single `reserve` field per gate covers both chain hop fees and idle maintenance. Excess creation fee auto-seeds it. `fundGate(gateId)` tops it up.
+- **Governed fee split**: `_feeBurnBps` state variable (default 5000 = 50%, range 3000-7000). Applied to creation fees and idle maintenance.
+- **Complexity-based idle fees**: Base fee (25K) scaled by gate complexity: 1x simple, 1.5x for 3+ recipients/HEARTBEAT/MULTISIG, 2x for 8 recipients, +0.5x for chain links.
 - **Transfer-first**: All `qpi.transfer()` calls check `>= 0` before mutating state. Tagged `[QG-01]` through `[QG-17]`.
 - **invReward capture**: Every procedure captures `qpi.invocationReward()` into `locals.invReward` at entry.
 
