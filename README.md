@@ -276,8 +276,8 @@ Send 500,000 QU to the gate address
 
 **Step 3: Vote**
 ```
-// Member 1 sends 1 QU to the gate → registers vote
-// Member 2 sends 1 QU to the gate → 2nd vote, threshold met
+// Member 1 sends 1,000 QU to the gate → registers vote
+// Member 2 sends 1,000 QU to the gate → 2nd vote, threshold met
 // → Gate releases 500,000 QU to TREASURY_TARGET
 // → Vote bitmap resets, ready for next proposal
 ```

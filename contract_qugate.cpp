@@ -6834,3 +6834,20 @@ TEST(QuGateComplexity, GovernedBurnBpsAffectsIdleSplit)
     EXPECT_EQ(burned, QPI::div(fee * 3000, 10000ULL));
     EXPECT_EQ(dividend, fee - burned);
 }
+
+// Guardian vote below minSendAmount is burned as dust and never registers
+TEST(QuGateRegression, MultisigVoteBelowMinSendIsDust)
+{
+    QuGateTest env;
+    id recips[] = { DAVE };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB, CHARLIE };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 10, 5), QUGATE_SUCCESS);
+    auto sendOut = env.sendToGate(BOB, out.gateId, 500);
+    EXPECT_EQ(sendOut.status, QUGATE_DUST_AMOUNT);
+    auto cfg = env.state.get()._multisigConfigs.get(out.gateId - 1);
+    EXPECT_EQ(cfg.approvalCount, 0);
+    EXPECT_EQ(cfg.proposalActive, 0);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 0ULL);
+}
