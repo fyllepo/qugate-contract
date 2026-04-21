@@ -6401,7 +6401,7 @@ public:
                 // Also applies a shielding surcharge to the upstream gate's own idle fee.
                 // If the upstream reserve can't cover a downstream fee, that gate is left alone
                 // and will become delinquent through normal idle charging.
-                if (locals.activeHold == 1 && locals.gate.reserve > 0)
+                if (locals.activeHold == 1 && locals.recentlyActive == 0 && locals.gate.reserve > 0)
                 {
                     // Re-read the gate in case it was modified above
                     locals.gate = state.get()._gates.get(locals.i);
