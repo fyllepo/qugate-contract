@@ -1436,6 +1436,47 @@ public:
                 {
                     state.mut()._idleDelinquentEpochs.set(i, 0);
                 }
+
+                // Propagate exemption to downstream targets
+                if (activeHold == 1)
+                {
+                    if (gate.chainNextGateId > 0)
+                    {
+                        uint64 dsSlot = slotFromGateId(gate.chainNextGateId);
+                        if (dsSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(gate.chainNextGateId))
+                        {
+                            GateConfig dsGate = state.get()._gates.get(dsSlot);
+                            if (dsGate.active == 1)
+                            {
+                                dsGate.lastActivityEpoch = qpi.epoch();
+                                if (state.get()._idleWindowEpochs > 0)
+                                    dsGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                                state.mut()._gates.set(dsSlot, dsGate);
+                                state.mut()._idleDelinquentEpochs.set(dsSlot, 0);
+                            }
+                        }
+                    }
+                    for (uint8 ri = 0; ri < gate.recipientCount; ri++)
+                    {
+                        if (gate.recipientGateIds.get(ri) >= 0)
+                        {
+                            uint64 dsSlot = slotFromGateId(gate.recipientGateIds.get(ri));
+                            if (dsSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(gate.recipientGateIds.get(ri)))
+                            {
+                                GateConfig dsGate = state.get()._gates.get(dsSlot);
+                                if (dsGate.active == 1)
+                                {
+                                    dsGate.lastActivityEpoch = qpi.epoch();
+                                    if (state.get()._idleWindowEpochs > 0)
+                                        dsGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                                    state.mut()._gates.set(dsSlot, dsGate);
+                                    state.mut()._idleDelinquentEpochs.set(dsSlot, 0);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 continue;
             }
 
@@ -1496,6 +1537,22 @@ public:
             uint16 delinquentEpoch = state.get()._idleDelinquentEpochs.get(i);
             if (gate.active == 1 && state.get()._expiryEpochs > 0)
             {
+                // Exempt hold-state gates from inactivity expiry
+                if (gate.mode == MODE_TIME_LOCK)
+                {
+                    QUGATE_TimeLockConfig_Test tlCfg = state.get()._timeLockConfigs.get(i);
+                    if (delinquentEpoch == 0 && tlCfg.active == 1 && tlCfg.fired == 0 && tlCfg.cancelled == 0)
+                        continue;
+                }
+                if (gate.mode == MODE_HEARTBEAT)
+                {
+                    QUGATE_HeartbeatConfig_Test hbCfg = state.get()._heartbeatConfigs.get(i);
+                    if (delinquentEpoch == 0 && hbCfg.active == 1 && hbCfg.triggered == 0)
+                        continue;
+                }
+                if (gate.mode == MODE_MULTISIG && delinquentEpoch == 0 && gate.currentBalance > 0)
+                    continue;
+
                 bool graceExpired = (delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0
                     && qpi.epoch() - delinquentEpoch >= state.get()._idleGraceEpochs);
                 bool inactivityExpired = (qpi.epoch() - gate.lastActivityEpoch >= state.get()._expiryEpochs);
@@ -6850,4 +6907,92 @@ TEST(QuGateRegression, MultisigVoteBelowMinSendIsDust)
     EXPECT_EQ(cfg.approvalCount, 0);
     EXPECT_EQ(cfg.proposalActive, 0);
     EXPECT_EQ(env.getGate(out.gateId).currentBalance, 0ULL);
+}
+
+// Downstream chain target of an exempt heartbeat gate stays alive past 50 epochs
+TEST(QuGateIdle, DownstreamChainExemptionFromHeartbeat)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+
+    id hbRecips[] = { BOB };
+    uint64 hbRatios[] = { 0 };
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    for (uint8 _ri = 0; _ri < 8; _ri++) in.recipientGateIds.set(_ri, -1);
+    in.mode = MODE_HEARTBEAT;
+    in.recipientCount = 0;
+    in.chainNextGateId = downstream.gateId;
+    auto hb = env.createGate(ALICE, 100000, in);
+    ASSERT_EQ(hb.status, QUGATE_SUCCESS);
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    ASSERT_EQ(env.configureHeartbeat(ALICE, hb.gateId, 60, 100, 0, beneficiaries, shares, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, hb.gateId, 50000);
+
+    // Advance well past the 50-epoch expiry threshold
+    env.qpi._epoch = 160;
+    env.endEpoch();
+
+    // Heartbeat is exempt (active, untriggered)
+    EXPECT_EQ(env.getGate(hb.gateId).active, 1);
+    // Downstream chain target should also be alive via propagation
+    EXPECT_EQ(env.getGate(downstream.gateId).active, 1);
+}
+
+// Downstream gate-as-recipient of an exempt time-lock gate stays alive past 50 epochs
+TEST(QuGateIdle, DownstreamRecipientExemptionFromTimeLock)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+
+    auto tl = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(tl.status, QUGATE_SUCCESS);
+    // Point recipient to downstream gate
+    GateConfig tlGate = env.state.get()._gates.get(tl.gateId - 1);
+    tlGate.recipientGateIds.set(0, env.encodeCurrentGateId(downstream.gateId - 1));
+    env.state.mut()._gates.set(tl.gateId - 1, tlGate);
+    ASSERT_EQ(env.configureTimeLock(ALICE, tl.gateId, 200, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, tl.gateId, 50000);
+
+    // Advance past 50-epoch expiry but before unlock
+    env.qpi._epoch = 160;
+    env.endEpoch();
+
+    // Time-lock is exempt (active, unfired, has balance)
+    EXPECT_EQ(env.getGate(tl.gateId).active, 1);
+    // Downstream recipient gate should also be alive
+    EXPECT_EQ(env.getGate(downstream.gateId).active, 1);
+}
+
+// Downstream gate of a non-exempt gate still expires normally
+TEST(QuGateIdle, DownstreamOfNonExemptGateStillExpires)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    for (uint8 _ri = 0; _ri < 8; _ri++) in.recipientGateIds.set(_ri, -1);
+    in.mode = MODE_SPLIT;
+    in.recipientCount = 1;
+    in.recipients.set(0, CHARLIE);
+    in.ratios.set(0, 10000);
+    in.chainNextGateId = downstream.gateId;
+    auto upstream = env.createGate(ALICE, 100000, in);
+    ASSERT_EQ(upstream.status, QUGATE_SUCCESS);
+
+    // Advance past expiry — upstream has no hold state, not exempt
+    env.qpi._epoch = 160;
+    env.endEpoch();
+
+    // Both should expire
+    EXPECT_EQ(env.getGate(upstream.gateId).active, 0);
+    EXPECT_EQ(env.getGate(downstream.gateId).active, 0);
 }

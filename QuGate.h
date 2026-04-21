@@ -1199,6 +1199,11 @@ public:
         uint64 maintenanceAmountPerShare;
         uint8  recentlyActive;
         uint8  activeHold;
+        // Downstream exemption propagation
+        uint8  downstreamIdx;
+        uint64 downstreamSlot;
+        uint64 downstreamGen;
+        GateConfig downstreamGate;
         // Heartbeat processing
         QUGATE_HeartbeatConfig inhCfg;
         sint64 inhBalance;
@@ -6385,6 +6390,61 @@ public:
                 {
                     state.mut()._idleDelinquentEpochs.set(locals.i, 0);
                 }
+
+                // Propagate exemption to downstream chain target and gate-as-recipient targets.
+                // This keeps downstream gates alive while the upstream is in a legitimate hold state
+                // (e.g. heartbeat inheritance pipeline, time-lock escrow chain).
+                if (locals.activeHold == 1)
+                {
+                    // Chain target
+                    if (locals.gate.chainNextGateId >= 0)
+                    {
+                        locals.downstreamSlot = (uint64)(locals.gate.chainNextGateId) & QUGATE_GATE_ID_SLOT_MASK;
+                        locals.downstreamGen = (uint64)(locals.gate.chainNextGateId) >> QUGATE_GATE_ID_SLOT_BITS;
+                        if (locals.downstreamSlot < state.get()._gateCount
+                            && locals.downstreamGen > 0
+                            && state.get()._gateGenerations.get(locals.downstreamSlot) == (uint16)(locals.downstreamGen - 1))
+                        {
+                            locals.downstreamGate = state.get()._gates.get(locals.downstreamSlot);
+                            if (locals.downstreamGate.active == 1)
+                            {
+                                locals.downstreamGate.lastActivityEpoch = qpi.epoch();
+                                if (state.get()._idleWindowEpochs > 0)
+                                {
+                                    locals.downstreamGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                                }
+                                state.mut()._gates.set(locals.downstreamSlot, locals.downstreamGate);
+                                state.mut()._idleDelinquentEpochs.set(locals.downstreamSlot, 0);
+                            }
+                        }
+                    }
+                    // Gate-as-recipient targets
+                    for (locals.downstreamIdx = 0; locals.downstreamIdx < locals.gate.recipientCount; locals.downstreamIdx++)
+                    {
+                        if (locals.gate.recipientGateIds.get(locals.downstreamIdx) >= 0)
+                        {
+                            locals.downstreamSlot = (uint64)(locals.gate.recipientGateIds.get(locals.downstreamIdx)) & QUGATE_GATE_ID_SLOT_MASK;
+                            locals.downstreamGen = (uint64)(locals.gate.recipientGateIds.get(locals.downstreamIdx)) >> QUGATE_GATE_ID_SLOT_BITS;
+                            if (locals.downstreamSlot < state.get()._gateCount
+                                && locals.downstreamGen > 0
+                                && state.get()._gateGenerations.get(locals.downstreamSlot) == (uint16)(locals.downstreamGen - 1))
+                            {
+                                locals.downstreamGate = state.get()._gates.get(locals.downstreamSlot);
+                                if (locals.downstreamGate.active == 1)
+                                {
+                                    locals.downstreamGate.lastActivityEpoch = qpi.epoch();
+                                    if (state.get()._idleWindowEpochs > 0)
+                                    {
+                                        locals.downstreamGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                                    }
+                                    state.mut()._gates.set(locals.downstreamSlot, locals.downstreamGate);
+                                    state.mut()._idleDelinquentEpochs.set(locals.downstreamSlot, 0);
+                                }
+                            }
+                        }
+                    }
+                }
+
                 continue;
             }
 
