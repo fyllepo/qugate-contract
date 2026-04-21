@@ -29,6 +29,7 @@ constexpr uint64 QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS = 20000;   // 2x for 8
 constexpr uint64 QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS = 15000;       // 1.5x for HEARTBEAT
 constexpr uint64 QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS = 15000;        // 1.5x for MULTISIG
 constexpr uint64 QUGATE_IDLE_CHAIN_EXTRA_BPS = 5000;                 // +0.5x if chained
+constexpr uint64 QUGATE_IDLE_SHIELD_PER_TARGET_BPS = 5000;          // +0.5x surcharge per downstream target shielded
 
 // Escalating fee: fee = baseFee * (1 + QPI::div(activeGates, FEE_ESCALATION_STEP))
 constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
@@ -1199,11 +1200,16 @@ public:
         uint64 maintenanceAmountPerShare;
         uint8  recentlyActive;
         uint8  activeHold;
-        // Downstream exemption propagation
+        // Downstream reserve drain
         uint8  downstreamIdx;
         uint64 downstreamSlot;
         uint64 downstreamGen;
         GateConfig downstreamGate;
+        uint64 downstreamIdleFee;
+        uint64 downstreamMultiplierBps;
+        uint8  downstreamCount;
+        uint64 downstreamBurnAmount;
+        uint64 downstreamDividendAmount;
         // Heartbeat processing
         QUGATE_HeartbeatConfig inhCfg;
         sint64 inhBalance;
@@ -6391,12 +6397,17 @@ public:
                     state.mut()._idleDelinquentEpochs.set(locals.i, 0);
                 }
 
-                // Propagate exemption to downstream chain target and gate-as-recipient targets.
-                // This keeps downstream gates alive while the upstream is in a legitimate hold state
-                // (e.g. heartbeat inheritance pipeline, time-lock escrow chain).
-                if (locals.activeHold == 1)
+                // Reserve drain: pay downstream gates' idle fees from the upstream gate's reserve.
+                // Also applies a shielding surcharge to the upstream gate's own idle fee.
+                // If the upstream reserve can't cover a downstream fee, that gate is left alone
+                // and will become delinquent through normal idle charging.
+                if (locals.activeHold == 1 && locals.gate.reserve > 0)
                 {
-                    // Chain target
+                    // Re-read the gate in case it was modified above
+                    locals.gate = state.get()._gates.get(locals.i);
+                    locals.downstreamCount = 0;
+
+                    // Count and pay for chain target
                     if (locals.gate.chainNextGateId >= 0)
                     {
                         locals.downstreamSlot = (uint64)(locals.gate.chainNextGateId) & QUGATE_GATE_ID_SLOT_MASK;
@@ -6408,17 +6419,48 @@ public:
                             locals.downstreamGate = state.get()._gates.get(locals.downstreamSlot);
                             if (locals.downstreamGate.active == 1)
                             {
-                                locals.downstreamGate.lastActivityEpoch = qpi.epoch();
-                                if (state.get()._idleWindowEpochs > 0)
+                                locals.downstreamCount++;
+                                // Compute downstream gate's effective idle fee
+                                locals.downstreamMultiplierBps = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
+                                if (locals.downstreamGate.recipientCount >= QUGATE_MAX_RECIPIENTS)
                                 {
-                                    locals.downstreamGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                                    locals.downstreamMultiplierBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
                                 }
-                                state.mut()._gates.set(locals.downstreamSlot, locals.downstreamGate);
-                                state.mut()._idleDelinquentEpochs.set(locals.downstreamSlot, 0);
+                                else if (locals.downstreamGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD)
+                                {
+                                    locals.downstreamMultiplierBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
+                                }
+                                if (locals.downstreamGate.chainNextGateId >= 0)
+                                {
+                                    locals.downstreamMultiplierBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
+                                }
+                                locals.downstreamIdleFee = QPI::div(state.get()._idleFee * locals.downstreamMultiplierBps, 10000ULL);
+
+                                if (locals.gate.reserve >= (sint64)locals.downstreamIdleFee)
+                                {
+                                    locals.gate.reserve -= locals.downstreamIdleFee;
+                                    locals.downstreamGate.lastActivityEpoch = qpi.epoch();
+                                    if (state.get()._idleWindowEpochs > 0)
+                                    {
+                                        locals.downstreamGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                                    }
+                                    state.mut()._gates.set(locals.downstreamSlot, locals.downstreamGate);
+                                    state.mut()._idleDelinquentEpochs.set(locals.downstreamSlot, 0);
+                                    state.mut()._totalMaintenanceCharged += locals.downstreamIdleFee;
+
+                                    locals.downstreamBurnAmount = QPI::div(locals.downstreamIdleFee * state.get()._feeBurnBps, 10000ULL);
+                                    locals.downstreamDividendAmount = locals.downstreamIdleFee - locals.downstreamBurnAmount;
+                                    qpi.burn(locals.downstreamBurnAmount);
+                                    state.mut()._totalBurned += locals.downstreamBurnAmount;
+                                    state.mut()._totalMaintenanceBurned += locals.downstreamBurnAmount;
+                                    state.mut()._earnedMaintenanceDividends += locals.downstreamDividendAmount;
+                                    state.mut()._totalMaintenanceDividends += locals.downstreamDividendAmount;
+                                }
                             }
                         }
                     }
-                    // Gate-as-recipient targets
+
+                    // Count and pay for gate-as-recipient targets
                     for (locals.downstreamIdx = 0; locals.downstreamIdx < locals.gate.recipientCount; locals.downstreamIdx++)
                     {
                         if (locals.gate.recipientGateIds.get(locals.downstreamIdx) >= 0)
@@ -6432,17 +6474,71 @@ public:
                                 locals.downstreamGate = state.get()._gates.get(locals.downstreamSlot);
                                 if (locals.downstreamGate.active == 1)
                                 {
-                                    locals.downstreamGate.lastActivityEpoch = qpi.epoch();
-                                    if (state.get()._idleWindowEpochs > 0)
+                                    locals.downstreamCount++;
+                                    locals.downstreamMultiplierBps = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
+                                    if (locals.downstreamGate.recipientCount >= QUGATE_MAX_RECIPIENTS)
                                     {
-                                        locals.downstreamGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                                        locals.downstreamMultiplierBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
                                     }
-                                    state.mut()._gates.set(locals.downstreamSlot, locals.downstreamGate);
-                                    state.mut()._idleDelinquentEpochs.set(locals.downstreamSlot, 0);
+                                    else if (locals.downstreamGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD)
+                                    {
+                                        locals.downstreamMultiplierBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
+                                    }
+                                    if (locals.downstreamGate.chainNextGateId >= 0)
+                                    {
+                                        locals.downstreamMultiplierBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
+                                    }
+                                    locals.downstreamIdleFee = QPI::div(state.get()._idleFee * locals.downstreamMultiplierBps, 10000ULL);
+
+                                    if (locals.gate.reserve >= (sint64)locals.downstreamIdleFee)
+                                    {
+                                        locals.gate.reserve -= locals.downstreamIdleFee;
+                                        locals.downstreamGate.lastActivityEpoch = qpi.epoch();
+                                        if (state.get()._idleWindowEpochs > 0)
+                                        {
+                                            locals.downstreamGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                                        }
+                                        state.mut()._gates.set(locals.downstreamSlot, locals.downstreamGate);
+                                        state.mut()._idleDelinquentEpochs.set(locals.downstreamSlot, 0);
+                                        state.mut()._totalMaintenanceCharged += locals.downstreamIdleFee;
+
+                                        locals.downstreamBurnAmount = QPI::div(locals.downstreamIdleFee * state.get()._feeBurnBps, 10000ULL);
+                                        locals.downstreamDividendAmount = locals.downstreamIdleFee - locals.downstreamBurnAmount;
+                                        qpi.burn(locals.downstreamBurnAmount);
+                                        state.mut()._totalBurned += locals.downstreamBurnAmount;
+                                        state.mut()._totalMaintenanceBurned += locals.downstreamBurnAmount;
+                                        state.mut()._earnedMaintenanceDividends += locals.downstreamDividendAmount;
+                                        state.mut()._totalMaintenanceDividends += locals.downstreamDividendAmount;
+                                    }
                                 }
                             }
                         }
                     }
+
+                    // Apply shielding surcharge: upstream gate's own idle fee increases
+                    // per downstream target it is paying for
+                    if (locals.downstreamCount > 0)
+                    {
+                        locals.downstreamIdleFee = QPI::div(
+                            state.get()._idleFee * (uint64)locals.downstreamCount * QUGATE_IDLE_SHIELD_PER_TARGET_BPS,
+                            10000ULL);
+                        if (locals.gate.reserve >= (sint64)locals.downstreamIdleFee)
+                        {
+                            locals.gate.reserve -= locals.downstreamIdleFee;
+                            state.mut()._totalMaintenanceCharged += locals.downstreamIdleFee;
+
+                            locals.downstreamBurnAmount = QPI::div(locals.downstreamIdleFee * state.get()._feeBurnBps, 10000ULL);
+                            locals.downstreamDividendAmount = locals.downstreamIdleFee - locals.downstreamBurnAmount;
+                            qpi.burn(locals.downstreamBurnAmount);
+                            state.mut()._totalBurned += locals.downstreamBurnAmount;
+                            state.mut()._totalMaintenanceBurned += locals.downstreamBurnAmount;
+                            state.mut()._earnedMaintenanceDividends += locals.downstreamDividendAmount;
+                            state.mut()._totalMaintenanceDividends += locals.downstreamDividendAmount;
+                        }
+                    }
+
+                    // Persist updated reserve
+                    state.mut()._gates.set(locals.i, locals.gate);
                 }
 
                 continue;
