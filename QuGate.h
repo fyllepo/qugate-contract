@@ -6345,7 +6345,10 @@ public:
 
             // Admin gate drain: any gate with an admin multisig pays its admin's idle fees.
             // Fires for all active gates regardless of hold state or recent activity.
-            if (locals.gate.adminGateId >= 0 && locals.gate.reserve > 0)
+            // The admin gate's activity is always refreshed when it governs an active gate,
+            // even if the governed gate cannot afford the drain fee. This prevents admin
+            // gates from expiring while they are still performing a governance function.
+            if (locals.gate.adminGateId >= 0)
             {
                 locals.adminDrainSlot = (uint64)(locals.gate.adminGateId) & QUGATE_GATE_ID_SLOT_MASK;
                 locals.adminDrainGen = (uint64)(locals.gate.adminGateId) >> QUGATE_GATE_ID_SLOT_BITS;
@@ -6356,28 +6359,34 @@ public:
                     locals.adminDrainGate = state.get()._gates.get(locals.adminDrainSlot);
                     if (locals.adminDrainGate.active == 1)
                     {
-                        locals.adminDrainFee = QPI::div(state.get()._idleFee * QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS, 10000ULL);
-                        if (locals.gate.reserve >= (sint64)locals.adminDrainFee)
+                        // Always refresh admin gate activity — it is actively governing
+                        locals.adminDrainGate.lastActivityEpoch = qpi.epoch();
+                        if (state.get()._idleWindowEpochs > 0)
                         {
-                            locals.gate.reserve -= locals.adminDrainFee;
-                            locals.adminDrainGate.lastActivityEpoch = qpi.epoch();
-                            if (state.get()._idleWindowEpochs > 0)
-                            {
-                                locals.adminDrainGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
-                            }
-                            state.mut()._gates.set(locals.adminDrainSlot, locals.adminDrainGate);
-                            state.mut()._gates.set(locals.i, locals.gate);
-                            state.mut()._idleDelinquentEpochs.set(locals.adminDrainSlot, 0);
-                            state.mut()._totalMaintenanceCharged += locals.adminDrainFee;
-
-                            locals.adminDrainBurn = QPI::div(locals.adminDrainFee * state.get()._feeBurnBps, 10000ULL);
-                            locals.adminDrainDividend = locals.adminDrainFee - locals.adminDrainBurn;
-                            qpi.burn(locals.adminDrainBurn);
-                            state.mut()._totalBurned += locals.adminDrainBurn;
-                            state.mut()._totalMaintenanceBurned += locals.adminDrainBurn;
-                            state.mut()._earnedMaintenanceDividends += locals.adminDrainDividend;
-                            state.mut()._totalMaintenanceDividends += locals.adminDrainDividend;
+                            locals.adminDrainGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
                         }
+                        state.mut()._idleDelinquentEpochs.set(locals.adminDrainSlot, 0);
+
+                        // Pay the admin's idle fee from the governed gate's reserve if possible
+                        if (locals.gate.reserve > 0)
+                        {
+                            locals.adminDrainFee = QPI::div(state.get()._idleFee * QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS, 10000ULL);
+                            if (locals.gate.reserve >= (sint64)locals.adminDrainFee)
+                            {
+                                locals.gate.reserve -= locals.adminDrainFee;
+                                state.mut()._gates.set(locals.i, locals.gate);
+                                state.mut()._totalMaintenanceCharged += locals.adminDrainFee;
+
+                                locals.adminDrainBurn = QPI::div(locals.adminDrainFee * state.get()._feeBurnBps, 10000ULL);
+                                locals.adminDrainDividend = locals.adminDrainFee - locals.adminDrainBurn;
+                                qpi.burn(locals.adminDrainBurn);
+                                state.mut()._totalBurned += locals.adminDrainBurn;
+                                state.mut()._totalMaintenanceBurned += locals.adminDrainBurn;
+                                state.mut()._earnedMaintenanceDividends += locals.adminDrainDividend;
+                                state.mut()._totalMaintenanceDividends += locals.adminDrainDividend;
+                            }
+                        }
+                        state.mut()._gates.set(locals.adminDrainSlot, locals.adminDrainGate);
                     }
                 }
             }
