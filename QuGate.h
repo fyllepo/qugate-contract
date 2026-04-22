@@ -1200,7 +1200,7 @@ public:
         uint64 maintenanceAmountPerShare;
         uint8  recentlyActive;
         uint8  activeHold;
-        // Downstream reserve drain
+        // Downstream reserve drain + admin gate drain
         uint8  downstreamIdx;
         uint64 downstreamSlot;
         uint64 downstreamGen;
@@ -1210,6 +1210,12 @@ public:
         uint8  downstreamCount;
         uint64 downstreamBurnAmount;
         uint64 downstreamDividendAmount;
+        uint64 adminDrainSlot;
+        uint64 adminDrainGen;
+        GateConfig adminDrainGate;
+        uint64 adminDrainFee;
+        uint64 adminDrainBurn;
+        uint64 adminDrainDividend;
         // Heartbeat processing
         QUGATE_HeartbeatConfig inhCfg;
         sint64 inhBalance;
@@ -6335,6 +6341,45 @@ public:
             if (locals.maintenanceEligible == 0 || state.get()._idleFee == 0)
             {
                 continue;
+            }
+
+            // Admin gate drain: any gate with an admin multisig pays its admin's idle fees.
+            // Fires for all active gates regardless of hold state or recent activity.
+            if (locals.gate.adminGateId >= 0 && locals.gate.reserve > 0)
+            {
+                locals.adminDrainSlot = (uint64)(locals.gate.adminGateId) & QUGATE_GATE_ID_SLOT_MASK;
+                locals.adminDrainGen = (uint64)(locals.gate.adminGateId) >> QUGATE_GATE_ID_SLOT_BITS;
+                if (locals.adminDrainSlot < state.get()._gateCount
+                    && locals.adminDrainGen > 0
+                    && state.get()._gateGenerations.get(locals.adminDrainSlot) == (uint16)(locals.adminDrainGen - 1))
+                {
+                    locals.adminDrainGate = state.get()._gates.get(locals.adminDrainSlot);
+                    if (locals.adminDrainGate.active == 1)
+                    {
+                        locals.adminDrainFee = QPI::div(state.get()._idleFee * QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS, 10000ULL);
+                        if (locals.gate.reserve >= (sint64)locals.adminDrainFee)
+                        {
+                            locals.gate.reserve -= locals.adminDrainFee;
+                            locals.adminDrainGate.lastActivityEpoch = qpi.epoch();
+                            if (state.get()._idleWindowEpochs > 0)
+                            {
+                                locals.adminDrainGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                            }
+                            state.mut()._gates.set(locals.adminDrainSlot, locals.adminDrainGate);
+                            state.mut()._gates.set(locals.i, locals.gate);
+                            state.mut()._idleDelinquentEpochs.set(locals.adminDrainSlot, 0);
+                            state.mut()._totalMaintenanceCharged += locals.adminDrainFee;
+
+                            locals.adminDrainBurn = QPI::div(locals.adminDrainFee * state.get()._feeBurnBps, 10000ULL);
+                            locals.adminDrainDividend = locals.adminDrainFee - locals.adminDrainBurn;
+                            qpi.burn(locals.adminDrainBurn);
+                            state.mut()._totalBurned += locals.adminDrainBurn;
+                            state.mut()._totalMaintenanceBurned += locals.adminDrainBurn;
+                            state.mut()._earnedMaintenanceDividends += locals.adminDrainDividend;
+                            state.mut()._totalMaintenanceDividends += locals.adminDrainDividend;
+                        }
+                    }
+                }
             }
 
             locals.delinquentEpoch = state.get()._idleDelinquentEpochs.get(locals.i);
