@@ -6039,6 +6039,15 @@ public:
             return;
         }
 
+        // Prevent governing an admin-only multisig — admin gates govern fund-flow gates
+        if (locals.gate.mode == QUGATE_MODE_MULTISIG && locals.gate.recipientCount == 0)
+        {
+            output.status = QUGATE_INVALID_ADMIN_GATE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
         // Prevent self-referential admin gate
         if (locals.adminSlot == locals.slotIdx)
         {

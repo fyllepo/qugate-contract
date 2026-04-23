@@ -2346,6 +2346,8 @@ public:
         if (adminSlot >= state.get()._gateCount || !gateIdMatchesCurrentGeneration(adminGateId)) return QUGATE_INVALID_ADMIN_GATE;
         GateConfig adminGate = state.get()._gates.get(adminSlot);
         if (adminGate.active == 0 || adminGate.mode != MODE_MULTISIG) return QUGATE_INVALID_ADMIN_GATE;
+        // Reject governing an admin-only multisig — admin gates govern fund-flow gates
+        if (gate.mode == MODE_MULTISIG && gate.recipientCount == 0) return QUGATE_INVALID_ADMIN_GATE;
 
         uint64 walkSlot = adminSlot;
         for (uint8 step = 0; step < QUGATE_MAX_CHAIN_DEPTH; step++)
@@ -5438,18 +5440,33 @@ TEST(QuGateAdmin, SetAdminGateCycleRejected)
 {
     QuGateTest env;
     id recips[] = { BOB };
-    uint64 ratios[] = { 100 };
+    uint64 ratios[] = { 10000 };
     id guardians[] = { BOB };
-    // All three gates must be MULTISIG so they can serve as admin gates
-    auto a = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    // Fund-flow multisig gates (recipientCount > 0) — admin-only gates can't be governed
+    auto a = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
     ASSERT_EQ(env.configureMultisig(ALICE, a.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
-    auto b = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    auto b = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
     ASSERT_EQ(env.configureMultisig(ALICE, b.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
-    auto c = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    auto c = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
     ASSERT_EQ(env.configureMultisig(ALICE, c.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
     ASSERT_EQ(env.setAdminGate(ALICE, a.gateId, b.gateId), QUGATE_SUCCESS);
     ASSERT_EQ(env.setAdminGate(ALICE, b.gateId, c.gateId), QUGATE_SUCCESS);
     EXPECT_EQ(env.setAdminGate(ALICE, c.gateId, a.gateId), QUGATE_INVALID_ADMIN_CYCLE);
+}
+
+// Admin-only multisig cannot be governed by another admin gate
+TEST(QuGateAdmin, AdminOnlyMultisigCannotBeGoverned)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    id guardians[] = { BOB };
+    auto adminOnly = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    ASSERT_EQ(env.configureMultisig(ALICE, adminOnly.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    auto otherAdmin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    ASSERT_EQ(env.configureMultisig(ALICE, otherAdmin.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    // Trying to govern an admin-only multisig should fail
+    EXPECT_EQ(env.setAdminGate(ALICE, adminOnly.gateId, otherAdmin.gateId), QUGATE_INVALID_ADMIN_GATE);
 }
 
 // Gate mutation is blocked until admin gate approval is obtained
