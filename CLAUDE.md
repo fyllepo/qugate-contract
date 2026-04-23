@@ -25,8 +25,10 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 - **Deferred routing pattern**: Mode processors can't call `routeToGate` directly (circular struct). They populate `deferredGateSlots/deferredGateAmounts` in output. Callers dispatch.
 - **Chain forwarding**: `chainNextGateId` forwards remaining balance after distribution. Max 3 hops. All active modes supported.
 - **Unified reserve**: Single `reserve` field per gate covers both chain hop fees and idle maintenance. Excess creation fee auto-seeds it. `fundGate(gateId)` tops it up.
-- **Governed fee split**: `_feeBurnBps` state variable (default 5000 = 50%, range 3000-7000). Applied to creation fees and idle maintenance.
-- **Complexity-based idle fees**: Base fee (25K) scaled by gate complexity: 1x simple, 1.5x for 3+ recipients/HEARTBEAT/MULTISIG, 2x for 8 recipients, +0.5x for chain links.
+- **Governed fee split**: `_feeBurnBps` state variable (default 5000 = 50%, range 3000-7000). Applied to creation fees, idle maintenance, heartbeat pings, and heartbeat config fees.
+- **Complexity-based idle fees**: Base fee (25K) scaled by gate complexity: 1x simple, 1.5x for 3+ recipients/HEARTBEAT/MULTISIG, 2x for 8 recipients, +0.5x for chain links. Downstream drain and admin drain also use complexity multipliers.
+- **Heartbeat pay-per-cycle**: `heartbeat()` charges the gate's full per-cycle maintenance cost (own idle fee + downstream drain + surcharge + admin drain). `configureHeartbeat()` charges threshold-scaled fee: `creationFee * (1 + thresholdEpochs / idleWindow)`.
+- **Admin gate expiry exemption**: Admin-only multisigs that govern at least one active gate are exempt from expiry (scanned in expiry loop). Admin drain only refreshes activity on successful payment.
 - **Transfer-first**: All `qpi.transfer()` calls check `>= 0` before mutating state. Tagged `[QG-01]` through `[QG-17]`.
 - **invReward capture**: Every procedure captures `qpi.invocationReward()` into `locals.invReward` at entry.
 
@@ -54,11 +56,13 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 5. **No preprocessor directives** (`#define`, `#ifndef`) — `qubic-contract-verify` rejects them
 6. **Global scope names** must start with `QUGATE` (structs outside the main struct)
 7. **`recipientCount=0` is valid** for HEARTBEAT, MULTISIG, TIME_LOCK modes
-8. **Expiry exemptions**: TIME_LOCK (active+unfired), HEARTBEAT (active+untriggered), MULTISIG (has balance) — exempt from inactivity expiry in END_EPOCH
+8. **Expiry exemptions**: TIME_LOCK (active+unfired), HEARTBEAT (active+untriggered), MULTISIG (has balance), admin-only MULTISIG (governs active gate) — exempt from inactivity expiry in END_EPOCH
+9. **Drain fires per idle cycle** — admin drain and downstream reserve drain check `nextIdleChargeEpoch` to fire once per idle window, not every epoch
+10. **configureHeartbeat charges after validation** — all validation (gate ID, auth, mode, params) completes before the threshold-scaled fee is charged. Rejected calls are fully refunded.
 
 ## Testing
-- `contract_qugate.cpp` — 70 unit tests (Google Test, Allman style)
-- `tests/` — 17 Python integration tests (require live testnet node at 127.0.0.1:41841)
+- `contract_qugate.cpp` — 205 unit tests (Google Test, Allman style)
+- `tests/` — 18 Python integration test files, 132 scenarios (require live testnet node at 127.0.0.1:41841)
 - CI: style lint ✅, integration tests skip in CI ✅
 - Guard rails: `scripts/contract_guard.py` checks harness constant drift, public-function/private-procedure misuse, and warns on large locals hotspots
 
