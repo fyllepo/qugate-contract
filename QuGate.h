@@ -4004,22 +4004,6 @@ public:
             return;
         }
 
-        // All validation passed — charge anti-spam fee (1,000 QU burned)
-        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
-        {
-            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
-            output.status = QUGATE_INSUFFICIENT_FEE;
-            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
-            LOG_INFO(locals.logger);
-            return;
-        }
-        qpi.burn(QUGATE_CHAIN_HOP_FEE);
-        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
-        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
-        {
-            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
-        }
-
         // Update last activity epoch
         locals.gate.lastActivityEpoch = qpi.epoch();
         if (state.get()._idleWindowEpochs > 0)
@@ -4088,13 +4072,24 @@ public:
             }
         }
 
+        // All validation passed — charge anti-spam fee (1,000 QU burned)
+        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
+        {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+            output.status = QUGATE_INSUFFICIENT_FEE;
+            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
+            LOG_INFO(locals.logger);
+            return;
+        }
+        qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
+        {
+            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
+        }
+
         state.mut()._gates.set(locals.slotIdx, locals.gate);
         state.mut()._allowedSendersConfigs.set(locals.slotIdx, locals.asCfg);
-
-        if (locals.invReward > 0)
-        {
-            qpi.transfer(qpi.invocator(), locals.invReward);
-        }
 
         if (locals.adminApprovalUsed == 1)
         {
@@ -5239,22 +5234,6 @@ public:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        // Anti-spam fee: 1,000 QU burned upfront (non-refundable on rejection)
-        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
-        {
-            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
-            output.status = QUGATE_INSUFFICIENT_FEE;
-            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
-            LOG_INFO(locals.logger);
-            return;
-        }
-        qpi.burn(QUGATE_CHAIN_HOP_FEE);
-        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
-        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
-        {
-            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
-        }
-
         // Decode versioned gateId
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
         locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
@@ -5263,6 +5242,7 @@ public:
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
@@ -5308,6 +5288,7 @@ public:
             }
             if (locals.adminAuth == 0)
             {
+                if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
                 output.status = QUGATE_UNAUTHORIZED;
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
                 LOG_WARNING(locals.logger);
@@ -5318,6 +5299,7 @@ public:
         // Gate must be active
         if (locals.gate.active == 0)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
@@ -5327,6 +5309,7 @@ public:
         // Gate must be MULTISIG mode
         if (locals.gate.mode != QUGATE_MODE_MULTISIG)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_MULTISIG_INVALID_CONFIG;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -5345,6 +5328,7 @@ public:
             }
             else
             {
+                if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
                 output.status = QUGATE_MULTISIG_PROPOSAL_ACTIVE;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                 LOG_WARNING(locals.logger);
@@ -5355,6 +5339,7 @@ public:
         // Validate guardianCount 1-8
         if (input.guardianCount == 0 || input.guardianCount > 8)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_MULTISIG_INVALID_CONFIG;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -5364,6 +5349,7 @@ public:
         // Validate required 1-guardianCount
         if (input.required == 0 || input.required > input.guardianCount)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_MULTISIG_INVALID_CONFIG;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -5373,6 +5359,7 @@ public:
         // Validate proposalExpiryEpochs >= 1
         if (input.proposalExpiryEpochs == 0)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_MULTISIG_INVALID_CONFIG;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -5382,6 +5369,7 @@ public:
         // Validate adminApprovalWindowEpochs >= 1
         if (input.adminApprovalWindowEpochs == 0)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_MULTISIG_INVALID_CONFIG;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -5395,12 +5383,29 @@ public:
             {
                 if (input.guardians.get(locals.i) == input.guardians.get(locals.j))
                 {
+                    if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
                     output.status = QUGATE_MULTISIG_INVALID_CONFIG;
                     locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                     LOG_WARNING(locals.logger);
                     return;
                 }
             }
+        }
+
+        // All validation passed — charge anti-spam fee (1,000 QU burned)
+        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
+        {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+            output.status = QUGATE_INSUFFICIENT_FEE;
+            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
+            LOG_INFO(locals.logger);
+            return;
+        }
+        qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
+        {
+            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
         }
 
         // Store config, reset any active proposal
@@ -5520,6 +5525,7 @@ public:
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
@@ -5565,6 +5571,7 @@ public:
             }
             if (locals.adminAuth == 0)
             {
+                if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
                 output.status = QUGATE_UNAUTHORIZED;
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
                 LOG_WARNING(locals.logger);
@@ -5575,6 +5582,7 @@ public:
         // Gate must be active
         if (locals.gate.active == 0)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
@@ -5584,6 +5592,7 @@ public:
         // Gate must be TIME_LOCK mode
         if (locals.gate.mode != QUGATE_MODE_TIME_LOCK)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_MODE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -5595,6 +5604,7 @@ public:
         {
             if (input.unlockEpoch <= (uint32)qpi.epoch())
             {
+                if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
                 output.status = QUGATE_TIME_LOCK_EPOCH_PAST;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                 LOG_WARNING(locals.logger);
@@ -5605,6 +5615,7 @@ public:
         {
             if (input.delayEpochs == 0)
             {
+                if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
                 output.status = QUGATE_INVALID_PARAMS;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                 LOG_WARNING(locals.logger);
@@ -5613,6 +5624,7 @@ public:
         }
         else
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_PARAMS;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -5719,22 +5731,6 @@ public:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        // Anti-spam fee: 1,000 QU burned upfront
-        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
-        {
-            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
-            output.status = QUGATE_INSUFFICIENT_FEE;
-            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
-            LOG_INFO(locals.logger);
-            return;
-        }
-        qpi.burn(QUGATE_CHAIN_HOP_FEE);
-        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
-        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
-        {
-            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
-        }
-
         // Decode versioned gateId
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
         locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
@@ -5743,6 +5739,7 @@ public:
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
@@ -5788,6 +5785,7 @@ public:
             }
             if (locals.adminAuth == 0)
             {
+                if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
                 output.status = QUGATE_UNAUTHORIZED;
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
                 LOG_WARNING(locals.logger);
@@ -5798,6 +5796,7 @@ public:
         // Gate must be active
         if (locals.gate.active == 0)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
@@ -5807,6 +5806,7 @@ public:
         // Gate must be TIME_LOCK mode
         if (locals.gate.mode != QUGATE_MODE_TIME_LOCK)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_MODE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -5818,6 +5818,7 @@ public:
         // Config must be active
         if (locals.cfg.active == 0)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
@@ -5827,6 +5828,7 @@ public:
         // Cannot cancel if already fired
         if (locals.cfg.fired == 1)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_TIME_LOCK_ALREADY_FIRED;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -5836,6 +5838,7 @@ public:
         // Cannot cancel if already cancelled
         if (locals.cfg.cancelled == 1)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
@@ -5845,6 +5848,7 @@ public:
         // Must be cancellable
         if (locals.cfg.cancellable == 0)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_TIME_LOCK_NOT_CANCELLABLE;
             locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
             LOG_WARNING(locals.logger);
@@ -5873,10 +5877,27 @@ public:
 
         if (locals.gate.currentBalance > 0 || locals.gate.reserve > 0)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_PARAMS;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
+        }
+
+        // All validation and owner refunds passed — charge anti-spam fee (1,000 QU burned)
+        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
+        {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+            output.status = QUGATE_INSUFFICIENT_FEE;
+            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
+            LOG_INFO(locals.logger);
+            return;
+        }
+        qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
+        {
+            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
         }
 
         // Mark cancelled
@@ -5978,22 +5999,6 @@ public:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        // Anti-spam fee: 1,000 QU burned upfront
-        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
-        {
-            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
-            output.status = QUGATE_INSUFFICIENT_FEE;
-            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
-            LOG_INFO(locals.logger);
-            return;
-        }
-        qpi.burn(QUGATE_CHAIN_HOP_FEE);
-        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
-        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
-        {
-            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
-        }
-
         // Decode versioned gateId
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
         locals.encodedGen = (input.gateId >> QUGATE_GATE_ID_SLOT_BITS);
@@ -6002,6 +6007,7 @@ public:
             || locals.encodedGen == 0
             || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_GATE_ID;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
             LOG_WARNING(locals.logger);
@@ -6013,6 +6019,7 @@ public:
         // Gate must be active
         if (locals.gate.active == 0)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_GATE_NOT_ACTIVE;
             locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
             LOG_WARNING(locals.logger);
@@ -6026,6 +6033,7 @@ public:
             // Changes require an active approval window from the current admin gate.
             if (locals.gate.adminGateId < 0)
             {
+                if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
                 output.status = QUGATE_UNAUTHORIZED;
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
                 LOG_WARNING(locals.logger);
@@ -6054,6 +6062,20 @@ public:
                 }
                 if (locals.adminApproved == 1)
                 {
+                    if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
+                    {
+                        if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+                        output.status = QUGATE_INSUFFICIENT_FEE;
+                        locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
+                        LOG_INFO(locals.logger);
+                        return;
+                    }
+                    qpi.burn(QUGATE_CHAIN_HOP_FEE);
+                    state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+                    if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
+                    {
+                        qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
+                    }
                     locals.gate.adminGateId = -1;
                     state.mut()._gates.set(locals.slotIdx, locals.gate);
                     output.status = QUGATE_SUCCESS;
@@ -6095,6 +6117,7 @@ public:
             }
             if (locals.adminApproved == 0)
             {
+                if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
                 output.status = QUGATE_ADMIN_GATE_REQUIRED;
                 locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
                 LOG_WARNING(locals.logger);
@@ -6104,6 +6127,20 @@ public:
         // Clear admin gate
         if (input.adminGateId == -1)
         {
+            if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
+            {
+                if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+                output.status = QUGATE_INSUFFICIENT_FEE;
+                locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
+                LOG_INFO(locals.logger);
+                return;
+            }
+            qpi.burn(QUGATE_CHAIN_HOP_FEE);
+            state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+            if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
+            {
+                qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
+            }
             locals.gate.adminGateId = -1;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
             if (locals.adminApprovalUsed == 1)
@@ -6130,6 +6167,7 @@ public:
             || locals.adminEncodedGen == 0
             || state.get()._gateGenerations.get(locals.adminSlot) != (uint16)(locals.adminEncodedGen - 1))
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_ADMIN_GATE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -6139,6 +6177,7 @@ public:
         locals.adminGate = state.get()._gates.get(locals.adminSlot);
         if (locals.adminGate.active == 0 || locals.adminGate.mode != QUGATE_MODE_MULTISIG)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_ADMIN_GATE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -6148,6 +6187,7 @@ public:
         // Prevent governing an admin-only multisig — admin gates govern fund-flow gates
         if (locals.gate.mode == QUGATE_MODE_MULTISIG && locals.gate.recipientCount == 0)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_ADMIN_GATE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -6157,6 +6197,7 @@ public:
         // Prevent self-referential admin gate
         if (locals.adminSlot == locals.slotIdx)
         {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_ADMIN_CYCLE;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
@@ -6176,6 +6217,7 @@ public:
             locals.nextAdminGen = (uint64)(locals.walkGate.adminGateId) >> QUGATE_GATE_ID_SLOT_BITS;
             if (locals.nextAdminSlot == locals.slotIdx)
             {
+                if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
                 output.status = QUGATE_INVALID_ADMIN_CYCLE;
                 locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
                 LOG_WARNING(locals.logger);
@@ -6189,6 +6231,21 @@ public:
                 break;
             }
             locals.walkSlot = locals.nextAdminSlot;
+        }
+
+        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
+        {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+            output.status = QUGATE_INSUFFICIENT_FEE;
+            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
+            LOG_INFO(locals.logger);
+            return;
+        }
+        qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
+        {
+            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
         }
 
         // Set admin gate

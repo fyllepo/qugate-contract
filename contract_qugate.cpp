@@ -273,6 +273,7 @@ constexpr uint64 QUGATE_FEE_DIVIDEND_BPS = 5000;     // 50% to shareholders
 
 // Idle maintenance defaults
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_FEE = 25000;
+constexpr sint64 QUGATE_HEARTBEAT_PING_FEE = 1000;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_INTERVAL_EPOCHS = 4;
 constexpr uint64 QUGATE_DEFAULT_MAINTENANCE_GRACE_EPOCHS = 4;
 
@@ -1346,9 +1347,18 @@ public:
             }
         }
 
-        // Anti-spam fee
+        if (reward < QUGATE_CHAIN_HOP_FEE)
+        {
+            if (reward > 0) qpi.transfer(caller, reward);
+            output.status = QUGATE_INSUFFICIENT_FEE;
+            return output;
+        }
         qpi.burn(QUGATE_CHAIN_HOP_FEE);
         state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+        if (reward > QUGATE_CHAIN_HOP_FEE)
+        {
+            qpi.transfer(caller, reward - QUGATE_CHAIN_HOP_FEE);
+        }
 
         gate.lastActivityEpoch = qpi.epoch();
         gate.recipientCount = input.recipientCount;
@@ -1384,7 +1394,6 @@ public:
         state.mut()._gates.set(input.gateId - 1, gate);
         state.mut()._allowedSendersConfigs.set(input.gateId - 1, asCfg);
 
-        if (reward > 0) qpi.transfer(caller, reward);
         return output;
     }
 
@@ -2378,7 +2387,6 @@ public:
             walkSlot = nextAdminSlot;
         }
 
-        // Anti-spam fee
         qpi.burn(QUGATE_CHAIN_HOP_FEE);
         state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
 
@@ -2587,10 +2595,6 @@ public:
     {
         qpi.reset();
         qpi._invocator = caller;
-        // Anti-spam fee (upfront)
-        qpi.burn(QUGATE_CHAIN_HOP_FEE);
-        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
-
         if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
         uint64 idx = gateId - 1;
         GateConfig gate = state.get()._gates.get(idx);
@@ -2631,6 +2635,9 @@ public:
             return QUGATE_INVALID_PARAMS;
         }
 
+        qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+
         // Mark cancelled, close gate
         cfg.cancelled = 1;
         state.mut()._timeLockConfigs.set(idx, cfg);
@@ -2652,10 +2659,6 @@ public:
     {
         qpi.reset();
         qpi._invocator = caller;
-        // Anti-spam fee (upfront)
-        qpi.burn(QUGATE_CHAIN_HOP_FEE);
-        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
-
         if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
         uint64 idx = gateId - 1;
         GateConfig gate = state.get()._gates.get(idx);
@@ -2677,6 +2680,9 @@ public:
         {
             return QUGATE_MULTISIG_PROPOSAL_ACTIVE;
         }
+
+        qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
 
         QUGATE_MultisigConfig_Test cfg;
         memset(&cfg, 0, sizeof(cfg));
@@ -3842,7 +3848,8 @@ TEST(QuGateV3, LastActivityEpochUpdatesOnUpdate)
     in.recipientCount = 1;
     in.recipients.set(0, CHARLIE);
     in.ratios.set(0, 100);
-    env.updateGate(ALICE, 0, in);
+    auto updateOut = env.updateGate(ALICE, QUGATE_CHAIN_HOP_FEE, in);
+    ASSERT_EQ(updateOut.status, QUGATE_SUCCESS);
 
     auto gate = env.getGate(out.gateId);
     EXPECT_EQ(gate.lastActivityEpoch, 130);
@@ -5278,7 +5285,7 @@ TEST(QuGateHeartbeat, HeartbeatPingWithDownstreamCostsMore)
     uint64 ratios[] = { 10000 };
     auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     auto hb = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 0, recips, ratios);
-    ASSERT_EQ(env.setChain(ALICE, hb.gateId, downstream.gateId), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setChain(ALICE, hb.gateId, downstream.gateId, QUGATE_CHAIN_HOP_FEE).result, QUGATE_SUCCESS);
     id beneficiaries[] = { BOB };
     uint8 shares[] = { 100 };
     ASSERT_EQ(env.configureHeartbeat(ALICE, hb.gateId, 8, 25, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
@@ -6353,6 +6360,123 @@ TEST(QuGateFinancial, SetChainExcessFeeRefunded)
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 4000);
 }
 
+// updateGate burns the anti-spam fee exactly once after validation and refunds excess
+TEST(QuGateFinancial, UpdateGateAntiSpamFeeBurnsOnceAfterValidation)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    updateGate_input in;
+    memset(&in, 0, sizeof(in));
+    for (uint8 _ri = 0; _ri < 8; _ri++) in.recipientGateIds.set(_ri, -1);
+    in.gateId = out.gateId;
+    in.recipientCount = 1;
+    in.recipients.set(0, CHARLIE);
+    in.ratios.set(0, 100);
+
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    auto updateOut = env.updateGate(ALICE, 5000, in);
+    EXPECT_EQ(updateOut.status, QUGATE_SUCCESS);
+    EXPECT_EQ(env.qpi.totalBurned, QUGATE_CHAIN_HOP_FEE);
+    EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, QUGATE_CHAIN_HOP_FEE);
+    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 4000);
+}
+
+// Rejected updateGate calls refund the attached QU and do not burn the anti-spam fee
+TEST(QuGateFinancial, UpdateGateRejectedDoesNotBurnAntiSpamFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    updateGate_input in;
+    memset(&in, 0, sizeof(in));
+    for (uint8 _ri = 0; _ri < 8; _ri++) in.recipientGateIds.set(_ri, -1);
+    in.gateId = out.gateId;
+    in.recipientCount = 1;
+    in.recipients.set(0, CHARLIE);
+    in.ratios.set(0, 100);
+    in.recipientGateIds.set(0, 999999);
+
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    auto updateOut = env.updateGate(ALICE, 5000, in);
+    EXPECT_EQ(updateOut.status, QUGATE_INVALID_GATE_RECIPIENT);
+    EXPECT_EQ(env.qpi.totalBurned, 0);
+    EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, 0ULL);
+    EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 5000);
+}
+
+// Invalid multisig configuration should not burn the anti-spam fee
+TEST(QuGateFinancial, ConfigureMultisigRejectedDoesNotBurnAntiSpamFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    id guardians[] = { BOB };
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    auto cfgStatus = env.configureMultisig(ALICE, out.gateId, guardians, 0, 1, 5, 3);
+    EXPECT_EQ(cfgStatus, QUGATE_MULTISIG_INVALID_CONFIG);
+    EXPECT_EQ(env.qpi.totalBurned, 0);
+    EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, 0ULL);
+}
+
+// Invalid time-lock configuration should not burn the duration-scaled fee
+TEST(QuGateFinancial, ConfigureTimeLockRejectedDoesNotBurnFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    auto cfgStatus = env.configureTimeLock(ALICE, out.gateId, env.qpi.epoch(), QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1);
+    EXPECT_EQ(cfgStatus, QUGATE_TIME_LOCK_EPOCH_PAST);
+    EXPECT_EQ(env.qpi.totalBurned, 0);
+    EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, 0ULL);
+}
+
+// Rejected time-lock cancellation should not burn the anti-spam fee
+TEST(QuGateFinancial, CancelTimeLockRejectedDoesNotBurnAntiSpamFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 200, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 0), QUGATE_SUCCESS);
+
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    auto cancelStatus = env.cancelTimeLock(ALICE, out.gateId);
+    EXPECT_EQ(cancelStatus, QUGATE_TIME_LOCK_NOT_CANCELLABLE);
+    EXPECT_EQ(env.qpi.totalBurned, 0);
+    EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, 0ULL);
+}
+
+// Rejected admin-gate assignment should not burn the anti-spam fee
+TEST(QuGateFinancial, SetAdminGateRejectedDoesNotBurnAntiSpamFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(target.status, QUGATE_SUCCESS);
+
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    auto status = env.setAdminGate(ALICE, target.gateId, target.gateId);
+    EXPECT_EQ(status, QUGATE_INVALID_ADMIN_CYCLE);
+    EXPECT_EQ(env.qpi.totalBurned, 0);
+    EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, 0ULL);
+}
+
 // Excess creation fee above required amount goes to gate reserve
 TEST(QuGateFinancial, ExcessCreationFeeSeedsReserve)
 {
@@ -6903,7 +7027,7 @@ TEST(QuGateEdge, UpdateGateWhileHoldingFunds)
     in.recipients.set(0, CHARLIE);
     in.ratios.set(0, 10000);
     in.threshold = 20000;
-    auto updateOut = env.updateGate(ALICE, 0, in);
+    auto updateOut = env.updateGate(ALICE, QUGATE_CHAIN_HOP_FEE, in);
     EXPECT_EQ(updateOut.status, QUGATE_SUCCESS);
     // Funds still held
     EXPECT_EQ(env.getGate(out.gateId).currentBalance, 10000ULL);
@@ -7137,7 +7261,7 @@ TEST(QuGateIdle, IdleActiveHoldExemptionThreshold)
     EXPECT_EQ(env.getGate(out.gateId).currentBalance, 10000ULL);
 
     // Advance way past idle window — but threshold gate with balance is exempt
-    env.qpi._epoch = 120;
+    env.qpi._epoch = 149;
     env.endEpoch();
     EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), 0);
     EXPECT_EQ(env.getGate(out.gateId).active, 1);
@@ -7681,9 +7805,12 @@ TEST(QuGateIdle, AdminGateDrainFromGovernedGateReserve)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 10000 };
-    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 0, recips, ratios);
     auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
     id guardians[] = { BOB };
+    ASSERT_EQ(env.configureHeartbeat(ALICE, target.gateId, 60, 25, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
     ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 10, 5), QUGATE_SUCCESS);
     ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_SUCCESS);
     ASSERT_EQ(env.fundGate(ALICE, target.gateId, 200000).result, QUGATE_SUCCESS);
@@ -7709,11 +7836,13 @@ TEST(QuGateIdle, AdminGateSurvivesWhenGovernedGateHasNoReserve)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 10000 };
-    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
     auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
     id guardians[] = { BOB };
+    ASSERT_EQ(env.configureTimeLock(ALICE, target.gateId, 300, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
     ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 10, 5), QUGATE_SUCCESS);
     ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_SUCCESS);
+    ASSERT_EQ(env.sendToGate(ALICE, target.gateId, 1000).status, QUGATE_SUCCESS);
     // No reserve funded on target — admin drain fee cannot be paid
 
     env.qpi._epoch = 104;
@@ -7725,9 +7854,13 @@ TEST(QuGateIdle, AdminGateSurvivesWhenGovernedGateHasNoReserve)
     uint16 adminDelinquent = env.state.get()._idleDelinquentEpochs.get(admin.gateId - 1);
     EXPECT_GT(adminDelinquent, (uint16)0); // Delinquent because no fee was paid
 
-    // Even after grace period, admin gate survives because it still governs an active gate
-    env.qpi._epoch = 150; // Well past grace period and 50-epoch expiry
+    // Even after the admin's delinquency grace window, the exemption should
+    // keep it alive while the governed TIME_LOCK gate remains active.
+    env.qpi._epoch = 150;
     env.endEpoch();
+    auto targetLater = env.getGate(target.gateId);
+    EXPECT_EQ(targetLater.active, 1);
+    EXPECT_GT(targetLater.adminGateId, 0);
     auto adminLater = env.getGate(admin.gateId);
     EXPECT_EQ(adminLater.active, 1); // Still alive — expiry exemption
 }

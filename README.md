@@ -1,8 +1,8 @@
 # QuGate — A Payment Automation Primitive for Qubic
 
-QuGate is a **network primitive** — shared, permissionless payment routing infrastructure for the Qubic network. One shared contract that the entire ecosystem can use, instead of every project building its own payment logic. Creation, dust, and chain-hop fees are burned. Idle gates maintain a reserve-backed inactivity budget, with upkeep split between burn and dividends.
+QuGate is a **network primitive** — shared, permissionless payment routing infrastructure for the Qubic network. One shared contract that the entire ecosystem can use, instead of every project building its own payment logic. Creation, heartbeat/time-lock configuration, heartbeat ping, and idle maintenance fees follow the governed burn/dividend split. Successful anti-spam mutations, dust, and chain-hop fees are 100% burned. Idle gates maintain a reserve-backed inactivity budget so long-lived infrastructure pays for the state it consumes.
 
-**Status**: Testnet verified. 187 unit tests passing, 132/132 integration scenarios passing.
+**Status**: Testnet verified. 213 unit tests passing, 132/132 integration scenarios passing.
 **Author**: fyllepo (Discord: phileepphilop)
 **Repository**: [github.com/fyllepo/qugate-contract](https://github.com/fyllepo/qugate-contract)
 
@@ -131,7 +131,7 @@ Mode slot 5 is reserved for future use. `createGate` with `mode=5` returns `QUGA
 
 ## HEARTBEAT Gate (Mode 6)
 
-A heartbeat gate holds funds and distributes them to beneficiaries if the owner stops sending periodic `heartbeat()` signals. Ideal for dead man's switch, inheritance, or automated recurring distributions.
+A heartbeat gate holds funds and distributes them to wallet beneficiaries if the owner stops sending periodic `heartbeat()` signals. Ideal for dead man's switch, inheritance, or automated recurring distributions.
 
 ### Setup
 1. Create a gate with `mode=6`
@@ -148,8 +148,8 @@ A heartbeat gate holds funds and distributes them to beneficiaries if the owner 
 | beneficiaries | Up to 8 addresses with sharePercent summing to 100 |
 
 ### Procedures
-- `configureHeartbeat(gateId, thresholdEpochs, payoutPercent, minimumBalance, beneficiaries[])` — owner only
-- `heartbeat(gateId)` — owner only, resets epoch counter. Rejected after trigger.
+- `configureHeartbeat(gateId, thresholdEpochs, payoutPercent, minimumBalance, beneficiaries[])` — owner only, charges a threshold-scaled fee after validation
+- `heartbeat(gateId)` — owner only, resets epoch counter and charges a pro-rated maintenance cost with a 1,000 QU floor. Rejected after trigger.
 - `getHeartbeat(gateId)` — read-only query
 
 ### Example use cases
@@ -205,7 +205,8 @@ configureMultisig(
   gateId: 4294967297,
   guardians: [GUARDIAN_1, GUARDIAN_2, GUARDIAN_3],
   required: 2,
-  proposalExpiryEpochs: 4
+  proposalExpiryEpochs: 4,
+  adminApprovalWindowEpochs: 4
 )
 // 2-of-3 guardians vote → can update the HEARTBEAT gate's beneficiaries
 ```
@@ -225,7 +226,7 @@ A multisig gate holds funds until M-of-N designated guardians send approval tran
 
 ### Setup
 1. Create a gate with `mode=7`
-2. Call `configureMultisig()` with guardian addresses, required count, and expiry
+2. Call `configureMultisig()` with guardian addresses, required count, proposal expiry, and admin approval window
 3. Anyone can fund the gate by sending QU
 4. Guardians vote by sending any amount to the gate address
 5. When M guardians have voted, funds release to `recipients[0]`
@@ -236,9 +237,10 @@ A multisig gate holds funds until M-of-N designated guardians send approval tran
 | guardians | Up to 8 wallet addresses authorised to vote |
 | required | Minimum approvals needed (M of N) |
 | proposalExpiryEpochs | Epochs before an incomplete proposal resets |
+| adminApprovalWindowEpochs | Epochs a reached quorum remains valid for governed mutations |
 
 ### Procedures
-- `configureMultisig(gateId, guardians[], required, expiryEpochs)` — owner only
+- `configureMultisig(gateId, guardians[], required, proposalExpiryEpochs, adminApprovalWindowEpochs)` — owner only, 1,000 QU anti-spam on successful configuration
 - `getMultisigState(gateId)` — read-only: returns approvalBitmap, count, proposalEpoch
 
 ### Voting mechanics
@@ -265,7 +267,8 @@ configureMultisig(
   gateId: ...,
   guardians: [MEMBER_1, MEMBER_2, MEMBER_3],
   required: 2,                    // 2-of-3 required
-  proposalExpiryEpochs: 8         // proposal lapses after 8 epochs if not completed
+  proposalExpiryEpochs: 8,        // proposal lapses after 8 epochs if not completed
+  adminApprovalWindowEpochs: 4    // governed mutations stay authorised for 4 epochs after quorum
 )
 ```
 
@@ -322,7 +325,7 @@ The `heartbeat()` procedure is intentionally excluded — it is a keep-alive sig
    - If the current admin gate has expired, been closed, or is otherwise no longer a valid active MULTISIG gate, the owner may clear it directly
 
 ### Procedures
-- `setAdminGate(gateId, adminGateId)` — owner-only if no admin gate set; requires admin gate approval if already set
+- `setAdminGate(gateId, adminGateId)` — owner-only if no admin gate set; requires admin gate approval if already set; 1,000 QU anti-spam on successful set/clear
 - `getAdminGate(gateId)` — read-only: returns hasAdminGate, adminGateId, adminGateMode, guardianCount, required, guardians
 
 ### Worked Example: HEARTBEAT + MULTISIG admin governance
@@ -337,7 +340,8 @@ configureMultisig(
   gateId: 5368709121,
   guardians: [GUARDIAN_1, GUARDIAN_2, GUARDIAN_3],
   required: 2,
-  proposalExpiryEpochs: 4
+  proposalExpiryEpochs: 4,
+  adminApprovalWindowEpochs: 4
 )
 ```
 
@@ -415,8 +419,8 @@ In relative mode, if the gate already holds funds at configuration time, the unl
 ### Procedures
 | Procedure | Description |
 |-----------|-------------|
-| `configureTimeLock(gateId, unlockEpoch, delayEpochs, lockMode, cancellable)` | Owner only — sets unlock parameters |
-| `cancelTimeLock(gateId)` | Owner only — cancels and refunds balance (requires cancellable=1) |
+| `configureTimeLock(gateId, unlockEpoch, delayEpochs, lockMode, cancellable)` | Owner only — sets unlock parameters and charges a duration-scaled fee on success |
+| `cancelTimeLock(gateId)` | Owner only — cancels and refunds balance (requires cancellable=1) and burns a 1,000 QU anti-spam fee on success |
 | `getTimeLockState(gateId)` | Read-only — returns config, balance, current epoch, epochs remaining |
 
 ### Error codes
@@ -573,7 +577,7 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 | 1 | createGate | PUBLIC_PROCEDURE | Create a new gate (fee required) |
 | 2 | sendToGate | PUBLIC_PROCEDURE | Send QU through a gate |
 | 3 | closeGate | PUBLIC_PROCEDURE | Close a gate (owner only) |
-| 4 | updateGate | PUBLIC_PROCEDURE | Update gate recipients/ratios/config (owner only) |
+| 4 | updateGate | PUBLIC_PROCEDURE | Update gate recipients/ratios/config (owner only, 1,000 QU anti-spam on success) |
 | 5 | getGate | PUBLIC_FUNCTION | Query full gate state and statistics |
 | 6 | getGateCount | PUBLIC_FUNCTION | Query total/active gate counts and total burned |
 | 7 | getGatesByOwner | PUBLIC_FUNCTION | List gate IDs owned by an address |
@@ -585,12 +589,12 @@ Decoding: `slotIndex = gateId & 0xFFFFF`, `generation = (gateId >> 20) - 1`.
 | 13 | configureHeartbeat | PUBLIC_PROCEDURE | Configure HEARTBEAT gate params and beneficiaries |
 | 14 | heartbeat | PUBLIC_PROCEDURE | Reset epoch counter (keep-alive signal) |
 | 15 | getHeartbeat | PUBLIC_FUNCTION | Query HEARTBEAT gate state |
-| 16 | configureMultisig | PUBLIC_PROCEDURE | Configure MULTISIG gate guardians and threshold |
+| 16 | configureMultisig | PUBLIC_PROCEDURE | Configure MULTISIG gate guardians and threshold (1,000 QU anti-spam on success) |
 | 17 | getMultisigState | PUBLIC_FUNCTION | Query current approval state |
-| 18 | configureTimeLock | PUBLIC_PROCEDURE | Configure TIME_LOCK gate unlock epoch and cancellability |
-| 19 | cancelTimeLock | PUBLIC_PROCEDURE | Cancel a TIME_LOCK gate and refund held balance (owner only) |
+| 18 | configureTimeLock | PUBLIC_PROCEDURE | Configure TIME_LOCK gate unlock epoch and cancellability (duration-scaled fee on success) |
+| 19 | cancelTimeLock | PUBLIC_PROCEDURE | Cancel a TIME_LOCK gate and refund held balance (owner only, 1,000 QU anti-spam on success) |
 | 20 | getTimeLockState | PUBLIC_FUNCTION | Query TIME_LOCK gate state and epochs remaining |
-| 21 | setAdminGate | PUBLIC_PROCEDURE | Set or clear admin gate (MULTISIG governance) on any gate |
+| 21 | setAdminGate | PUBLIC_PROCEDURE | Set or clear admin gate (MULTISIG governance) on any gate (1,000 QU anti-spam on success) |
 | 22 | getAdminGate | PUBLIC_FUNCTION | Query admin gate configuration for a gate |
 | 23 | withdrawReserve | PUBLIC_PROCEDURE | Withdraw from a gate's unified reserve without closing (owner only) |
 | 24 | getGatesByMode | PUBLIC_FUNCTION | Query up to 16 active gates matching a given mode |
@@ -694,7 +698,7 @@ Modifies gate configuration. Owner only. Mode cannot be changed.
 
 Wire size: see [updateGate_input Layout](#updategate_input-layout) for exact byte offsets.
 
-**Behaviour**: Validates parameters (same rules as createGate for the relevant mode). Zeros stale slots when recipient/sender count shrinks. Updates `lastActivityEpoch`. Refunds any attached invocation reward.
+**Behaviour**: Validates parameters (same rules as createGate for the relevant mode). On success, burns a 1,000 QU anti-spam fee, refunds any excess invocation reward, zeros stale slots when recipient/sender count shrinks, and updates `lastActivityEpoch`. Rejected updates refund the full attached invocation reward.
 
 ### Functions (Read-Only)
 
@@ -837,7 +841,7 @@ Like `sendToGate`, but additionally asserts that `gate.owner == expectedOwner` b
 
 #### configureHeartbeat (Input Type 13)
 
-Configures heartbeat mode on a HEARTBEAT gate. Owner only. Sets the inactivity threshold, payout rate, minimum balance, and beneficiary list. Cannot be called after the gate has triggered.
+Configures heartbeat mode on a HEARTBEAT gate. Owner only. Sets the inactivity threshold, payout rate, minimum balance, and beneficiary list. Cannot be called after the gate has triggered. Charges a threshold-scaled fee after validation: `creationFee * (1 + thresholdEpochs / idleWindow)`.
 
 **Input**:
 
@@ -855,7 +859,7 @@ Configures heartbeat mode on a HEARTBEAT gate. Owner only. Sets the inactivity t
 
 #### heartbeat (Input Type 14)
 
-Resets the heartbeat epoch counter. Owner only. Rejected after the gate has triggered. Attach any QU — it is refunded.
+Resets the heartbeat epoch counter. Owner only. Rejected after the gate has triggered. Charges a pro-rated maintenance cost based on elapsed time since the last heartbeat: `max(1000, fullMaintenanceCost * elapsedEpochs / idleWindow)`, where `fullMaintenanceCost` includes own idle fee, downstream drain, shielding surcharge, and any admin-gate drain.
 
 **Input**: `gateId` (uint64)
 
@@ -884,7 +888,7 @@ Read-only query for heartbeat configuration and state.
 
 #### configureMultisig (Input Type 16)
 
-Configures M-of-N guardian approval on a MULTISIG gate. Owner only. Resets any active proposal.
+Configures M-of-N guardian approval on a MULTISIG gate. Owner only. Resets any active proposal. Successful configuration burns a 1,000 QU anti-spam fee after validation.
 
 **Input**:
 
@@ -921,7 +925,7 @@ Read-only query for current multisig proposal state.
 
 #### configureTimeLock (Input Type 18)
 
-Configures a TIME_LOCK gate with an unlock epoch and cancellability flag. Owner only. The unlock epoch must be in the future.
+Configures a TIME_LOCK gate with an unlock epoch and cancellability flag. Owner only. The unlock epoch must be in the future. Successful configuration charges a duration-scaled fee after validation: `creationFee * (1 + duration / idleWindow)`.
 
 **Input**:
 
@@ -939,7 +943,7 @@ Configures a TIME_LOCK gate with an unlock epoch and cancellability flag. Owner 
 
 #### cancelTimeLock (Input Type 19)
 
-Cancels a TIME_LOCK gate before the unlock epoch. Owner only. Requires `cancellable=1`. Refunds all held balance to the gate owner and closes the gate.
+Cancels a TIME_LOCK gate before the unlock epoch. Owner only. Requires `cancellable=1`. Refunds all held balance to the gate owner and closes the gate. Successful cancellation burns a 1,000 QU anti-spam fee after validation and owner refunds succeed.
 
 **Input**:
 
@@ -975,7 +979,7 @@ Read-only query for TIME_LOCK gate state.
 
 #### setAdminGate (Input Type 21)
 
-Sets or clears the admin gate on a gate. When setting, the admin gate must exist and be MULTISIG mode. Owner-only if no admin gate is currently set; requires admin gate approval if one is already set, except that the owner may directly clear an expired, closed, stale, or otherwise invalid current admin gate.
+Sets or clears the admin gate on a gate. When setting, the admin gate must exist and be MULTISIG mode. Owner-only if no admin gate is currently set; requires admin gate approval if one is already set, except that the owner may directly clear an expired, closed, stale, or otherwise invalid current admin gate. Successful set/clear burns a 1,000 QU anti-spam fee after validation.
 
 **Input**:
 
@@ -1219,13 +1223,17 @@ Sends below `_minSendAmount` (default: 1,000 QU) are burned via `qpi.burn()` and
 QuGate uses a hybrid fee model with a governed burn/dividend split:
 
 - **Creation fees**: split between burn and shareholder dividends (default 50/50)
+- **Heartbeat configuration fees**: threshold-scaled and split between burn and shareholder dividends
+- **Time-lock configuration fees**: duration-scaled and split between burn and shareholder dividends
+- **Heartbeat pings**: pro-rated maintenance cost, split between burn and shareholder dividends
+- **Successful anti-spam mutations** (`updateGate`, `configureMultisig`, `cancelTimeLock`, `setAdminGate`): 100% burned
 - **Dust amounts**: 100% burned when sends are below minimum
 - **Chain hop fees**: 100% burned on each routed hop
 - **Inactivity maintenance**: charged from `reserve`, complexity-scaled, and split between burn and dividends
 
 ### Burn/Dividend Split
 
-The split ratio is stored as a state variable `_feeBurnBps` (basis points, default 5000 = 50%). It applies to both creation fees and idle maintenance fees. The ratio is bounded between 30% burn minimum (`QUGATE_MIN_FEE_BURN_BPS = 3000`) and 70% burn maximum (`QUGATE_MAX_FEE_BURN_BPS = 7000`), ensuring the contract remains significantly deflationary while maintaining meaningful shareholder returns.
+The split ratio is stored as a state variable `_feeBurnBps` (basis points, default 5000 = 50%). It applies to creation fees, heartbeat/time-lock configuration fees, heartbeat pings, and idle maintenance fees. The ratio is bounded between 30% burn minimum (`QUGATE_MIN_FEE_BURN_BPS = 3000`) and 70% burn maximum (`QUGATE_MAX_FEE_BURN_BPS = 7000`), ensuring the contract remains significantly deflationary while maintaining meaningful shareholder returns.
 
 ```
 burnAmount    = fee * _feeBurnBps / 10000
@@ -1256,7 +1264,7 @@ The contract tracks cumulative:
 - burned QU (`_totalBurned`)
 - maintenance charged (`_totalMaintenanceCharged`)
 - maintenance burned (`_totalMaintenanceBurned`)
-- maintenance dividends earned and distributed (`_earnedMaintenanceDividends`, `_distributedMaintenanceDividends`)
+- shareholder dividends earned and distributed (`_earnedMaintenanceDividends`, `_distributedMaintenanceDividends`)
 
 These values are queryable via `getGateCount()`.
 
@@ -1327,7 +1335,7 @@ Using a unified `reserve` keeps the behavior predictable:
 
 ### Burn-First Design
 
-Creation fees, dust burns, and chain hop fees are destroyed via `qpi.burn()`. Inactivity maintenance is reserve-backed and uses an `80% burn / 20% dividends` split, keeping the contract mostly deflationary while supporting sustainable long-lived infrastructure.
+Creation fees, heartbeat/time-lock configuration fees, heartbeat pings, and inactivity maintenance use the governed burn/dividend split (`_feeBurnBps`, default 50/50). Successful anti-spam mutations, dust burns, and chain hop fees are 100% burned. Maintenance is reserve-backed and complexity-scaled so long-lived infrastructure pays for the state it consumes without silently draining operational balances.
 
 ### No Rug-Pull
 
@@ -1525,7 +1533,7 @@ g++ -std=c++17 -I. contract_qugate.cpp -lgtest -lgtest_main -o qugate_tests
 ./qugate_tests
 ```
 
-The test suite (`contract_qugate.cpp`) contains 187 unit tests covering:
+The test suite (`contract_qugate.cpp`) contains 213 unit tests covering:
 - All 8 active gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, heartbeat dead-man's switch, M-of-N multisig approval, epoch-based time lock)
 - Chain gates (hop fees, chain reserve, depth limits, cycle detection)
 - Versioned gate IDs and sendToGateVerified
@@ -1580,7 +1588,7 @@ systemctl stop qlab 2>/dev/null
 # Verify: curl http://localhost:41841/v1/latest-stats
 ```
 
-3. **Run the tests** (see `tests/README.md` for full details):
+3. **Run the tests**:
 
 ```bash
 export QUBIC_CLI=/path/to/qubic-cli
@@ -1594,7 +1602,7 @@ python3 tests/test_attack_vectors.py   # Security edge cases
 ### Testnet Results
 
 Tested on Qubic Core-Lite v1.283.0 (local testnet, 2026-04-03):
-- **187 unit tests passing** (fund conservation, mode lifecycle, governance, idle maintenance, edge cases, regression)
+- **213 unit tests passing** (fund conservation, mode lifecycle, governance, idle maintenance, edge cases, regression)
 - **132/132 integration scenarios passing** across 8 parallel wallet lanes
 - All 8 active gate modes verified: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK
 - Full governance lifecycle: admin gate attachment, approval windows, governed mutations, expiry recovery
