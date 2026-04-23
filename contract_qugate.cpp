@@ -1346,6 +1346,10 @@ public:
             }
         }
 
+        // Anti-spam fee
+        qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+
         gate.lastActivityEpoch = qpi.epoch();
         gate.recipientCount = input.recipientCount;
         gate.threshold = input.threshold;
@@ -2346,6 +2350,8 @@ public:
 
         if (adminGateId == -1)
         {
+            qpi.burn(QUGATE_CHAIN_HOP_FEE);
+            state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
             gate.adminGateId = -1;
             state.mut()._gates.set(idx, gate);
             return QUGATE_SUCCESS;
@@ -2371,6 +2377,10 @@ public:
             if (nextAdminSlot >= state.get()._gateCount || !gateIdMatchesCurrentGeneration(walkGate.adminGateId)) break;
             walkSlot = nextAdminSlot;
         }
+
+        // Anti-spam fee
+        qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
 
         gate.adminGateId = encodeCurrentGateId(adminSlot);
         state.mut()._gates.set(idx, gate);
@@ -2549,6 +2559,22 @@ public:
         {
             return QUGATE_INVALID_PARAMS;
         }
+        // Duration-scaled config fee
+        uint64 lockDuration = (lockMode == QUGATE_TIME_LOCK_ABSOLUTE_EPOCH)
+            ? (uint64)(unlockEpoch - qpi.epoch())
+            : (uint64)unlockEpoch; // delayEpochs passed via unlockEpoch param
+        if (lockDuration > 0 && state.get()._idleWindowEpochs > 0)
+        {
+            uint64 configFee = state.get()._creationFee
+                * (1 + QPI::div(lockDuration, state.get()._idleWindowEpochs));
+            uint64 configBurn = QPI::div(configFee * state.get()._feeBurnBps, 10000ULL);
+            uint64 configDiv = configFee - configBurn;
+            qpi.burn(configBurn);
+            state.mut()._totalBurned += configBurn;
+            state.mut()._earnedMaintenanceDividends += configDiv;
+            state.mut()._totalMaintenanceDividends += configDiv;
+        }
+
         cfg.lockMode = lockMode;
         cfg.cancellable = cancellable;
         cfg.active = 1;
@@ -2561,6 +2587,9 @@ public:
     {
         qpi.reset();
         qpi._invocator = caller;
+        // Anti-spam fee (upfront)
+        qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
 
         if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
         uint64 idx = gateId - 1;
@@ -2623,6 +2652,9 @@ public:
     {
         qpi.reset();
         qpi._invocator = caller;
+        // Anti-spam fee (upfront)
+        qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
 
         if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
         uint64 idx = gateId - 1;
