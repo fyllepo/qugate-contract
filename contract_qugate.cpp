@@ -1395,8 +1395,10 @@ public:
             if (state.get()._idleFee == 0) continue;
 
             // Admin gate drain: governed gate pays its admin multisig's idle fees.
-            // Only refreshes admin gate activity when the fee is actually paid.
-            if (gate.adminGateId > 0 && gate.reserve > 0)
+            // Only fires once per idle window cycle.
+            bool adminCycleDue = (gate.nextIdleChargeEpoch > 0 && qpi.epoch() >= gate.nextIdleChargeEpoch)
+                || gate.nextIdleChargeEpoch == 0;
+            if (adminCycleDue && gate.adminGateId > 0 && gate.reserve > 0)
             {
                 uint64 adminSlot = slotFromGateId(gate.adminGateId);
                 if (adminSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(gate.adminGateId))
@@ -1461,6 +1463,10 @@ public:
 
             if (recentlyActive == 1 || activeHold == 1)
             {
+                // Check if this is a cycle boundary
+                bool cycleDue = (gate.nextIdleChargeEpoch > 0 && qpi.epoch() >= gate.nextIdleChargeEpoch)
+                    || gate.nextIdleChargeEpoch == 0;
+
                 if (state.get()._idleWindowEpochs > 0)
                 {
                     gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
@@ -1471,11 +1477,8 @@ public:
                     state.mut()._idleDelinquentEpochs.set(i, 0);
                 }
 
-                // Reserve drain: pay downstream gates' idle fees from the upstream gate's reserve.
-                // Also applies a shielding surcharge to the upstream gate's own idle fee.
-                // If the upstream reserve can't cover a downstream fee, that gate is left alone
-                // and will become delinquent through normal idle charging.
-                if (activeHold == 1 && recentlyActive == 0 && gate.reserve > 0)
+                // Reserve drain: only fires once per idle window cycle.
+                if (cycleDue && activeHold == 1 && recentlyActive == 0 && gate.reserve > 0)
                 {
                     // Re-read the gate in case it was modified above
                     gate = state.get()._gates.get(i);
@@ -1497,6 +1500,10 @@ public:
                                     dsMultiplierBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
                                 else if (dsGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD)
                                     dsMultiplierBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
+                                if (dsGate.mode == MODE_HEARTBEAT && dsMultiplierBps < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS)
+                                    dsMultiplierBps = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
+                                if (dsGate.mode == MODE_MULTISIG && dsMultiplierBps < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS)
+                                    dsMultiplierBps = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
                                 if (dsGate.chainNextGateId >= 0)
                                     dsMultiplierBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
                                 uint64 dsIdleFee = QPI::div(state.get()._idleFee * dsMultiplierBps, 10000ULL);
@@ -1540,6 +1547,10 @@ public:
                                         dsMultiplierBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
                                     else if (dsGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD)
                                         dsMultiplierBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
+                                    if (dsGate.mode == MODE_HEARTBEAT && dsMultiplierBps < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS)
+                                        dsMultiplierBps = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
+                                    if (dsGate.mode == MODE_MULTISIG && dsMultiplierBps < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS)
+                                        dsMultiplierBps = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
                                     if (dsGate.chainNextGateId >= 0)
                                         dsMultiplierBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
                                     uint64 dsIdleFee = QPI::div(state.get()._idleFee * dsMultiplierBps, 10000ULL);
@@ -2266,6 +2277,7 @@ public:
         uint64 divAmt = maintenanceCost - burnAmt;
         qpi.burn(burnAmt);
         state.mut()._totalBurned += burnAmt;
+        state.mut()._totalMaintenanceBurned += burnAmt;
         state.mut()._earnedMaintenanceDividends += divAmt;
         state.mut()._totalMaintenanceDividends += divAmt;
         state.mut()._totalMaintenanceCharged += maintenanceCost;
@@ -5170,8 +5182,8 @@ TEST(QuGateHeartbeat, HeartbeatPingAfterTriggerDoesNotReset)
     EXPECT_EQ(env.getHeartbeat(out.gateId).triggered, 1);
 }
 
-// Triggered heartbeat with zero beneficiaries refunds remaining balance to owner
-TEST(QuGateHeartbeat, HeartbeatZeroBeneficiariesRefundsOwner)
+// Defensive: triggered heartbeat with manually zeroed beneficiaries refunds to owner
+TEST(QuGateHeartbeat, HeartbeatZeroBeneficiariesDefensiveRefund)
 {
     QuGateTest env;
     id recips[] = { BOB };
