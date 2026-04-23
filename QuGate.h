@@ -4849,7 +4849,6 @@ public:
             locals.configDividend = locals.configFee - locals.configBurn;
             qpi.burn(locals.configBurn);
             state.mut()._totalBurned += locals.configBurn;
-            state.mut()._totalMaintenanceBurned += locals.configBurn;
             state.mut()._earnedMaintenanceDividends += locals.configDividend;
             state.mut()._totalMaintenanceDividends += locals.configDividend;
         }
