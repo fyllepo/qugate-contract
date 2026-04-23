@@ -1395,9 +1395,8 @@ public:
             if (state.get()._idleFee == 0) continue;
 
             // Admin gate drain: governed gate pays its admin multisig's idle fees.
-            // Always refreshes admin gate activity when it governs an active gate,
-            // even if the governed gate cannot afford the drain fee.
-            if (gate.adminGateId > 0)
+            // Only refreshes admin gate activity when the fee is actually paid.
+            if (gate.adminGateId > 0 && gate.reserve > 0)
             {
                 uint64 adminSlot = slotFromGateId(gate.adminGateId);
                 if (adminSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(gate.adminGateId))
@@ -1405,31 +1404,25 @@ public:
                     GateConfig adminGate = state.get()._gates.get(adminSlot);
                     if (adminGate.active == 1)
                     {
-                        // Always refresh — admin is actively governing
-                        adminGate.lastActivityEpoch = qpi.epoch();
-                        if (state.get()._idleWindowEpochs > 0)
-                            adminGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
-                        state.mut()._idleDelinquentEpochs.set(adminSlot, 0);
-
-                        // Pay the admin's idle fee from the governed gate's reserve if possible
-                        if (gate.reserve > 0)
+                        uint64 adminFee = QPI::div(state.get()._idleFee * QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS, 10000ULL);
+                        if (gate.reserve >= (sint64)adminFee)
                         {
-                            uint64 adminFee = QPI::div(state.get()._idleFee * QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS, 10000ULL);
-                            if (gate.reserve >= (sint64)adminFee)
-                            {
-                                gate.reserve -= adminFee;
-                                state.mut()._gates.set(i, gate);
-                                state.mut()._totalMaintenanceCharged += adminFee;
-                                uint64 adminBurn = QPI::div(adminFee * state.get()._feeBurnBps, 10000ULL);
-                                uint64 adminDiv = adminFee - adminBurn;
-                                qpi.burn(adminBurn);
-                                state.mut()._totalBurned += adminBurn;
-                                state.mut()._totalMaintenanceBurned += adminBurn;
-                                state.mut()._earnedMaintenanceDividends += adminDiv;
-                                state.mut()._totalMaintenanceDividends += adminDiv;
-                            }
+                            gate.reserve -= adminFee;
+                            adminGate.lastActivityEpoch = qpi.epoch();
+                            if (state.get()._idleWindowEpochs > 0)
+                                adminGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                            state.mut()._gates.set(adminSlot, adminGate);
+                            state.mut()._gates.set(i, gate);
+                            state.mut()._idleDelinquentEpochs.set(adminSlot, 0);
+                            state.mut()._totalMaintenanceCharged += adminFee;
+                            uint64 adminBurn = QPI::div(adminFee * state.get()._feeBurnBps, 10000ULL);
+                            uint64 adminDiv = adminFee - adminBurn;
+                            qpi.burn(adminBurn);
+                            state.mut()._totalBurned += adminBurn;
+                            state.mut()._totalMaintenanceBurned += adminBurn;
+                            state.mut()._earnedMaintenanceDividends += adminDiv;
+                            state.mut()._totalMaintenanceDividends += adminDiv;
                         }
-                        state.mut()._gates.set(adminSlot, adminGate);
                     }
                 }
             }
@@ -1675,6 +1668,25 @@ public:
                 }
                 if (gate.mode == MODE_MULTISIG && delinquentEpoch == 0 && gate.currentBalance > 0)
                     continue;
+                // Admin gate expiry exemption: admin-only multisig stays alive while governing
+                if (gate.mode == MODE_MULTISIG && gate.recipientCount == 0)
+                {
+                    bool governsActive = false;
+                    for (uint64 j = 0; j < state.get()._gateCount; j++)
+                    {
+                        GateConfig candidate = state.get()._gates.get(j);
+                        if (candidate.active == 1 && candidate.adminGateId > 0)
+                        {
+                            uint64 refSlot = slotFromGateId(candidate.adminGateId);
+                            if (refSlot == i && gateIdMatchesCurrentGeneration(candidate.adminGateId))
+                            {
+                                governsActive = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (governsActive) continue;
+                }
 
                 bool graceExpired = (delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0
                     && qpi.epoch() - delinquentEpoch >= state.get()._idleGraceEpochs);
@@ -7486,7 +7498,7 @@ TEST(QuGateIdle, AdminGateDrainFromGovernedGateReserve)
     EXPECT_EQ(adminAfter.lastActivityEpoch, 104);
 }
 
-// Admin gate stays alive even when governed gate has no reserve (activity refresh)
+// Admin gate goes delinquent when governed gate has no reserve, but stays alive via expiry exemption
 TEST(QuGateIdle, AdminGateSurvivesWhenGovernedGateHasNoReserve)
 {
     QuGateTest env;
@@ -7502,13 +7514,17 @@ TEST(QuGateIdle, AdminGateSurvivesWhenGovernedGateHasNoReserve)
     env.qpi._epoch = 104;
     env.endEpoch();
 
-    // Admin gate activity is refreshed even without drain payment
+    // Admin gate becomes delinquent (no payment to refresh it)
     auto adminAfter = env.getGate(admin.gateId);
-    EXPECT_EQ(adminAfter.active, 1);
-    EXPECT_EQ(adminAfter.lastActivityEpoch, 104);
-    // Not delinquent — its activity was refreshed by the governance relationship
+    EXPECT_EQ(adminAfter.active, 1); // Still active — expiry exemption keeps it alive
     uint16 adminDelinquent = env.state.get()._idleDelinquentEpochs.get(admin.gateId - 1);
-    EXPECT_EQ(adminDelinquent, 0);
+    EXPECT_GT(adminDelinquent, (uint16)0); // Delinquent because no fee was paid
+
+    // Even after grace period, admin gate survives because it still governs an active gate
+    env.qpi._epoch = 150; // Well past grace period and 50-epoch expiry
+    env.endEpoch();
+    auto adminLater = env.getGate(admin.gateId);
+    EXPECT_EQ(adminLater.active, 1); // Still alive — expiry exemption
 }
 
 // Admin gate expires only when all governed gates are closed
