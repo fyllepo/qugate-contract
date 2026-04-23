@@ -57,7 +57,7 @@ namespace QPI {
 
     typedef signed int sint32;
 
-    // HashMap — linear scan
+    // HashMap, linear scan
     template<typename K, typename V, unsigned long long capacity>
     struct HashMap {
         struct Entry { K key; V value; bool occupied; };
@@ -134,7 +134,7 @@ namespace QPI {
 
 using namespace QPI;
 
-// Test QPI context — tracks transfers, burns, ticks
+// Test QPI context, tracks transfers, burns, ticks
 struct TestQpiContext {
     id _invocator;
     sint64 _reward;
@@ -337,7 +337,7 @@ struct GateConfig {
     sint64 chainNextGateId;
     uint8  chainDepth;
 
-    // Unified reserve — covers chain hop fees and idle maintenance
+    // Unified reserve, covers chain hop fees and idle maintenance
     sint64 reserve;
 
     // Idle maintenance
@@ -2373,7 +2373,7 @@ public:
         if (adminSlot >= state.get()._gateCount || !gateIdMatchesCurrentGeneration(adminGateId)) return QUGATE_INVALID_ADMIN_GATE;
         GateConfig adminGate = state.get()._gates.get(adminSlot);
         if (adminGate.active == 0 || adminGate.mode != MODE_MULTISIG) return QUGATE_INVALID_ADMIN_GATE;
-        // Reject governing an admin-only multisig — admin gates govern fund-flow gates
+        // Reject governing an admin-only multisig, admin gates govern fund-flow gates
         if (gate.mode == MODE_MULTISIG && gate.recipientCount == 0) return QUGATE_INVALID_ADMIN_GATE;
 
         uint64 walkSlot = adminSlot;
@@ -2701,7 +2701,7 @@ public:
         return QUGATE_SUCCESS;
     }
 
-    // ---- multisigVote (simplified harness — sendToGate for MULTISIG mode) ----
+    // ---- multisigVote (simplified harness, sendToGate for MULTISIG mode) ----
     // Returns status. For admin-only MULTISIG (recipientCount=0, chainNextGateId=-1,
     // adminApprovalWindowEpochs>0), vote QU is burned.
     sendToGate_output sendToMultisigGate(const id& sender, uint64 gateId, sint64 amount)
@@ -2750,7 +2750,7 @@ public:
         gate.currentBalance += amount;
         gate.lastActivityEpoch = qpi.epoch();
 
-        // Check if sender is a guardian — cast vote
+        // Check if sender is a guardian, cast vote
         uint8 guardianIdx = 255;
         for (uint8 i = 0; i < msigCfg.guardianCount; i++)
         {
@@ -3240,7 +3240,7 @@ public:
         return result;
     }
 
-    // ---- routeChain — iterative multi-hop chain routing ----
+    // ---- routeChain, iterative multi-hop chain routing ----
     sint64 routeChain(uint64 startGateId, sint64 amount)
     {
         sint64 chainAmount = amount;
@@ -3692,7 +3692,7 @@ TEST(QuGateV3, FreeListSlotReuse)
     EXPECT_EQ(env.state.get()._freeCount, 1ULL);
     EXPECT_EQ(env.state.get()._activeGates, 1ULL);
 
-    // Create again — should reuse slot 0 (gateId 1)
+    // Create again, should reuse slot 0 (gateId 1)
     auto g3 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     EXPECT_EQ(g3.gateId, 1ULL); // reused!
     EXPECT_EQ(env.state.get()._freeCount, 0ULL);
@@ -3762,7 +3762,7 @@ TEST(QuGateV3, GateNotExpiredIfActive)
     env.qpi._epoch = 140;
     env.sendToGate(CHARLIE, out.gateId, 1000);
 
-    // Run endEpoch at 150 — only 10 epochs since last activity, not 50
+    // Run endEpoch at 150, only 10 epochs since last activity, not 50
     env.qpi._epoch = 150;
     env.qpi.reset();
     env.endEpoch();
@@ -4229,7 +4229,7 @@ TEST(QuGateChain, ReserveCoversHopFee)
     EXPECT_EQ(fundOut.result, QUGATE_SUCCESS);
     EXPECT_EQ(env.getGate(g2.gateId).reserve, 5000);
 
-    // Route 500 (< hop fee) — reserve should cover
+    // Route 500 (< hop fee), reserve should cover
     env.qpi.reset();
     auto result = env.routeToGate(g2.gateId - 1, 500, 0);
     EXPECT_EQ(result.forwarded, 500); // full amount forwarded (reserve paid fee)
@@ -4252,7 +4252,7 @@ TEST(QuGateChain, FundGateReserve)
     EXPECT_EQ(fundOut.result, QUGATE_SUCCESS);
     EXPECT_EQ(env.getGate(g2.gateId).reserve, 3000);
 
-    // Fund reserve on gate with no chain — succeeds (reserve is unified)
+    // Fund reserve on gate with no chain, succeeds (reserve is unified)
     auto fundOut2 = env.fundGate(BOB, g1.gateId, 1000);
     EXPECT_EQ(fundOut2.result, QUGATE_SUCCESS);
     EXPECT_EQ(env.getGate(g1.gateId).reserve, 1000);
@@ -4272,13 +4272,13 @@ TEST(QuGateChain, DeadLinkChainedGateClosed)
     // Close the target gate
     env.closeGate(ALICE, g1.gateId);
 
-    // Route through g2 — should process g2 but dead link on g1
+    // Route through g2, should process g2 but dead link on g1
     env.qpi.reset();
     auto result = env.routeToGate(g2.gateId - 1, 5000, 0);
     EXPECT_EQ(result.forwarded, 4000); // g2 processes fine (5000-1000 fee)
 
     // Chain doesn't continue because g1 is closed
-    // routeChain would handle this — just verify routeToGate doesn't crash
+    // routeChain would handle this, just verify routeToGate doesn't crash
 }
 
 // getGate returns chain link, depth, and reserve fields
@@ -4620,7 +4620,7 @@ TEST(QuGateFinancial, RoundingBurnPlusDividendEqualsFee)
 TEST(QuGateFinancial, CancelTimeLockRefundsReserve)
 {
     // Create a TIME_LOCK gate, fund its reserve, cancel it
-    // — verify reserve is refunded to owner (not trapped)
+    // Verify reserve is refunded to owner (not trapped)
     QuGateTest env;
 
     uint64 creationFee = env.currentEscalatedFee();
@@ -5272,7 +5272,7 @@ TEST(QuGateHeartbeat, HeartbeatPingChargesMaintenanceCost)
     ASSERT_EQ(env.sendHeartbeat(ALICE, out.gateId), QUGATE_SUCCESS);
 
     uint64 chargedAfter = env.state.get()._totalMaintenanceCharged;
-    // 1 recipient, HEARTBEAT mode → 1.5x multiplier → 37,500 QU
+    // Full-cycle heartbeat ping on a 1-recipient HEARTBEAT gate = 1.5x multiplier = 37,500 QU
     uint64 expectedFee = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS, 10000ULL);
     EXPECT_EQ(chargedAfter - chargedBefore, expectedFee);
 }
@@ -5360,7 +5360,7 @@ TEST(QuGateHeartbeat, HeartbeatPingProratedByElapsed)
     ASSERT_EQ(env.sendHeartbeat(ALICE, out.gateId), QUGATE_SUCCESS);
     uint64 cost1 = env.state.get()._totalMaintenanceCharged - chargedBefore;
 
-    // Second ping at epoch 105 (4 epochs after last ping — full cycle)
+    // Second ping at epoch 105 (4 epochs after last ping, full cycle)
     env.qpi._epoch = 105;
     chargedBefore = env.state.get()._totalMaintenanceCharged;
     ASSERT_EQ(env.sendHeartbeat(ALICE, out.gateId), QUGATE_SUCCESS);
@@ -5524,7 +5524,7 @@ TEST(QuGateAdmin, SetAdminGateCycleRejected)
     id recips[] = { BOB };
     uint64 ratios[] = { 10000 };
     id guardians[] = { BOB };
-    // Fund-flow multisig gates (recipientCount > 0) — admin-only gates can't be governed
+    // Fund-flow multisig gates (recipientCount > 0), admin-only gates cannot be governed
     auto a = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
     ASSERT_EQ(env.configureMultisig(ALICE, a.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
     auto b = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
@@ -6200,7 +6200,7 @@ TEST(QuGateFinancial, AdminOnlyMultisigVoteBurnsQU)
 {
     // Create admin-only MULTISIG (recipientCount=0, chainNextGateId=-1,
     // adminApprovalWindowEpochs>0), send QU as a vote
-    // — verify QU is burned and _totalBurned increases
+    // Verify QU is burned and _totalBurned increases
     QuGateTest env;
 
     uint64 creationFee = env.currentEscalatedFee();
@@ -6275,7 +6275,7 @@ TEST(QuGateFinancial, AdminOnlyMultisigMultipleVotesBurn)
 TEST(QuGateFinancial, ChainHopFeeBurnedAndTracked)
 {
     // Create two chained gates, send QU through the chain
-    // — verify _totalBurned includes the hop fee (1000 QU per hop)
+    // Verify _totalBurned includes the hop fee (1000 QU per hop)
     QuGateTest env;
 
     uint64 creationFee = env.currentEscalatedFee();
@@ -6481,7 +6481,7 @@ TEST(QuGateFinancial, SetAdminGateRejectedDoesNotBurnAntiSpamFee)
 TEST(QuGateFinancial, ExcessCreationFeeSeedsReserve)
 {
     // Create a gate with 150,000 QU when fee is 100,000
-    // — verify gate.reserve = 50,000 (the excess)
+    // Verify gate.reserve = 50,000 (the excess)
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
@@ -6530,7 +6530,7 @@ TEST(QuGateFinancial, LargeExcessSeedsLargeReserve)
     auto gate = env.getGate(out.gateId);
     EXPECT_EQ(gate.reserve, (sint64)(payment - creationFee)); // 900000
 
-    // No refund transfer — all excess is reserve
+    // No refund transfer, all excess is reserve
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 0);
 }
 
@@ -7045,13 +7045,13 @@ TEST(QuGateEdge, FundGateByNonOwner)
     uint64 ratios[] = { 10000 };
     auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
-    // BOB funds ALICE's gate — should succeed
+    // BOB funds ALICE's gate, should succeed
     auto fundOut = env.fundGate(BOB, out.gateId, 5000);
     EXPECT_EQ(fundOut.result, QUGATE_SUCCESS);
     EXPECT_EQ(env.getGate(out.gateId).reserve, 5000);
 }
 
-// WithdrawReserveDuringIdleDelinquency — skipped: harness lacks idle delinquency state
+// WithdrawReserveDuringIdleDelinquency, skipped: harness lacks idle delinquency state
 
 // Admin gate blocks close until multisig approval is obtained
 TEST(QuGateGovernance, AdminGateBlocksCloseWithoutApproval)
@@ -7064,7 +7064,7 @@ TEST(QuGateGovernance, AdminGateBlocksCloseWithoutApproval)
     id guardians[] = { BOB };
     ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 10, 3), QUGATE_SUCCESS);
     ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_SUCCESS);
-    // Close without approval — blocked
+    // Close without approval, blocked
     EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_ADMIN_GATE_REQUIRED);
     // Get approval, then close succeeds
     env.sendToGate(BOB, admin.gateId, 1000);
@@ -7082,7 +7082,7 @@ TEST(QuGateGovernance, RouteIntoGovernedGateStillAccepts)
     id guardians[] = { BOB };
     ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 10, 3), QUGATE_SUCCESS);
     ASSERT_EQ(env.setAdminGate(ALICE, governed.gateId, admin.gateId), QUGATE_SUCCESS);
-    // Route directly into the governed gate — governance only affects mutations, not receives
+    // Route directly into the governed gate, governance only affects mutations, not receives
     env.qpi.reset();
     env.qpi._invocator = ALICE;
     auto result = env.routeToGate(governed.gateId - 1, 5000, 0);
@@ -7109,7 +7109,7 @@ TEST(QuGateGovernance, GovernanceRecoveryAfterAdminClose)
     env.sendToGate(ALICE, target.gateId, 1000);
     // Owner can self-clear stale admin
     EXPECT_EQ(env.setAdminGate(ALICE, target.gateId, -1), QUGATE_SUCCESS);
-    // Target is now ungoverned — close should work
+    // Target is now ungoverned, close should work
     EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_SUCCESS);
 }
 
@@ -7143,11 +7143,11 @@ TEST(QuGateIdle, IdleChargeSkippedWhenActive)
     auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(env.fundGate(ALICE, out.gateId, 50000).result, QUGATE_SUCCESS);
 
-    // Send at epoch 103 — within the idle window
+    // Send at epoch 103, within the idle window
     env.qpi._epoch = 103;
     env.sendToGate(ALICE, out.gateId, 1000);
 
-    // Run endEpoch at 104 — gate was recently active, should skip charge
+    // Run endEpoch at 104, gate was recently active, should skip charge
     env.qpi._epoch = 104;
     env.endEpoch();
     auto gate = env.getGate(out.gateId);
@@ -7162,7 +7162,7 @@ TEST(QuGateIdle, IdleDelinquencyWhenReserveInsufficient)
     id recips[] = { BOB };
     uint64 ratios[] = { 10000 };
     auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
-    // No reserve funded — gate has 0 reserve
+    // No reserve funded, gate has 0 reserve
 
     env.qpi._epoch = 104;
     env.endEpoch();
@@ -7256,11 +7256,11 @@ TEST(QuGateIdle, IdleActiveHoldExemptionThreshold)
     id recips[] = { BOB };
     uint64 ratios[] = { 10000 };
     auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
-    // Send funds below threshold — gate is holding balance
+    // Send funds below threshold, gate is holding balance
     env.sendToGate(ALICE, out.gateId, 10000);
     EXPECT_EQ(env.getGate(out.gateId).currentBalance, 10000ULL);
 
-    // Advance way past idle window — but threshold gate with balance is exempt
+    // Advance way past idle window, but threshold gate with balance is exempt
     env.qpi._epoch = 149;
     env.endEpoch();
     EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), 0);
@@ -7451,7 +7451,7 @@ TEST(QuGateRegression, MultisigVoteBelowMinSendIsDust)
     EXPECT_EQ(env.getGate(out.gateId).currentBalance, 0ULL);
 }
 
-// Downstream chain target of an exempt heartbeat gate stays alive — upstream reserve pays for it
+// Downstream chain target of an exempt heartbeat gate stays alive, upstream reserve pays for it
 TEST(QuGateIdle, DownstreamChainExemptionFromHeartbeat)
 {
     QuGateTest env;
@@ -7482,13 +7482,13 @@ TEST(QuGateIdle, DownstreamChainExemptionFromHeartbeat)
 
     // Heartbeat is exempt (active, untriggered)
     EXPECT_EQ(env.getGate(hb.gateId).active, 1);
-    // Downstream chain target should also be alive — upstream reserve paid for it
+    // Downstream chain target should also be alive, upstream reserve paid for it
     EXPECT_EQ(env.getGate(downstream.gateId).active, 1);
     // Upstream reserve should have decreased (paid downstream fee + surcharge)
     EXPECT_LT(env.getGate(hb.gateId).reserve, reserveBefore);
 }
 
-// Downstream gate-as-recipient of an exempt time-lock gate stays alive — upstream reserve pays
+// Downstream gate-as-recipient of an exempt time-lock gate stays alive, upstream reserve pays
 TEST(QuGateIdle, DownstreamRecipientExemptionFromTimeLock)
 {
     QuGateTest env;
@@ -7515,7 +7515,7 @@ TEST(QuGateIdle, DownstreamRecipientExemptionFromTimeLock)
 
     // Time-lock is exempt (active, unfired, has balance)
     EXPECT_EQ(env.getGate(tl.gateId).active, 1);
-    // Downstream recipient gate should also be alive — upstream reserve paid for it
+    // Downstream recipient gate should also be alive, upstream reserve paid for it
     EXPECT_EQ(env.getGate(downstream.gateId).active, 1);
     // Upstream reserve should have decreased (paid downstream fee + surcharge)
     EXPECT_LT(env.getGate(tl.gateId).reserve, reserveBefore);
@@ -7540,7 +7540,7 @@ TEST(QuGateIdle, DownstreamOfNonExemptGateStillExpires)
     auto upstream = env.createGate(ALICE, 100000, in);
     ASSERT_EQ(upstream.status, QUGATE_SUCCESS);
 
-    // Advance past expiry — upstream has no hold state, not exempt
+    // Advance past expiry, upstream has no hold state and is not exempt
     env.qpi._epoch = 160;
     env.endEpoch();
 
@@ -7588,7 +7588,7 @@ TEST(QuGateIdle, ReserveDrainHeartbeatPaysForDownstream)
     EXPECT_EQ(reserveBefore - reserveAfter, (sint64)expectedDrain);
 }
 
-// Heartbeat with 0 reserve does not shield downstream — downstream becomes delinquent
+// Heartbeat with 0 reserve does not shield downstream, downstream becomes delinquent
 TEST(QuGateIdle, EmptyHeartbeatDoesNotShieldDownstream)
 {
     QuGateTest env;
@@ -7608,7 +7608,7 @@ TEST(QuGateIdle, EmptyHeartbeatDoesNotShieldDownstream)
     uint8 shares[] = { 100 };
     ASSERT_EQ(env.configureHeartbeat(ALICE, hb.gateId, 60, 100, 0, beneficiaries, shares, 1), QUGATE_SUCCESS);
     env.sendToGate(ALICE, hb.gateId, 50000);
-    // Do NOT fund reserve — leave at 0
+    // Do NOT fund reserve, leave at 0
     ASSERT_EQ(env.getGate(hb.gateId).reserve, 0);
 
     // Advance past idle window to charge epoch
@@ -7624,7 +7624,7 @@ TEST(QuGateIdle, EmptyHeartbeatDoesNotShieldDownstream)
     EXPECT_GT(delinquentEpoch, (uint16)0);
 }
 
-// Upstream reserve drains on first cycle then has nothing left — downstream becomes delinquent on second cycle
+// Upstream reserve drains on the first cycle then has nothing left, so the downstream becomes delinquent on the second cycle
 TEST(QuGateIdle, ReserveDrainExhaustsUpstream)
 {
     QuGateTest env;
@@ -7649,13 +7649,13 @@ TEST(QuGateIdle, ReserveDrainExhaustsUpstream)
     env.fundGate(ALICE, hb.gateId, 37500);
     ASSERT_EQ(env.getGate(hb.gateId).reserve, 37500);
 
-    // First cycle — reserve drains fully
+    // First cycle, reserve drains fully
     env.qpi._epoch = 104;
     env.endEpoch();
     EXPECT_EQ(env.getGate(downstream.gateId).active, 1);
     EXPECT_EQ(env.getGate(hb.gateId).reserve, 0);
 
-    // Second cycle — no reserve left, downstream gets no protection
+    // Second cycle, no reserve left, downstream gets no protection
     env.qpi._epoch = 108;
     env.endEpoch();
     // Downstream should now have delinquency set (reserve depleted, no longer shielded)
@@ -7738,7 +7738,7 @@ TEST(QuGateIdle, AdminOnlyMultisigDoesNotDrain)
     // Set chain to downstream via setChain
     env.setChain(ALICE, ms.gateId, env.encodeCurrentGateId(downstream.gateId - 1), 1000);
 
-    // Do NOT fund reserve — balance is 0 for admin-only
+    // Do NOT fund reserve, balance is 0 for admin-only
     ASSERT_EQ(env.getGate(ms.gateId).reserve, 0);
     ASSERT_EQ(env.getGate(ms.gateId).currentBalance, 0ULL);
 
@@ -7843,14 +7843,14 @@ TEST(QuGateIdle, AdminGateSurvivesWhenGovernedGateHasNoReserve)
     ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 10, 5), QUGATE_SUCCESS);
     ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_SUCCESS);
     ASSERT_EQ(env.sendToGate(ALICE, target.gateId, 1000).status, QUGATE_SUCCESS);
-    // No reserve funded on target — admin drain fee cannot be paid
+    // No reserve funded on target, admin drain fee cannot be paid
 
     env.qpi._epoch = 104;
     env.endEpoch();
 
     // Admin gate becomes delinquent (no payment to refresh it)
     auto adminAfter = env.getGate(admin.gateId);
-    EXPECT_EQ(adminAfter.active, 1); // Still active — expiry exemption keeps it alive
+    EXPECT_EQ(adminAfter.active, 1); // Still active, expiry exemption keeps it alive
     uint16 adminDelinquent = env.state.get()._idleDelinquentEpochs.get(admin.gateId - 1);
     EXPECT_GT(adminDelinquent, (uint16)0); // Delinquent because no fee was paid
 
@@ -7862,7 +7862,7 @@ TEST(QuGateIdle, AdminGateSurvivesWhenGovernedGateHasNoReserve)
     EXPECT_EQ(targetLater.active, 1);
     EXPECT_GT(targetLater.adminGateId, 0);
     auto adminLater = env.getGate(admin.gateId);
-    EXPECT_EQ(adminLater.active, 1); // Still alive — expiry exemption
+    EXPECT_EQ(adminLater.active, 1); // Still alive, expiry exemption applies
 }
 
 // Admin gate expires only when all governed gates are closed
@@ -7877,7 +7877,7 @@ TEST(QuGateIdle, AdminGateExpiresWhenGovernedGateCloses)
     ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 10, 5), QUGATE_SUCCESS);
     ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId), QUGATE_SUCCESS);
 
-    // Close the governed gate — admin no longer governs anything active
+    // Close the governed gate, admin no longer governs anything active
     env.closeGate(ALICE, target.gateId);
 
     env.qpi._epoch = 104;

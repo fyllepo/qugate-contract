@@ -67,7 +67,7 @@ constexpr uint8 QUGATE_EXEC_REJECTED  = 5;
 // Chain gate constants
 constexpr uint8  QUGATE_MAX_CHAIN_DEPTH            = 3;
 constexpr sint64 QUGATE_CHAIN_HOP_FEE              = 1000;
-constexpr sint64 QUGATE_HEARTBEAT_PING_FEE         = 1000;  // legacy — heartbeat() now charges full maintenance cost
+constexpr sint64 QUGATE_HEARTBEAT_PING_FEE         = 1000;  // Minimum heartbeat() ping fee floor; actual cost is pro-rated maintenance
 constexpr uint32 QUGATE_LOG_CHAIN_HOP              = 12;
 constexpr uint32 QUGATE_LOG_CHAIN_CYCLE            = 13;
 constexpr uint32 QUGATE_LOG_CHAIN_HOP_INSUFFICIENT = 14;
@@ -80,7 +80,7 @@ constexpr sint64 QUGATE_UNAUTHORIZED           = -3;  // Caller is not the gate 
 constexpr sint64 QUGATE_INVALID_MODE           = -4;  // Mode value exceeds QUGATE_MODE_TIME_LOCK (8)
 constexpr sint64 QUGATE_INVALID_RECIPIENT_COUNT = -5; // recipientCount is 0 or exceeds QUGATE_MAX_RECIPIENTS
 constexpr sint64 QUGATE_INVALID_RATIO          = -6;  // Individual ratio exceeds QUGATE_MAX_RATIO, or total ratio is 0
-constexpr sint64 QUGATE_INSUFFICIENT_FEE       = -7;  // invocationReward < escalated creation fee
+constexpr sint64 QUGATE_INSUFFICIENT_FEE       = -7;  // invocationReward < required fee for this operation
 constexpr sint64 QUGATE_NO_FREE_SLOTS          = -8;  // Free-list empty and gateCount at QUGATE_MAX_GATES
 constexpr sint64 QUGATE_DUST_AMOUNT            = -9;  // Send amount is 0 or below _minSendAmount (burned)
 constexpr sint64 QUGATE_INVALID_THRESHOLD      = -10; // Threshold is 0 for QUGATE_MODE_THRESHOLD gates
