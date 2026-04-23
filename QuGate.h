@@ -67,6 +67,7 @@ constexpr uint8 QUGATE_EXEC_REJECTED  = 5;
 // Chain gate constants
 constexpr uint8  QUGATE_MAX_CHAIN_DEPTH            = 3;
 constexpr sint64 QUGATE_CHAIN_HOP_FEE              = 1000;
+constexpr sint64 QUGATE_HEARTBEAT_PING_FEE         = 1000;  // burned per heartbeat() call
 constexpr uint32 QUGATE_LOG_CHAIN_HOP              = 12;
 constexpr uint32 QUGATE_LOG_CHAIN_CYCLE            = 13;
 constexpr uint32 QUGATE_LOG_CHAIN_HOP_INSUFFICIENT = 14;
@@ -1392,6 +1393,9 @@ public:
         uint8  i;
         uint16 shareSum;
         QUGATE_HeartbeatConfig cfg;
+        uint64 configFee;
+        uint64 configBurn;
+        uint64 configDividend;
         // Admin gate check
         uint64 adminCheckSlot;
         uint64 adminCheckEncodedGen;
@@ -4676,10 +4680,40 @@ public:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        // Refund any attached QU
-        if (locals.invReward > 0)
+        // Threshold-scaled configuration fee:
+        // creationFee * (1 + thresholdEpochs / idleWindowEpochs)
+        // Longer heartbeat thresholds cost more to discourage long-duration slot occupation.
+        locals.configFee = 0;
+        if (input.thresholdEpochs > 0 && state.get()._idleWindowEpochs > 0)
         {
-            qpi.transfer(qpi.invocator(), locals.invReward);
+            locals.configFee = state.get()._creationFee
+                * (1 + QPI::div((uint64)input.thresholdEpochs, state.get()._idleWindowEpochs));
+        }
+        if (locals.invReward < (sint64)locals.configFee)
+        {
+            if (locals.invReward > 0)
+            {
+                qpi.transfer(qpi.invocator(), locals.invReward);
+            }
+            output.status = QUGATE_INSUFFICIENT_FEE;
+            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
+            LOG_INFO(locals.logger);
+            return;
+        }
+        // Burn/dividend split on the config fee
+        if (locals.configFee > 0)
+        {
+            locals.configBurn = QPI::div(locals.configFee * state.get()._feeBurnBps, 10000ULL);
+            locals.configDividend = locals.configFee - locals.configBurn;
+            qpi.burn(locals.configBurn);
+            state.mut()._totalBurned += locals.configBurn;
+            state.mut()._earnedMaintenanceDividends += locals.configDividend;
+            state.mut()._totalMaintenanceDividends += locals.configDividend;
+        }
+        // Refund any excess
+        if (locals.invReward > (sint64)locals.configFee)
+        {
+            qpi.transfer(qpi.invocator(), locals.invReward - (sint64)locals.configFee);
         }
 
         // Decode versioned gateId
@@ -4865,10 +4899,24 @@ public:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        // Refund any attached QU
-        if (locals.invReward > 0)
+        // Heartbeat ping fee: must attach at least QUGATE_HEARTBEAT_PING_FEE (burned)
+        if (locals.invReward < QUGATE_HEARTBEAT_PING_FEE)
         {
-            qpi.transfer(qpi.invocator(), locals.invReward);
+            if (locals.invReward > 0)
+            {
+                qpi.transfer(qpi.invocator(), locals.invReward);
+            }
+            output.status = QUGATE_INSUFFICIENT_FEE;
+            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
+            LOG_INFO(locals.logger);
+            return;
+        }
+        // Burn the ping fee, refund any excess
+        qpi.burn(QUGATE_HEARTBEAT_PING_FEE);
+        state.mut()._totalBurned += QUGATE_HEARTBEAT_PING_FEE;
+        if (locals.invReward > QUGATE_HEARTBEAT_PING_FEE)
+        {
+            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_HEARTBEAT_PING_FEE);
         }
 
         // Decode versioned gateId

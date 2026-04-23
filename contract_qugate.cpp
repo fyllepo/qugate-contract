@@ -2122,6 +2122,19 @@ public:
         }
         if (shareSum != 100) return QUGATE_HEARTBEAT_INVALID;
 
+        // Threshold-scaled config fee: creationFee * (1 + thresholdEpochs / idleWindow)
+        if (state.get()._idleWindowEpochs > 0)
+        {
+            uint64 configFee = state.get()._creationFee
+                * (1 + QPI::div((uint64)thresholdEpochs, state.get()._idleWindowEpochs));
+            uint64 configBurn = QPI::div(configFee * state.get()._feeBurnBps, 10000ULL);
+            uint64 configDiv = configFee - configBurn;
+            qpi.burn(configBurn);
+            state.mut()._totalBurned += configBurn;
+            state.mut()._earnedMaintenanceDividends += configDiv;
+            state.mut()._totalMaintenanceDividends += configDiv;
+        }
+
         QUGATE_HeartbeatConfig_Test cfg;
         memset(&cfg, 0, sizeof(cfg));
         cfg.thresholdEpochs = thresholdEpochs;
@@ -2166,6 +2179,10 @@ public:
         QUGATE_HeartbeatConfig_Test cfg = state.get()._heartbeatConfigs.get(idx);
         if (cfg.active == 0) return QUGATE_HEARTBEAT_NOT_ACTIVE;
         if (cfg.triggered == 1) return QUGATE_HEARTBEAT_TRIGGERED;
+
+        // Burn heartbeat ping fee
+        qpi.burn(QUGATE_HEARTBEAT_PING_FEE);
+        state.mut()._totalBurned += QUGATE_HEARTBEAT_PING_FEE;
 
         cfg.lastHeartbeatEpoch = qpi.epoch();
         state.mut()._heartbeatConfigs.set(idx, cfg);
@@ -5085,6 +5102,67 @@ TEST(QuGateHeartbeat, HeartbeatZeroBeneficiariesRefundsOwner)
     env.qpi.reset();
     env.endEpoch();
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 1000);
+}
+
+// Heartbeat ping burns 1000 QU fee
+TEST(QuGateHeartbeat, HeartbeatPingBurnsFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 8, 25, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
+
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    env.qpi._epoch = 150;
+    ASSERT_EQ(env.sendHeartbeat(ALICE, out.gateId), QUGATE_SUCCESS);
+
+    uint64 burnedAfter = env.state.get()._totalBurned;
+    EXPECT_EQ(burnedAfter - burnedBefore, (uint64)QUGATE_HEARTBEAT_PING_FEE);
+}
+
+// configureHeartbeat charges threshold-scaled fee
+TEST(QuGateHeartbeat, ConfigureHeartbeatChargesThresholdFee)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    // threshold=8, idleWindow=4 → configFee = creationFee * (1 + 8/4) = creationFee * 3
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 8, 25, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
+
+    uint64 burnedAfter = env.state.get()._totalBurned;
+    uint64 expectedFee = QUGATE_DEFAULT_CREATION_FEE * 3;
+    uint64 expectedBurn = QPI::div(expectedFee * 5000, 10000ULL); // 50% burn
+    EXPECT_EQ(burnedAfter - burnedBefore, expectedBurn);
+}
+
+// Longer threshold = higher config fee
+TEST(QuGateHeartbeat, LongerThresholdCostsMore)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+
+    auto g1 = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    uint64 burned1 = env.state.get()._totalBurned;
+    ASSERT_EQ(env.configureHeartbeat(ALICE, g1.gateId, 8, 25, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
+    uint64 cost8 = env.state.get()._totalBurned - burned1;
+
+    auto g2 = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    uint64 burned2 = env.state.get()._totalBurned;
+    ASSERT_EQ(env.configureHeartbeat(ALICE, g2.gateId, 52, 25, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
+    uint64 cost52 = env.state.get()._totalBurned - burned2;
+
+    EXPECT_GT(cost52, cost8);
 }
 
 // Guardian vote on multisig gate increments approval count
