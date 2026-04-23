@@ -1431,6 +1431,8 @@ public:
         uint64 downstreamMultBps;
         uint64 surcharge;
         uint64 adminFee;
+        uint64 elapsedEpochs;
+        uint64 proratedCost;
         uint64 burnAmount;
         uint64 dividendAmount;
         uint8  dsIdx;
@@ -5081,10 +5083,33 @@ public:
             }
         }
 
-        // Total maintenance cost
+        // Total full-cycle maintenance cost
         locals.maintenanceCost = locals.ownIdleFee + locals.downstreamTotalFee + locals.surcharge + locals.adminFee;
 
-        // Charge the maintenance cost
+        // Pro-rate by elapsed time since last heartbeat:
+        // fee = max(QUGATE_HEARTBEAT_PING_FEE, fullCost * elapsedEpochs / idleWindow)
+        // This ensures diligent pingers pay proportionally, not a full cycle per ping.
+        locals.elapsedEpochs = (uint64)(qpi.epoch() - locals.cfg.lastHeartbeatEpoch);
+        if (locals.elapsedEpochs == 0)
+        {
+            locals.elapsedEpochs = 1;
+        }
+        if (state.get()._idleWindowEpochs > 0 && locals.elapsedEpochs < state.get()._idleWindowEpochs)
+        {
+            locals.proratedCost = QPI::div(locals.maintenanceCost * locals.elapsedEpochs, state.get()._idleWindowEpochs);
+        }
+        else
+        {
+            locals.proratedCost = locals.maintenanceCost;
+        }
+        // Floor at legacy ping fee to prevent spam/zero-fee pings
+        if (locals.proratedCost < (uint64)QUGATE_HEARTBEAT_PING_FEE)
+        {
+            locals.proratedCost = (uint64)QUGATE_HEARTBEAT_PING_FEE;
+        }
+        locals.maintenanceCost = locals.proratedCost;
+
+        // Charge the pro-rated maintenance cost
         if (locals.invReward < (sint64)locals.maintenanceCost)
         {
             if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }

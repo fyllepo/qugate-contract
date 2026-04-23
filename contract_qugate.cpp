@@ -2270,7 +2270,19 @@ public:
                 adminFee = QPI::div(state.get()._idleFee * QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS, 10000ULL);
             }
         }
-        uint64 maintenanceCost = ownFee + dsTotalFee + surcharge + adminFee;
+        uint64 fullCost = ownFee + dsTotalFee + surcharge + adminFee;
+        // Pro-rate by elapsed time since last heartbeat
+        uint64 elapsed = (uint64)(qpi.epoch() - cfg.lastHeartbeatEpoch);
+        if (elapsed == 0) elapsed = 1;
+        uint64 maintenanceCost = fullCost;
+        if (state.get()._idleWindowEpochs > 0 && elapsed < state.get()._idleWindowEpochs)
+        {
+            maintenanceCost = QPI::div(fullCost * elapsed, state.get()._idleWindowEpochs);
+        }
+        if (maintenanceCost < (uint64)QUGATE_HEARTBEAT_PING_FEE)
+        {
+            maintenanceCost = (uint64)QUGATE_HEARTBEAT_PING_FEE;
+        }
 
         // Apply burn/dividend split
         uint64 burnAmt = QPI::div(maintenanceCost * state.get()._feeBurnBps, 10000ULL);
@@ -5291,6 +5303,37 @@ TEST(QuGateHeartbeat, LongerThresholdCostsMore)
 
     EXPECT_GT(cost52, cost8);
 }
+
+// Pro-rated ping: 1 epoch elapsed costs 1/4 of full maintenance
+TEST(QuGateHeartbeat, HeartbeatPingProratedByElapsed)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 8, 25, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
+
+    // First ping at epoch 101 (1 epoch after config at 100)
+    env.qpi._epoch = 101;
+    uint64 chargedBefore = env.state.get()._totalMaintenanceCharged;
+    ASSERT_EQ(env.sendHeartbeat(ALICE, out.gateId), QUGATE_SUCCESS);
+    uint64 cost1 = env.state.get()._totalMaintenanceCharged - chargedBefore;
+
+    // Second ping at epoch 105 (4 epochs after last ping — full cycle)
+    env.qpi._epoch = 105;
+    chargedBefore = env.state.get()._totalMaintenanceCharged;
+    ASSERT_EQ(env.sendHeartbeat(ALICE, out.gateId), QUGATE_SUCCESS);
+    uint64 cost4 = env.state.get()._totalMaintenanceCharged - chargedBefore;
+
+    // 1-epoch ping should cost ~1/4 of 4-epoch ping
+    EXPECT_LT(cost1, cost4);
+    // Full cycle (4 epochs) should equal the full maintenance cost
+    uint64 fullCost = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS, 10000ULL);
+    EXPECT_EQ(cost4, fullCost);
+}
+
 
 // Guardian vote on multisig gate increments approval count
 TEST(QuGateMultisig, MultisigVoteAccumulatesApproval)
