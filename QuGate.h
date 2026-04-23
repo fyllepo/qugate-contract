@@ -191,7 +191,6 @@ struct QUGATE_MultisigConfig
     uint8        approvalCount;         // current vote count
     uint32       proposalEpoch;         // epoch when first vote was cast
     uint8        proposalActive;        // 1 if proposal in progress
-    uint32       proposalCooldownEpoch; // earliest epoch a new proposal can start after expiry
 };
 
 struct QUGATE_AdminApprovalState
