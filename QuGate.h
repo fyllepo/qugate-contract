@@ -2255,11 +2255,10 @@ public:
             if (locals.msigCfg.proposalActive == 1
                 && (uint32)qpi.epoch() - locals.msigCfg.proposalEpoch > locals.msigCfg.proposalExpiryEpochs)
             {
-                // Proposal expired — reset with cooldown
+                // Proposal expired — reset
                 locals.msigCfg.approvalBitmap = 0;
                 locals.msigCfg.approvalCount = 0;
                 locals.msigCfg.proposalActive = 0;
-                locals.msigCfg.proposalCooldownEpoch = (uint32)qpi.epoch() + (uint32)state.get()._idleWindowEpochs;
                 state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
                 locals.logger._contractIndex = CONTRACT_INDEX;
                 locals.logger._type = QUGATE_LOG_MULTISIG_EXPIRED;
@@ -2281,19 +2280,8 @@ public:
             locals.msigCfg.approvalCount++;
             if (locals.msigCfg.proposalActive == 0)
             {
-                // Cooldown check: reject votes during cooldown after expired proposal
-                if (locals.msigCfg.proposalCooldownEpoch > 0 && (uint32)qpi.epoch() < locals.msigCfg.proposalCooldownEpoch)
-                {
-                    output.status = QUGATE_MULTISIG_PROPOSAL_ACTIVE;
-                    locals.logger._contractIndex = CONTRACT_INDEX;
-                    locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
-                    locals.logger.gateId = input.gateId;
-                    LOG_WARNING(locals.logger);
-                    return;
-                }
                 locals.msigCfg.proposalActive = 1;
                 locals.msigCfg.proposalEpoch = (uint32)qpi.epoch();
-                locals.msigCfg.proposalCooldownEpoch = 0;
             }
             state.mut()._multisigConfigs.set(input.slotIdx, locals.msigCfg);
 
