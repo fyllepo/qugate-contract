@@ -2192,9 +2192,83 @@ public:
         if (cfg.active == 0) return QUGATE_HEARTBEAT_NOT_ACTIVE;
         if (cfg.triggered == 1) return QUGATE_HEARTBEAT_TRIGGERED;
 
-        // Burn heartbeat ping fee
-        qpi.burn(QUGATE_HEARTBEAT_PING_FEE);
-        state.mut()._totalBurned += QUGATE_HEARTBEAT_PING_FEE;
+        // Compute full maintenance cost (same as END_EPOCH idle charging)
+        uint64 ownMult = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
+        if (gate.recipientCount >= QUGATE_MAX_RECIPIENTS)
+            ownMult = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
+        else if (gate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD && ownMult < QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS)
+            ownMult = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
+        if (gate.chainNextGateId >= 0)
+            ownMult += QUGATE_IDLE_CHAIN_EXTRA_BPS;
+        uint64 ownFee = QPI::div(state.get()._idleFee * ownMult, 10000ULL);
+
+        uint64 dsCount = 0;
+        uint64 dsTotalFee = 0;
+        // Chain target
+        if (gate.chainNextGateId >= 0)
+        {
+            uint64 dsSlot = slotFromGateId(gate.chainNextGateId);
+            if (dsSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(gate.chainNextGateId))
+            {
+                GateConfig dsGate = state.get()._gates.get(dsSlot);
+                if (dsGate.active == 1)
+                {
+                    uint64 dsMult = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
+                    if (dsGate.recipientCount >= QUGATE_MAX_RECIPIENTS) dsMult = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
+                    else if (dsGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD) dsMult = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
+                    if (dsGate.mode == MODE_HEARTBEAT && dsMult < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS) dsMult = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
+                    if (dsGate.mode == MODE_MULTISIG && dsMult < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS) dsMult = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
+                    if (dsGate.chainNextGateId >= 0) dsMult += QUGATE_IDLE_CHAIN_EXTRA_BPS;
+                    dsTotalFee += QPI::div(state.get()._idleFee * dsMult, 10000ULL);
+                    dsCount++;
+                }
+            }
+        }
+        // Gate-as-recipient targets
+        for (uint8 ri = 0; ri < gate.recipientCount; ri++)
+        {
+            if (gate.recipientGateIds.get(ri) >= 0)
+            {
+                uint64 dsSlot = slotFromGateId(gate.recipientGateIds.get(ri));
+                if (dsSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(gate.recipientGateIds.get(ri)))
+                {
+                    GateConfig dsGate = state.get()._gates.get(dsSlot);
+                    if (dsGate.active == 1)
+                    {
+                        uint64 dsMult = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
+                        if (dsGate.recipientCount >= QUGATE_MAX_RECIPIENTS) dsMult = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
+                        else if (dsGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD) dsMult = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
+                        if (dsGate.mode == MODE_HEARTBEAT && dsMult < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS) dsMult = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
+                        if (dsGate.mode == MODE_MULTISIG && dsMult < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS) dsMult = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
+                        if (dsGate.chainNextGateId >= 0) dsMult += QUGATE_IDLE_CHAIN_EXTRA_BPS;
+                        dsTotalFee += QPI::div(state.get()._idleFee * dsMult, 10000ULL);
+                        dsCount++;
+                    }
+                }
+            }
+        }
+        uint64 surcharge = dsCount > 0 ? QPI::div(state.get()._idleFee * dsCount * QUGATE_IDLE_SHIELD_PER_TARGET_BPS, 10000ULL) : 0;
+        // Admin gate fee
+        uint64 adminFee = 0;
+        if (gate.adminGateId > 0)
+        {
+            uint64 adminSlot = slotFromGateId(gate.adminGateId);
+            if (adminSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(gate.adminGateId)
+                && state.get()._gates.get(adminSlot).active == 1)
+            {
+                adminFee = QPI::div(state.get()._idleFee * QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS, 10000ULL);
+            }
+        }
+        uint64 maintenanceCost = ownFee + dsTotalFee + surcharge + adminFee;
+
+        // Apply burn/dividend split
+        uint64 burnAmt = QPI::div(maintenanceCost * state.get()._feeBurnBps, 10000ULL);
+        uint64 divAmt = maintenanceCost - burnAmt;
+        qpi.burn(burnAmt);
+        state.mut()._totalBurned += burnAmt;
+        state.mut()._earnedMaintenanceDividends += divAmt;
+        state.mut()._totalMaintenanceDividends += divAmt;
+        state.mut()._totalMaintenanceCharged += maintenanceCost;
 
         cfg.lastHeartbeatEpoch = qpi.epoch();
         state.mut()._heartbeatConfigs.set(idx, cfg);
@@ -5117,7 +5191,8 @@ TEST(QuGateHeartbeat, HeartbeatZeroBeneficiariesRefundsOwner)
 }
 
 // Heartbeat ping burns 1000 QU fee
-TEST(QuGateHeartbeat, HeartbeatPingBurnsFee)
+// Standalone heartbeat ping charges own idle fee (1.5x base, 1 recipient)
+TEST(QuGateHeartbeat, HeartbeatPingChargesMaintenanceCost)
 {
     QuGateTest env;
     id recips[] = { BOB };
@@ -5127,12 +5202,38 @@ TEST(QuGateHeartbeat, HeartbeatPingBurnsFee)
     auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
     ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 8, 25, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
 
-    uint64 burnedBefore = env.state.get()._totalBurned;
+    uint64 chargedBefore = env.state.get()._totalMaintenanceCharged;
     env.qpi._epoch = 150;
     ASSERT_EQ(env.sendHeartbeat(ALICE, out.gateId), QUGATE_SUCCESS);
 
-    uint64 burnedAfter = env.state.get()._totalBurned;
-    EXPECT_EQ(burnedAfter - burnedBefore, (uint64)QUGATE_HEARTBEAT_PING_FEE);
+    uint64 chargedAfter = env.state.get()._totalMaintenanceCharged;
+    // 1 recipient, HEARTBEAT mode → 1.5x multiplier → 37,500 QU
+    uint64 expectedFee = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS, 10000ULL);
+    EXPECT_EQ(chargedAfter - chargedBefore, expectedFee);
+}
+
+// Heartbeat with downstream chain charges own fee + downstream fee + surcharge
+TEST(QuGateHeartbeat, HeartbeatPingWithDownstreamCostsMore)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto hb = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 0, recips, ratios);
+    ASSERT_EQ(env.setChain(ALICE, hb.gateId, downstream.gateId), QUGATE_SUCCESS);
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    ASSERT_EQ(env.configureHeartbeat(ALICE, hb.gateId, 8, 25, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
+
+    uint64 chargedBefore = env.state.get()._totalMaintenanceCharged;
+    env.qpi._epoch = 150;
+    ASSERT_EQ(env.sendHeartbeat(ALICE, hb.gateId), QUGATE_SUCCESS);
+
+    uint64 chargedAfter = env.state.get()._totalMaintenanceCharged;
+    uint64 ownFee = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * (QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS + QUGATE_IDLE_CHAIN_EXTRA_BPS), 10000ULL);
+    uint64 dsFee = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * QUGATE_IDLE_BASE_MULTIPLIER_BPS, 10000ULL);
+    uint64 surcharge = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * 1 * QUGATE_IDLE_SHIELD_PER_TARGET_BPS, 10000ULL);
+    EXPECT_EQ(chargedAfter - chargedBefore, ownFee + dsFee + surcharge);
 }
 
 // configureHeartbeat charges threshold-scaled fee
