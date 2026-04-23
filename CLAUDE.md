@@ -40,6 +40,7 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 | `getGate_output` | 776 bytes | `reserve` at 680, `recipientGateIds` at 712 |
 | `fundGate_input` | 8 bytes | just `gateId` (no reserveTarget) |
 | `withdrawReserve_input` | 16 bytes | `gateId` at 0, `amount` at 8 (no reserveTarget) |
+| `heartbeat_output` | 20 bytes | `status` at 0, `epochRecorded` at 8, `feePaid` at 12 |
 
 ## Error Codes
 | Code | Constant | Added |
