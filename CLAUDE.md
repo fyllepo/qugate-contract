@@ -27,7 +27,7 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 - **Unified reserve**: Single `reserve` field per gate covers both chain hop fees and idle maintenance. Excess creation fee auto-seeds it. `fundGate(gateId)` tops it up.
 - **Governed fee split**: `_feeBurnBps` state variable (default 5000 = 50%, range 3000-7000). Applied to creation fees, idle maintenance, heartbeat pings, and heartbeat config fees.
 - **Complexity-based idle fees**: Base fee (25K) scaled by gate complexity: 1x simple, 1.5x for 3+ recipients/HEARTBEAT/MULTISIG, 2x for 8 recipients, +0.5x for chain links. Downstream drain and admin drain also use complexity multipliers.
-- **Heartbeat pay-per-cycle**: `heartbeat()` charges the gate's full per-cycle maintenance cost (own idle fee + downstream drain + surcharge + admin drain). `configureHeartbeat()` charges threshold-scaled fee: `creationFee * (1 + thresholdEpochs / idleWindow)`.
+- **Heartbeat pro-rated ping**: `heartbeat()` charges `max(1000, fullMaintenanceCost * elapsedEpochs / idleWindow)`. Full cost = own idle fee + downstream drain + surcharge + admin drain. Frequent pingers pay proportionally less. `configureHeartbeat()` charges threshold-scaled fee: `creationFee * (1 + thresholdEpochs / idleWindow)`.
 - **Admin gate expiry exemption**: Admin-only multisigs that govern at least one active gate are exempt from expiry (scanned in expiry loop). Admin drain only refreshes activity on successful payment.
 - **Transfer-first**: All `qpi.transfer()` calls check `>= 0` before mutating state. Tagged `[QG-01]` through `[QG-17]`.
 - **invReward capture**: Every procedure captures `qpi.invocationReward()` into `locals.invReward` at entry.
