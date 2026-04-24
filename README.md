@@ -853,7 +853,7 @@ Configures heartbeat mode on a HEARTBEAT gate. Owner only. Sets the inactivity t
 | minimumBalance | sint64 | 8 | Gate auto-closes when balance falls to or below this |
 | beneficiaryAddresses | Array\<id, 8\> | 256 | Beneficiary public keys |
 | beneficiaryShares | Array\<uint8, 8\> | 8 | Share per beneficiary (must sum to 100) |
-| beneficiaryCount | uint8 | 1 | Number of beneficiaries (1-8) |
+| beneficiaryCount | uint8 | 1 | Number of beneficiaries (0-8; 0 allowed when chainNextGateId is set) |
 
 **Output**: `status` (sint64)
 
