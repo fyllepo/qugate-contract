@@ -394,7 +394,7 @@ public:
         sint64 minimumBalance;            // stop payouts when balance falls below this
         Array<id, 8>    beneficiaryAddresses;
         Array<uint8, 8> beneficiaryShares; // must sum to 100
-        uint8  beneficiaryCount;           // 1–8
+        uint8  beneficiaryCount;           // 0–8; 0 allowed only when chainNextGateId is set
     };
     struct configureHeartbeat_output
     {
@@ -4819,8 +4819,8 @@ public:
             return;
         }
 
-        // Validate beneficiary count
-        if (input.beneficiaryCount == 0 || input.beneficiaryCount > 8)
+        // Validate beneficiaries: allow chain-only heartbeat config when a chain target exists.
+        if (input.beneficiaryCount > 8 || (input.beneficiaryCount == 0 && locals.gate.chainNextGateId == -1))
         {
             if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_HEARTBEAT_INVALID;
@@ -4829,13 +4829,13 @@ public:
             return;
         }
 
-        // Validate shares sum to 100
+        // Validate shares sum to 100 when direct beneficiaries are configured.
         locals.shareSum = 0;
         for (locals.i = 0; locals.i < input.beneficiaryCount; locals.i++)
         {
             locals.shareSum += input.beneficiaryShares.get(locals.i);
         }
-        if (locals.shareSum != 100)
+        if (input.beneficiaryCount > 0 && locals.shareSum != 100)
         {
             if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_HEARTBEAT_INVALID;

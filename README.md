@@ -131,11 +131,11 @@ Mode slot 5 is reserved for future use. `createGate` with `mode=5` returns `QUGA
 
 ## HEARTBEAT Gate (Mode 6)
 
-A heartbeat gate holds funds and distributes them to wallet beneficiaries if the owner stops sending periodic `heartbeat()` signals. Configuration requires at least one wallet beneficiary. A chain target may coexist, but it does not replace beneficiaries. Ideal for dead man's switch, inheritance, or automated recurring distributions.
+A heartbeat gate holds funds and distributes them to direct wallet beneficiaries, a downstream chain target, or both if the owner stops sending periodic `heartbeat()` signals. Configuration requires at least one payout path. If no direct beneficiaries are configured, `chainNextGateId` must be set. Ideal for dead man's switch, inheritance, or automated recurring distributions.
 
 ### Setup
 1. Create a gate with `mode=6`
-2. Call `configureHeartbeat()` with threshold, payout percent, and beneficiaries
+2. Call `configureHeartbeat()` with threshold, payout percent, and any direct beneficiaries
 3. Call `heartbeat()` periodically to keep the gate dormant
 4. If `thresholdEpochs` pass without a heartbeat, the gate triggers
 
@@ -145,7 +145,7 @@ A heartbeat gate holds funds and distributes them to wallet beneficiaries if the
 | thresholdEpochs | Epochs of inactivity before trigger (min 1, ~1 epoch/week) |
 | payoutPercentPerEpoch | % of balance distributed each epoch after trigger (1-100) |
 | minimumBalance | Gate auto-closes when balance drops below this amount |
-| beneficiaries | Up to 8 addresses with sharePercent summing to 100 |
+| beneficiaries | Optional direct addresses with sharePercent summing to 100 when present. If empty, the gate must have a chain target |
 
 ### Procedures
 - `configureHeartbeat(gateId, thresholdEpochs, payoutPercent, minimumBalance, beneficiaries[])` - owner only, charges a threshold-scaled fee after validation

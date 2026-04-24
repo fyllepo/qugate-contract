@@ -2149,14 +2149,14 @@ public:
         if (gate.active == 0) return QUGATE_GATE_NOT_ACTIVE;
         if (gate.mode != MODE_HEARTBEAT) return QUGATE_HEARTBEAT_NOT_ACTIVE;
         if (thresholdEpochs == 0 || payoutPercentPerEpoch == 0 || payoutPercentPerEpoch > 100) return QUGATE_HEARTBEAT_INVALID;
-        if (beneficiaryCount == 0 || beneficiaryCount > 8) return QUGATE_HEARTBEAT_INVALID;
+        if (beneficiaryCount > 8 || (beneficiaryCount == 0 && gate.chainNextGateId == -1)) return QUGATE_HEARTBEAT_INVALID;
 
         uint64 shareSum = 0;
         for (uint8 i = 0; i < beneficiaryCount; i++)
         {
             shareSum += beneficiaryShares[i];
         }
-        if (shareSum != 100) return QUGATE_HEARTBEAT_INVALID;
+        if (beneficiaryCount > 0 && shareSum != 100) return QUGATE_HEARTBEAT_INVALID;
 
         // Threshold-scaled config fee: creationFee * (1 + thresholdEpochs / idleWindow)
         if (state.get()._idleWindowEpochs > 0)
@@ -5023,6 +5023,41 @@ TEST(QuGateHeartbeat, HeartbeatConfigureSuccess)
     EXPECT_EQ(hb.beneficiaryCount, 2);
 }
 
+TEST(QuGateHeartbeat, HeartbeatConfigureChainOnlySuccess)
+{
+    QuGateTest env;
+    id heartbeatRecips[] = { BOB };
+    uint64 heartbeatRatios[] = { 0 };
+    id downstreamRecips[] = { BOB };
+    uint64 downstreamRatios[] = { 10000 };
+    id beneficiaries[1] = {};
+    uint8 shares[1] = { 0 };
+
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, heartbeatRecips, heartbeatRatios);
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, downstreamRecips, downstreamRatios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(downstream.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.setChain(ALICE, out.gateId, downstream.gateId, QUGATE_CHAIN_HOP_FEE).result, QUGATE_SUCCESS);
+
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 3, 25, 10, beneficiaries, shares, 0), QUGATE_SUCCESS);
+    auto hb = env.getHeartbeat(out.gateId);
+    EXPECT_EQ(hb.active, 1);
+    EXPECT_EQ(hb.beneficiaryCount, 0);
+}
+
+TEST(QuGateHeartbeat, HeartbeatConfigureChainOnlyWithoutChainRejected)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    id beneficiaries[1] = {};
+    uint8 shares[1] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    EXPECT_EQ(env.configureHeartbeat(ALICE, out.gateId, 3, 25, 10, beneficiaries, shares, 0), QUGATE_HEARTBEAT_INVALID);
+}
+
 // configureHeartbeat on a non-heartbeat gate returns HEARTBEAT_NOT_ACTIVE
 TEST(QuGateHeartbeat, HeartbeatConfigureWrongMode)
 {
@@ -5215,6 +5250,39 @@ TEST(QuGateHeartbeat, HeartbeatChainUsesOnlyUndeliveredPayoutRemainder)
     EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 2500);
     EXPECT_EQ(env.qpi.totalTransferredTo(CHARLIE), 0);
     EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 1500);
+    EXPECT_EQ(gate.currentBalance, 5000ULL);
+    EXPECT_EQ(gate.totalForwarded, 5000ULL);
+}
+
+TEST(QuGateHeartbeat, HeartbeatChainOnlyPayoutForwardsFullPayoutToChain)
+{
+    QuGateTest env;
+    id heartbeatRecips[] = { BOB };
+    uint64 heartbeatRatios[] = { 0 };
+    id downstreamRecips[] = { DAVE };
+    uint64 downstreamRatios[] = { 10000 };
+    id beneficiaries[1] = {};
+    uint8 shares[1] = { 0 };
+
+    auto source = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, heartbeatRecips, heartbeatRatios);
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, downstreamRecips, downstreamRatios);
+    ASSERT_EQ(source.status, QUGATE_SUCCESS);
+    ASSERT_EQ(downstream.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.setChain(ALICE, source.gateId, downstream.gateId, QUGATE_CHAIN_HOP_FEE).result, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureHeartbeat(ALICE, source.gateId, 1, 50, 10, beneficiaries, shares, 0), QUGATE_SUCCESS);
+    ASSERT_EQ(env.sendToGate(ALICE, source.gateId, 10000).status, QUGATE_SUCCESS);
+    EXPECT_EQ(env.getGate(source.gateId).chainNextGateId, (sint64)downstream.gateId);
+
+    env.qpi._epoch = 102;
+    env.endEpoch();
+    EXPECT_EQ(env.getHeartbeat(source.gateId).triggered, 1);
+    EXPECT_EQ(env.getGate(source.gateId).currentBalance, 10000ULL);
+    env.qpi.reset();
+    env.qpi._epoch = 103;
+    env.endEpoch();
+
+    auto gate = env.getGate(source.gateId);
+    EXPECT_EQ(env.qpi.totalTransferredTo(DAVE), 4000);
     EXPECT_EQ(gate.currentBalance, 5000ULL);
     EXPECT_EQ(gate.totalForwarded, 5000ULL);
 }
