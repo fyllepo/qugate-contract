@@ -6300,6 +6300,25 @@ TEST(QuGateQuery, GetGateBySlotActiveReturnsCurrentId)
     EXPECT_EQ(slotOut.gateId, 1);
 }
 
+TEST(QuGateQuery, HeartbeatQueryStaysActivePastRawExpiryWindow)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 0, recips, ratios);
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 600, 10, 1000000, beneficiaries, shares, 1), QUGATE_SUCCESS);
+
+    env.qpi._epoch = env.state.get()._gates.get(0).lastActivityEpoch + env.state.get()._expiryEpochs + 25;
+
+    auto gate = env.getGate(out.gateId);
+    auto slotOut = env.getGateBySlot(0);
+
+    EXPECT_EQ(gate.active, 1);
+    EXPECT_EQ(slotOut.active, 1);
+}
+
 TEST(QuGateChain, ChainValidationIgnoresStaleGenerationReusedSlot)
 {
     QuGateTest env;

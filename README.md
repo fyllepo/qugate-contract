@@ -2,7 +2,7 @@
 
 QuGate is shared, permissionless payment routing infrastructure for the Qubic network. It gives the ecosystem one reusable contract for routing, splitting, holding, and governing QU flows instead of rebuilding payment logic per project. Creation, heartbeat/time-lock configuration, heartbeat ping, and idle maintenance fees follow the governed burn/dividend split. Successful anti-spam mutations, dust, and chain-hop fees are 100% burned. Idle gates maintain a reserve-backed inactivity budget so long-lived infrastructure pays for the state it consumes.
 
-**Status**: Testnet verified. 220 unit tests passing, 132/132 integration scenarios passing.
+**Status**: Testnet verified. 221 unit tests passing, 132/132 integration scenarios passing.
 **Author**: fyllepo (Discord: phileepphilop)
 **Repository**: [github.com/fyllepo/qugate-contract](https://github.com/fyllepo/qugate-contract)
 
@@ -1545,7 +1545,7 @@ g++ -std=c++17 -I. contract_qugate.cpp -lgtest -lgtest_main -o qugate_tests
 ./qugate_tests
 ```
 
-The test suite (`contract_qugate.cpp`) contains 220 unit tests covering:
+The test suite (`contract_qugate.cpp`) contains 221 unit tests covering:
 - All 8 active gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, heartbeat dead-man's switch, M-of-N multisig approval, epoch-based time lock)
 - Chain gates (hop fees, chain reserve, depth limits, cycle detection)
 - Versioned gate IDs and sendToGateVerified
@@ -1614,7 +1614,7 @@ python3 tests/test_attack_vectors.py   # Security edge cases
 ### Testnet Results
 
 Tested on Qubic Core-Lite v1.283.0 (local testnet, 2026-04-03):
-- **220 unit tests passing** (fund conservation, mode lifecycle, governance, idle maintenance, edge cases, regression)
+- **221 unit tests passing** (fund conservation, mode lifecycle, governance, idle maintenance, edge cases, regression)
 - **132/132 integration scenarios passing** across 8 parallel wallet lanes
 - All 8 active gate modes verified: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK
 - Full governance lifecycle: admin gate attachment, approval windows, governed mutations, expiry recovery

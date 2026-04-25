@@ -4287,14 +4287,6 @@ public:
             output.recipientGateIds.set(locals.i, locals.gate.recipientGateIds.get(locals.i));
         }
 
-        // Report as inactive if expired (function can't mutate state)
-        if ((locals.delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0
-             && qpi.epoch() - locals.delinquentEpoch >= state.get()._idleGraceEpochs)
-            || (state.get()._expiryEpochs > 0
-                && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs))
-        {
-            output.active = 0;
-        }
     }
 
     PUBLIC_FUNCTION(getGateCount)
@@ -4398,7 +4390,6 @@ public:
                     if (qpi.epoch() - locals.delinquentEpoch >= state.get()._idleGraceEpochs)
                     {
                         locals.entry.idleExpiryOverdue = 1;
-                        locals.entry.active = 0;
                     }
                     else
                     {
@@ -4412,12 +4403,6 @@ public:
                     locals.entry.ratios.set(locals.j, locals.gate.ratios.get(locals.j));
                     locals.entry.allowedSenders.set(locals.j, locals.asCfg.senders.get(locals.j));
                     locals.entry.recipientGateIds.set(locals.j, locals.gate.recipientGateIds.get(locals.j));
-                }
-
-                if (state.get()._expiryEpochs > 0
-                    && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs)
-                {
-                    locals.entry.active = 0;
                 }
 
                 output.gates.set(locals.i, locals.entry);
@@ -6573,7 +6558,6 @@ public:
             if (qpi.epoch() - locals.delinquentEpoch >= state.get()._idleGraceEpochs)
             {
                 output.idleExpiryOverdue = 1;
-                output.active = 0;
             }
             else
             {
@@ -6587,12 +6571,6 @@ public:
             output.ratios.set(locals.i, locals.gate.ratios.get(locals.i));
             output.allowedSenders.set(locals.i, locals.asCfg.senders.get(locals.i));
             output.recipientGateIds.set(locals.i, locals.gate.recipientGateIds.get(locals.i));
-        }
-
-        if (state.get()._expiryEpochs > 0
-            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs)
-        {
-            output.active = 0;
         }
     }
 
