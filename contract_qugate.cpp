@@ -254,6 +254,8 @@ constexpr uint8 MODE_CONDITIONAL = 4;
 constexpr uint8 MODE_HEARTBEAT = 6;
 constexpr uint8 MODE_MULTISIG = 7;
 constexpr uint8 MODE_TIME_LOCK = 8;
+constexpr uint8 QUGATE_GOVERNANCE_STRICT_ADMIN = 0;
+constexpr uint8 QUGATE_GOVERNANCE_OWNER_OR_ADMIN = 1;
 
 // Fee split defaults
 constexpr uint64 QUGATE_DEFAULT_FEE_BURN_BPS = 5000;
@@ -344,6 +346,7 @@ struct GateConfig {
     uint16 nextIdleChargeEpoch;
 
     sint64 adminGateId;
+    uint8 governancePolicy;
 };
 
 // Per-gate allowed-senders configuration (side array)
@@ -488,6 +491,7 @@ struct getGate_output {
     uint8  chainDepth;
     sint64 reserve;
     sint64 adminGateId;
+    uint8 governancePolicy;
     uint8 hasAdminGate;
 };
 
@@ -507,6 +511,7 @@ struct getHeartbeat_output {
 struct getAdminGate_output {
     uint8 hasAdminGate;
     sint64 adminGateId;
+    uint8 governancePolicy;
     uint8 adminGateMode;
     uint8 guardianCount;
     uint8 required;
@@ -549,8 +554,9 @@ public:
     QPI::TestContractState<QuGateState>* stateWrapperPtr;
     QPI::TestContractState<QuGateState>& state;
     TestQpiContext qpi;
+    bool lastMutationUsedAdminApproval;
 
-    QuGateTest() : stateWrapperPtr(new QPI::TestContractState<QuGateState>()), state(*stateWrapperPtr)
+    QuGateTest() : stateWrapperPtr(new QPI::TestContractState<QuGateState>()), state(*stateWrapperPtr), lastMutationUsedAdminApproval(false)
     {
         memset(&state.mut(), 0, sizeof(QuGateState));
         // INITIALIZE
@@ -634,8 +640,10 @@ public:
 
     bool authorizeGateMutation(const id& caller, uint64 slotIdx, sint64& statusOut, bool allowOwnerBypassForStaleClear = false, bool clearingAdmin = false)
     {
+        lastMutationUsedAdminApproval = false;
         GateConfig gate = state.get()._gates.get(slotIdx);
-        if (gate.owner == caller && gate.adminGateId < 0)
+        if (gate.owner == caller
+            && (gate.adminGateId < 0 || gate.governancePolicy == QUGATE_GOVERNANCE_OWNER_OR_ADMIN))
         {
             return true;
         }
@@ -665,6 +673,7 @@ public:
                     && adminGate.mode == MODE_MULTISIG
                     && adminApprovalValid(adminSlot))
                 {
+                    lastMutationUsedAdminApproval = true;
                     return true;
                 }
             }
@@ -677,21 +686,28 @@ public:
 
     void consumeAdminApprovalIfUsed(const id& caller, uint64 slotIdx)
     {
-        GateConfig gate = state.get()._gates.get(slotIdx);
-        if (!(gate.owner == caller) || gate.adminGateId < 0)
+        if (!lastMutationUsedAdminApproval)
         {
+            return;
+        }
+        GateConfig gate = state.get()._gates.get(slotIdx);
+        if (gate.adminGateId < 0)
+        {
+            lastMutationUsedAdminApproval = false;
             return;
         }
 
         uint64 adminSlot = slotFromGateId(gate.adminGateId);
         if (adminSlot >= state.get()._gateCount || !gateIdMatchesCurrentGeneration(gate.adminGateId))
         {
+            lastMutationUsedAdminApproval = false;
             return;
         }
 
         GateConfig adminGate = state.get()._gates.get(adminSlot);
         if (adminGate.active == 0 || adminGate.mode != MODE_MULTISIG || !adminApprovalValid(adminSlot))
         {
+            lastMutationUsedAdminApproval = false;
             return;
         }
 
@@ -699,6 +715,7 @@ public:
         approval.active = 0;
         approval.validUntilEpoch = 0;
         state.mut()._adminApprovalStates.set(adminSlot, approval);
+        lastMutationUsedAdminApproval = false;
     }
 
     // ---- escalated fee calculation ----
@@ -799,6 +816,7 @@ public:
         g.chainDepth = 0;
         g.reserve = 0;
         g.adminGateId = -1;
+        g.governancePolicy = QUGATE_GOVERNANCE_STRICT_ADMIN;
         // Set idle charge due epoch
         if (state.get()._idleWindowEpochs > 0)
         {
@@ -2030,6 +2048,7 @@ public:
         out.chainDepth = g.chainDepth;
         out.reserve = g.reserve;
         out.adminGateId = g.adminGateId;
+        out.governancePolicy = g.governancePolicy;
         out.hasAdminGate = (g.adminGateId >= 0) ? 1 : 0;
         for (uint64 i = 0; i < QUGATE_MAX_RECIPIENTS; i++)
         {
@@ -2341,7 +2360,7 @@ public:
         return out;
     }
 
-    sint64 setAdminGate(const id& caller, uint64 gateId, sint64 adminGateId)
+    sint64 setAdminGate(const id& caller, uint64 gateId, sint64 adminGateId, uint8 governancePolicy = QUGATE_GOVERNANCE_STRICT_ADMIN)
     {
         qpi.reset();
         qpi._invocator = caller;
@@ -2362,6 +2381,7 @@ public:
             qpi.burn(QUGATE_CHAIN_HOP_FEE);
             state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
             gate.adminGateId = -1;
+            gate.governancePolicy = QUGATE_GOVERNANCE_STRICT_ADMIN;
             state.mut()._gates.set(idx, gate);
             return QUGATE_SUCCESS;
         }
@@ -2373,6 +2393,8 @@ public:
         if (adminSlot >= state.get()._gateCount || !gateIdMatchesCurrentGeneration(adminGateId)) return QUGATE_INVALID_ADMIN_GATE;
         GateConfig adminGate = state.get()._gates.get(adminSlot);
         if (adminGate.active == 0 || adminGate.mode != MODE_MULTISIG) return QUGATE_INVALID_ADMIN_GATE;
+        if (governancePolicy != QUGATE_GOVERNANCE_STRICT_ADMIN
+            && governancePolicy != QUGATE_GOVERNANCE_OWNER_OR_ADMIN) return QUGATE_INVALID_PARAMS;
         // Reject governing an admin-only multisig, admin gates govern fund-flow gates
         if (gate.mode == MODE_MULTISIG && gate.recipientCount == 0) return QUGATE_INVALID_ADMIN_GATE;
 
@@ -2391,6 +2413,7 @@ public:
         state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
 
         gate.adminGateId = encodeCurrentGateId(adminSlot);
+        gate.governancePolicy = governancePolicy;
         state.mut()._gates.set(idx, gate);
         return QUGATE_SUCCESS;
     }
@@ -2400,11 +2423,13 @@ public:
         getAdminGate_output out;
         memset(&out, 0, sizeof(out));
         out.adminGateId = -1;
+        out.governancePolicy = QUGATE_GOVERNANCE_STRICT_ADMIN;
         if (gateId == 0 || gateId > state.get()._gateCount) return out;
 
         GateConfig gate = state.get()._gates.get(gateId - 1);
         out.hasAdminGate = (gate.adminGateId >= 0) ? 1 : 0;
         out.adminGateId = gate.adminGateId;
+        out.governancePolicy = gate.governancePolicy;
         if (gate.adminGateId < 0) return out;
 
         uint64 adminSlot = slotFromGateId(gate.adminGateId);
@@ -5574,6 +5599,32 @@ TEST(QuGateAdmin, SetAdminGateSuccess)
     EXPECT_EQ(env.getGate(target.gateId).hasAdminGate, 1);
 }
 
+TEST(QuGateAdmin, SetAdminGateOwnerOrAdminPolicyStored)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId, QUGATE_GOVERNANCE_OWNER_OR_ADMIN), QUGATE_SUCCESS);
+    EXPECT_EQ(env.getGate(target.gateId).governancePolicy, QUGATE_GOVERNANCE_OWNER_OR_ADMIN);
+    EXPECT_EQ(env.getAdminGate(target.gateId).governancePolicy, QUGATE_GOVERNANCE_OWNER_OR_ADMIN);
+}
+
+TEST(QuGateAdmin, SetAdminGateRejectsInvalidGovernancePolicy)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    EXPECT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId, 2), QUGATE_INVALID_PARAMS);
+}
+
 // Non-multisig gate cannot be used as an admin gate
 TEST(QuGateAdmin, SetAdminGateRequiresMultisig)
 {
@@ -5640,6 +5691,35 @@ TEST(QuGateAdmin, AdminApprovalRequired)
     EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_ADMIN_GATE_REQUIRED);
     ASSERT_EQ(env.sendToGate(BOB, admin.gateId, 5000).status, QUGATE_SUCCESS);
     EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_SUCCESS);
+}
+
+TEST(QuGateAdmin, OwnerOrAdminLetsOwnerMutateWithoutApproval)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId, QUGATE_GOVERNANCE_OWNER_OR_ADMIN), QUGATE_SUCCESS);
+    EXPECT_EQ(env.closeGate(ALICE, target.gateId).status, QUGATE_SUCCESS);
+}
+
+TEST(QuGateAdmin, OwnerOrAdminStillAllowsGuardianApprovalForNonOwner)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setAdminGate(ALICE, target.gateId, admin.gateId, QUGATE_GOVERNANCE_OWNER_OR_ADMIN), QUGATE_SUCCESS);
+
+    EXPECT_EQ(env.closeGate(BOB, target.gateId).status, QUGATE_ADMIN_GATE_REQUIRED);
+    ASSERT_EQ(env.sendToGate(BOB, admin.gateId, 5000).status, QUGATE_SUCCESS);
+    EXPECT_EQ(env.closeGate(BOB, target.gateId).status, QUGATE_SUCCESS);
 }
 
 TEST(QuGateAdmin, MultisigAdminApprovalWindowExactExpiry)

@@ -2,7 +2,7 @@
 
 QuGate is shared, permissionless payment routing infrastructure for the Qubic network. It gives the ecosystem one reusable contract for routing, splitting, holding, and governing QU flows instead of rebuilding payment logic per project. Creation, heartbeat/time-lock configuration, heartbeat ping, and idle maintenance fees follow the governed burn/dividend split. Successful anti-spam mutations, dust, and chain-hop fees are 100% burned. Idle gates maintain a reserve-backed inactivity budget so long-lived infrastructure pays for the state it consumes.
 
-**Status**: Testnet verified. 213 unit tests passing, 132/132 integration scenarios passing.
+**Status**: Testnet verified. 220 unit tests passing, 132/132 integration scenarios passing.
 **Author**: fyllepo (Discord: phileepphilop)
 **Repository**: [github.com/fyllepo/qugate-contract](https://github.com/fyllepo/qugate-contract)
 
@@ -305,7 +305,12 @@ Send 500,000 QU to the gate address
 
 ## Admin Gate (adminGateId) - MULTISIG Governance for Any Gate
 
-Any gate can be placed under MULTISIG governance by assigning an **admin gate**. When an admin gate is set, configuration changes (closeGate, updateGate, configureHeartbeat, configureMultisig, configureTimeLock, cancelTimeLock, setChain) require either the owner's signature **or** approval from the admin gate's MULTISIG quorum.
+Any gate can be placed under MULTISIG governance by assigning an **admin gate**. Each governed gate stores a governance policy:
+
+- `strict_admin` (default): configuration changes require an active admin approval window.
+- `owner_or_admin`: the owner can still change configuration directly, and the admin MULTISIG remains an alternate recovery and approval path.
+
+These rules apply to governed configuration changes such as `closeGate`, `updateGate`, `configureHeartbeat`, `configureMultisig`, `configureTimeLock`, `cancelTimeLock`, `setChain`, `withdrawReserve`, and `setAdminGate`.
 
 Admin gates should be chosen with the same care as any other signing authority. Guardians cannot transfer gate ownership, but they can control most meaningful configuration changes, including replacing recipients, changing chain routing, replacing the admin gate itself, or closing the gate once approval is active.
 
@@ -316,17 +321,18 @@ The `heartbeat()` procedure is intentionally excluded. It is a keep-alive signal
 ### How it works
 
 1. Create a MULTISIG gate (mode 7) with guardians and a required threshold
-2. Call `setAdminGate(gateId, adminGateId)` on the gate you want to govern
-3. From that point, config changes on the governed gate require either:
-   - The owner calling the procedure directly, **or**
-   - The admin gate's MULTISIG quorum reaching approval in the current epoch
+2. Call `setAdminGate(gateId, adminGateId, governancePolicy)` on the gate you want to govern
+3. From that point:
+   - Under `strict_admin`, config changes need the admin gate's approval window
+   - Under `owner_or_admin`, the owner can act directly and the admin gate remains an alternate approval path
 4. To remove governance, call `setAdminGate(gateId, -1)`:
-   - If the current admin gate is active, clearing it requires that admin gate's approval window
+   - Under `strict_admin`, clearing an active admin gate requires that admin gate's approval window
+   - Under `owner_or_admin`, the owner may clear it directly
    - If the current admin gate has expired, been closed, or is otherwise no longer a valid active MULTISIG gate, the owner may clear it directly
 
 ### Procedures
-- `setAdminGate(gateId, adminGateId)` - owner-only if no admin gate set; requires admin gate approval if already set; 1,000 QU anti-spam on successful set/clear
-- `getAdminGate(gateId)` - read-only: returns hasAdminGate, adminGateId, adminGateMode, guardianCount, required, guardians
+- `setAdminGate(gateId, adminGateId, governancePolicy)` - owner-only if no admin gate set; once governed, follows the stored governance policy; 1,000 QU anti-spam on successful set/clear
+- `getAdminGate(gateId)` - read-only: returns hasAdminGate, adminGateId, governancePolicy, adminGateMode, guardianCount, required, approval-window state, and guardians
 
 ### Worked Example: HEARTBEAT + MULTISIG admin governance
 
@@ -334,7 +340,7 @@ The `heartbeat()` procedure is intentionally excluded. It is a keep-alive signal
 
 **Step 1: Create a MULTISIG admin gate**
 ```
-createGate(mode=7, recipients=[ANY_ADDRESS], ratios=[100])
+createGate(mode=7, recipients=[], ratios=[])
 → Returns adminGateId (e.g. 5368709121)
 configureMultisig(
   gateId: 5368709121,
@@ -363,7 +369,7 @@ configureHeartbeat(
 
 **Step 3: Assign the admin gate**
 ```
-setAdminGate(gateId: 4294967296, adminGateId: 5368709121)
+setAdminGate(gateId: 4294967296, adminGateId: 5368709121, governancePolicy: strict_admin)
 ```
 
 **Step 4: Owner can still heartbeat() normally**
@@ -731,6 +737,7 @@ Returns full gate configuration and statistics.
 | reserve | sint64 | Unified reserve (covers chain hop fees + inactivity maintenance) |
 | nextIdleChargeEpoch | uint16 | Next epoch when idle maintenance will be charged |
 | adminGateId | sint64 | Versioned gate ID of admin gate (-1 if no admin gate) |
+| governancePolicy | uint8 | 0 = strict_admin, 1 = owner_or_admin |
 | hasAdminGate | uint8 | 1 if governed by an admin gate |
 | idleDelinquent | uint8 | 1 if gate has missed idle-period funding |
 | idleGraceRemainingEpochs | uint16 | Epochs remaining before delinquent gate expires |
@@ -979,7 +986,7 @@ Read-only query for TIME_LOCK gate state.
 
 #### setAdminGate (Input Type 21)
 
-Sets or clears the admin gate on a gate. When setting, the admin gate must exist and be MULTISIG mode. Owner-only if no admin gate is currently set; requires admin gate approval if one is already set, except that the owner may directly clear an expired, closed, stale, or otherwise invalid current admin gate. Successful set/clear burns a 1,000 QU anti-spam fee after validation.
+Sets or clears the admin gate on a gate. When setting, the admin gate must exist and be MULTISIG mode. Owner-only if no admin gate is currently set. Once governed, mutation access follows the stored governance policy: `strict_admin` requires an active admin approval window, while `owner_or_admin` allows direct owner changes and keeps the admin gate as an alternate path. The owner may always directly clear an expired, closed, stale, or otherwise invalid current admin gate. Successful set/clear burns a 1,000 QU anti-spam fee after validation.
 
 **Input**:
 
@@ -987,10 +994,11 @@ Sets or clears the admin gate on a gate. When setting, the admin gate must exist
 |-------|------|------|-------------|
 | gateId | uint64 | 8 | Target gate ID |
 | adminGateId | sint64 | 8 | MULTISIG gate ID to assign (-1 to clear) |
+| governancePolicy | uint8 | 1 | 0 = strict_admin, 1 = owner_or_admin (used when setting an admin gate) |
 
 **Output**: `status` (sint64)
 
-**Validation**: Target gate must be active. Admin gate (if not -1) must exist, be active, and be MULTISIG mode. Returns `QUGATE_INVALID_ADMIN_GATE` (-27) on invalid admin gate. Returns `QUGATE_ADMIN_GATE_REQUIRED` (-26) if an active admin gate is set and caller lacks approval. If the current admin gate has expired, been closed, become stale, or is no longer an active MULTISIG gate, the owner may clear it with `adminGateId=-1`.
+**Validation**: Target gate must be active. Admin gate (if not -1) must exist, be active, and be MULTISIG mode. `governancePolicy` must be either `0` (`strict_admin`) or `1` (`owner_or_admin`). Returns `QUGATE_INVALID_ADMIN_GATE` (-27) on invalid admin gate. Returns `QUGATE_ADMIN_GATE_REQUIRED` (-26) if an active admin gate is set and caller lacks approval under the current governance policy. If the current admin gate has expired, been closed, become stale, or is no longer an active MULTISIG gate, the owner may clear it with `adminGateId=-1`.
 
 #### getAdminGate (Input Type 22)
 
@@ -1004,9 +1012,13 @@ Read-only query for admin gate configuration on a gate.
 |-------|------|-------------|
 | hasAdminGate | uint8 | 1 if an admin gate is assigned |
 | adminGateId | sint64 | Versioned gate ID of the admin gate (-1 if none) |
+| governancePolicy | uint8 | 0 = strict_admin, 1 = owner_or_admin |
 | adminGateMode | uint8 | Mode of the admin gate (should be MULTISIG=7) |
 | guardianCount | uint8 | Number of guardians on the admin gate |
 | required | uint8 | M-of-N threshold on the admin gate |
+| adminApprovalWindowEpochs | uint32 | Configured approval-window length after quorum |
+| adminApprovalActive | uint8 | 1 if an approval window is currently active |
+| adminApprovalValidUntilEpoch | uint32 | Final epoch when the current window remains valid |
 | guardians | Array\<id, 8\> | Guardian public keys from the admin gate's MultisigConfig |
 
 #### getGateBySlot (Input Type 25)
@@ -1125,6 +1137,7 @@ chainNextGateId     sint64              Next gate in chain; -1 if terminal
 reserve             sint64              Unified reserve (chain hop fees + maintenance)
 chainDepth          uint8               Position in chain (0 = root)
 adminGateId         sint64              MULTISIG gate ID for governance; -1 if none
+governancePolicy    uint8               0 = strict_admin, 1 = owner_or_admin
 hasAdminGate        uint8               1 if adminGateId is set
 ```
 
@@ -1532,7 +1545,7 @@ g++ -std=c++17 -I. contract_qugate.cpp -lgtest -lgtest_main -o qugate_tests
 ./qugate_tests
 ```
 
-The test suite (`contract_qugate.cpp`) contains 213 unit tests covering:
+The test suite (`contract_qugate.cpp`) contains 220 unit tests covering:
 - All 8 active gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, heartbeat dead-man's switch, M-of-N multisig approval, epoch-based time lock)
 - Chain gates (hop fees, chain reserve, depth limits, cycle detection)
 - Versioned gate IDs and sendToGateVerified
@@ -1601,7 +1614,7 @@ python3 tests/test_attack_vectors.py   # Security edge cases
 ### Testnet Results
 
 Tested on Qubic Core-Lite v1.283.0 (local testnet, 2026-04-03):
-- **213 unit tests passing** (fund conservation, mode lifecycle, governance, idle maintenance, edge cases, regression)
+- **220 unit tests passing** (fund conservation, mode lifecycle, governance, idle maintenance, edge cases, regression)
 - **132/132 integration scenarios passing** across 8 parallel wallet lanes
 - All 8 active gate modes verified: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK
 - Full governance lifecycle: admin gate attachment, approval windows, governed mutations, expiry recovery

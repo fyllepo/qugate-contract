@@ -56,6 +56,10 @@ constexpr uint8 QUGATE_MODE_HEARTBEAT = 6;  // Heartbeat gate — heartbeat() or
 constexpr uint8 QUGATE_MODE_MULTISIG = 7;     // M-of-N guardian approval before funds release
 constexpr uint8 QUGATE_MODE_TIME_LOCK = 8;    // Hold funds until a target epoch, then release to recipient
 
+// Governance policy for gates with an admin multisig attached
+constexpr uint8 QUGATE_GOVERNANCE_STRICT_ADMIN = 0;    // owner must wait for admin approval window
+constexpr uint8 QUGATE_GOVERNANCE_OWNER_OR_ADMIN = 1;  // owner can mutate directly; admin window is a backup path
+
 // Minimal execution observability outcome types
 constexpr uint8 QUGATE_EXEC_NONE      = 0;
 constexpr uint8 QUGATE_EXEC_FORWARDED = 1;
@@ -269,6 +273,7 @@ public:
 
         // Admin gate fields — governance via MULTISIG quorum
         sint64 adminGateId;       // -1 = no admin gate (owner-only). Set to a MULTISIG gate ID for quorum-controlled config.
+        uint8  governancePolicy;  // QUGATE_GOVERNANCE_*; only relevant when adminGateId >= 0
 
         // Gate-as-recipient — allows recipients to be other gates for internal routing
         Array<sint64, 8> recipientGateIds;  // Per-recipient: -1 = wallet, >= 0 = versioned gate ID
@@ -493,6 +498,7 @@ public:
     {
         uint64 gateId;
         sint64 adminGateId;   // -1 to clear admin gate
+        uint8  governancePolicy; // QUGATE_GOVERNANCE_*; ignored when clearing
     };
     struct setAdminGate_output
     {
@@ -508,6 +514,7 @@ public:
     {
         uint8  hasAdminGate;
         sint64 adminGateId;
+        uint8  governancePolicy;
         uint8  adminGateMode;  // mode of the admin gate (should be QUGATE_MODE_MULTISIG)
         uint8  guardianCount;      // Number of guardians on the admin gate
         uint8  required;           // M-of-N threshold
@@ -572,6 +579,7 @@ public:
         sint64 reserve;
         uint16 nextIdleChargeEpoch;
         sint64 adminGateId;
+        uint8  governancePolicy; // QUGATE_GOVERNANCE_*
         uint8  hasAdminGate;
         uint8  idleDelinquent;
         uint16 idleGraceRemainingEpochs;
@@ -658,6 +666,7 @@ public:
         sint64 reserve;            // unified reserve (hop fees + idle maintenance)
         uint16 nextIdleChargeEpoch;
         sint64 adminGateId;    // -1 if no admin gate
+        uint8  governancePolicy; // QUGATE_GOVERNANCE_*
         uint8  hasAdminGate;   // 1 if governed by admin gate
         uint8  idleDelinquent; // 1 if gate has missed idle-period funding
         uint16 idleGraceRemainingEpochs; // epochs left before delinquent gate should expire
@@ -1634,6 +1643,7 @@ public:
 
         // Admin gate fields
         locals.newGate.adminGateId = -1;
+        locals.newGate.governancePolicy = QUGATE_GOVERNANCE_STRICT_ADMIN;
 
         // Gate-as-recipient: init all to -1 (wallet), then copy from input
         for (locals.i = 0; locals.i < QUGATE_MAX_RECIPIENTS; locals.i++)
@@ -3569,7 +3579,9 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
+        if (locals.gate.owner != qpi.invocator()
+            || (locals.gate.adminGateId >= 0
+                && locals.gate.governancePolicy == QUGATE_GOVERNANCE_STRICT_ADMIN))
         {
             locals.adminAuth = 0;
             if (locals.gate.adminGateId >= 0)
@@ -3823,7 +3835,9 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
+        if (locals.gate.owner != qpi.invocator()
+            || (locals.gate.adminGateId >= 0
+                && locals.gate.governancePolicy == QUGATE_GOVERNANCE_STRICT_ADMIN))
         {
             locals.adminAuth = 0;
             if (locals.gate.adminGateId >= 0)
@@ -4249,6 +4263,7 @@ public:
         output.reserve = locals.gate.reserve;
         output.nextIdleChargeEpoch = locals.gate.nextIdleChargeEpoch;
         output.adminGateId = locals.gate.adminGateId;
+        output.governancePolicy = locals.gate.governancePolicy;
         output.hasAdminGate = (locals.gate.adminGateId >= 0) ? 1 : 0;
         locals.delinquentEpoch = state.get()._idleDelinquentEpochs.get(locals.slotIdx);
         output.idleDelinquent = (locals.delinquentEpoch > 0 ? 1 : 0);
@@ -4338,6 +4353,7 @@ public:
                 locals.entry.nextIdleChargeEpoch = 0;
                 locals.entry.allowedSenderCount = 0;
                 locals.entry.adminGateId = -1;
+                locals.entry.governancePolicy = QUGATE_GOVERNANCE_STRICT_ADMIN;
                 locals.entry.hasAdminGate = 0;
                 locals.entry.idleDelinquent = 0;
                 locals.entry.idleGraceRemainingEpochs = 0;
@@ -4371,6 +4387,7 @@ public:
                 locals.asCfg = state.get()._allowedSendersConfigs.get(locals.slotIdx);
                 locals.entry.allowedSenderCount = locals.asCfg.count;
                 locals.entry.adminGateId = locals.gate.adminGateId;
+                locals.entry.governancePolicy = locals.gate.governancePolicy;
                 locals.entry.hasAdminGate = (locals.gate.adminGateId >= 0) ? 1 : 0;
                 locals.delinquentEpoch = state.get()._idleDelinquentEpochs.get(locals.slotIdx);
                 locals.entry.idleDelinquent = (locals.delinquentEpoch > 0 ? 1 : 0);
@@ -4458,7 +4475,9 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
+        if (locals.gate.owner != qpi.invocator()
+            || (locals.gate.adminGateId >= 0
+                && locals.gate.governancePolicy == QUGATE_GOVERNANCE_STRICT_ADMIN))
         {
             locals.adminAuth = 0;
             if (locals.gate.adminGateId >= 0)
@@ -4736,7 +4755,9 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
+        if (locals.gate.owner != qpi.invocator()
+            || (locals.gate.adminGateId >= 0
+                && locals.gate.governancePolicy == QUGATE_GOVERNANCE_STRICT_ADMIN))
         {
             locals.adminAuth = 0;
             if (locals.gate.adminGateId >= 0)
@@ -5253,7 +5274,9 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
+        if (locals.gate.owner != qpi.invocator()
+            || (locals.gate.adminGateId >= 0
+                && locals.gate.governancePolicy == QUGATE_GOVERNANCE_STRICT_ADMIN))
         {
             locals.adminAuth = 0;
             if (locals.gate.adminGateId >= 0)
@@ -5536,7 +5559,9 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
+        if (locals.gate.owner != qpi.invocator()
+            || (locals.gate.adminGateId >= 0
+                && locals.gate.governancePolicy == QUGATE_GOVERNANCE_STRICT_ADMIN))
         {
             locals.adminAuth = 0;
             if (locals.gate.adminGateId >= 0)
@@ -5750,7 +5775,9 @@ public:
 
         // Authorization: owner OR admin gate approval
         locals.adminApprovalUsed = 0;
-        if (locals.gate.owner != qpi.invocator() || locals.gate.adminGateId >= 0)
+        if (locals.gate.owner != qpi.invocator()
+            || (locals.gate.adminGateId >= 0
+                && locals.gate.governancePolicy == QUGATE_GOVERNANCE_STRICT_ADMIN))
         {
             locals.adminAuth = 0;
             if (locals.gate.adminGateId >= 0)
@@ -6028,7 +6055,9 @@ public:
 
         // Authorization
         locals.adminApprovalUsed = 0;
-        if (qpi.invocator() != locals.gate.owner || locals.gate.adminGateId >= 0)
+        if (qpi.invocator() != locals.gate.owner
+            || (locals.gate.adminGateId >= 0
+                && locals.gate.governancePolicy == QUGATE_GOVERNANCE_STRICT_ADMIN))
         {
             // Changes require an active approval window from the current admin gate.
             if (locals.gate.adminGateId < 0)
@@ -6077,6 +6106,7 @@ public:
                         qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
                     }
                     locals.gate.adminGateId = -1;
+                    locals.gate.governancePolicy = QUGATE_GOVERNANCE_STRICT_ADMIN;
                     state.mut()._gates.set(locals.slotIdx, locals.gate);
                     output.status = QUGATE_SUCCESS;
                     locals.logger._type = QUGATE_LOG_ADMIN_GATE_CLEARED;
@@ -6142,6 +6172,7 @@ public:
                 qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
             }
             locals.gate.adminGateId = -1;
+            locals.gate.governancePolicy = QUGATE_GOVERNANCE_STRICT_ADMIN;
             state.mut()._gates.set(locals.slotIdx, locals.gate);
             if (locals.adminApprovalUsed == 1)
             {
@@ -6179,6 +6210,16 @@ public:
         {
             if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
             output.status = QUGATE_INVALID_ADMIN_GATE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        if (input.governancePolicy != QUGATE_GOVERNANCE_STRICT_ADMIN
+            && input.governancePolicy != QUGATE_GOVERNANCE_OWNER_OR_ADMIN)
+        {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+            output.status = QUGATE_INVALID_PARAMS;
             locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
             LOG_WARNING(locals.logger);
             return;
@@ -6250,6 +6291,7 @@ public:
 
         // Set admin gate
         locals.gate.adminGateId = input.adminGateId;
+        locals.gate.governancePolicy = input.governancePolicy;
         state.mut()._gates.set(locals.slotIdx, locals.gate);
 
         if (locals.adminApprovalUsed == 1)
@@ -6276,6 +6318,7 @@ public:
     {
         output.hasAdminGate = 0;
         output.adminGateId = -1;
+        output.governancePolicy = QUGATE_GOVERNANCE_STRICT_ADMIN;
         output.adminGateMode = 0;
         output.guardianCount = 0;
         output.required = 0;
@@ -6297,6 +6340,7 @@ public:
         locals.gate = state.get()._gates.get(locals.slotIdx);
         output.hasAdminGate = (locals.gate.adminGateId >= 0) ? 1 : 0;
         output.adminGateId = locals.gate.adminGateId;
+        output.governancePolicy = locals.gate.governancePolicy;
 
         // If admin gate is set, look up its mode
         if (locals.gate.adminGateId >= 0)
@@ -6518,6 +6562,7 @@ public:
         output.chainDepth = locals.gate.chainDepth;
         output.nextIdleChargeEpoch = locals.gate.nextIdleChargeEpoch;
         output.adminGateId = locals.gate.adminGateId;
+        output.governancePolicy = locals.gate.governancePolicy;
         output.hasAdminGate = (locals.gate.adminGateId >= 0) ? 1 : 0;
         locals.delinquentEpoch = state.get()._idleDelinquentEpochs.get(input.slotIndex);
         output.idleDelinquent = (locals.delinquentEpoch > 0 ? 1 : 0);
