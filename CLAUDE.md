@@ -4,7 +4,7 @@
 QuGate is a Qubic blockchain smart contract — a programmable payment routing primitive with 8 active gate modes (slot 5 reserved). Single file: `QuGate.h`.
 
 ## Contract Index
-**26** — hardcoded in the core-lite build at `contract_def.h`. NOT in QuGate.h (removed for contract-verify compliance). Testnet builds pass `-DCONTRACT_INDEX=26` via cmake.
+**28** — hardcoded in the core-lite build at `contract_def.h`. NOT in QuGate.h (removed for contract-verify compliance). Testnet builds pass `-DCONTRACT_INDEX=28` via cmake.
 
 ## Gate Modes
 | Mode | ID | Description |
