@@ -1728,6 +1728,17 @@ public:
                         }
                     }
                     if (governsActive) continue;
+                    // Orphaned admin gate with no balance/reserve — expire immediately
+                    if (gate.currentBalance == 0 && gate.reserve <= 0)
+                    {
+                        gate.active = 0;
+                        state.mut()._gates.set(i, gate);
+                        if (state.get()._activeGates > 0) state.mut()._activeGates -= 1;
+                        state.mut()._freeSlots.set(state.get()._freeCount, i);
+                        state.mut()._freeCount += 1;
+                        state.mut()._gateGenerations.set(i, state.get()._gateGenerations.get(i) + 1);
+                        continue;
+                    }
                 }
 
                 bool graceExpired = (delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0

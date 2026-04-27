@@ -7124,6 +7124,23 @@ public:
                     {
                         continue;
                     }
+                    // Orphaned admin gate with no balance/reserve — expire immediately
+                    if (locals.gate.currentBalance == 0 && locals.gate.reserve <= 0)
+                    {
+                        locals.gate.active = 0;
+                        state.mut()._gates.set(locals.i, locals.gate);
+                        if (state.get()._activeGates > 0) { state.mut()._activeGates -= 1; }
+                        state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
+                        state.mut()._freeCount += 1;
+                        state.mut()._gateGenerations.set(locals.i, state.get()._gateGenerations.get(locals.i) + 1);
+                        locals.logger._contractIndex = CONTRACT_INDEX;
+                        locals.logger._type = QUGATE_LOG_GATE_EXPIRED;
+                        locals.logger.gateId = ((uint64)(state.get()._gateGenerations.get(locals.i)) << QUGATE_GATE_ID_SLOT_BITS) | locals.i;
+                        locals.logger.sender = locals.gate.owner;
+                        locals.logger.amount = 0;
+                        LOG_INFO(locals.logger);
+                        continue;
+                    }
                 }
 
                 if ((locals.delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0
