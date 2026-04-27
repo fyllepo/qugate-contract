@@ -1509,7 +1509,7 @@ public:
                 }
 
                 // Reserve drain: only fires once per idle window cycle.
-                if (cycleDue && activeHold == 1 && recentlyActive == 0 && gate.reserve > 0)
+                if (cycleDue && activeHold == 1 && gate.reserve > 0)
                 {
                     // Re-read the gate in case it was modified above
                     gate = state.get()._gates.get(i);

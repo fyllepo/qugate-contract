@@ -6833,7 +6833,8 @@ public:
 
                 // Reserve drain: pay downstream gates' idle fees from the upstream gate's reserve.
                 // Only fires once per idle window cycle (not every epoch).
-                if (locals.cycleDue == 1 && locals.activeHold == 1 && locals.recentlyActive == 0 && locals.gate.reserve > 0)
+                // No recentlyActive guard — downstream gates need protection from the first cycle.
+                if (locals.cycleDue == 1 && locals.activeHold == 1 && locals.gate.reserve > 0)
                 {
                     // Re-read the gate in case it was modified above
                     locals.gate = state.get()._gates.get(locals.i);
