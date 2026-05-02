@@ -1494,11 +1494,11 @@ public:
 
             if (recentlyActive == 1 || activeHold == 1)
             {
-                // Check if this is a cycle boundary
+                // Check cycle boundary before pushing (push every epoch would prevent drain from ever firing)
                 bool cycleDue = (gate.nextIdleChargeEpoch > 0 && qpi.epoch() >= gate.nextIdleChargeEpoch)
                     || gate.nextIdleChargeEpoch == 0;
 
-                if (state.get()._idleWindowEpochs > 0)
+                if (cycleDue && state.get()._idleWindowEpochs > 0)
                 {
                     gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
                     state.mut()._gates.set(i, gate);

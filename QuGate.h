@@ -6810,7 +6810,9 @@ public:
 
             if (locals.recentlyActive == 1 || locals.activeHold == 1)
             {
-                // Check if this is a cycle boundary (drain fires once per idle window, not every epoch)
+                // Check cycle boundary BEFORE pushing nextIdleChargeEpoch forward.
+                // The push happens every epoch for hold-state gates, so we must check first
+                // or the drain epoch will never arrive.
                 locals.cycleDue = 0;
                 if (locals.gate.nextIdleChargeEpoch > 0 && qpi.epoch() >= locals.gate.nextIdleChargeEpoch)
                 {
@@ -6821,7 +6823,9 @@ public:
                     locals.cycleDue = 1; // First cycle
                 }
 
-                if (state.get()._idleWindowEpochs > 0)
+                // Push idle charge epoch forward only when cycle is due (not every epoch)
+                // Otherwise the drain epoch perpetually recedes and never arrives.
+                if (locals.cycleDue == 1 && state.get()._idleWindowEpochs > 0)
                 {
                     locals.gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
                     state.mut()._gates.set(locals.i, locals.gate);
