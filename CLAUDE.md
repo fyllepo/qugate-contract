@@ -62,7 +62,7 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 10. **configureHeartbeat charges after validation** — all validation (gate ID, auth, mode, params) completes before the threshold-scaled fee is charged. Rejected calls are fully refunded.
 
 ## Testing
-- `contract_qugate.cpp` — 205 unit tests (Google Test, Allman style)
+- `contract_qugate.cpp` — 221 unit tests (Google Test, Allman style)
 - `tests/` — 18 Python integration test files, 132 scenarios (require live testnet node at 127.0.0.1:41841)
 - CI: style lint ✅, integration tests skip in CI ✅
 - Guard rails: `scripts/contract_guard.py` checks harness constant drift, public-function/private-procedure misuse, and warns on large locals hotspots
