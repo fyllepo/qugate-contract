@@ -2679,9 +2679,10 @@ public:
             return;
         }
 
-        // Lazy expiry check: expire gate if inactive too long
-        if (state.get()._expiryEpochs > 0
-            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+        // Lazy expiry check: expire gate if delinquency grace has elapsed
+        if (state.get()._idleGraceEpochs > 0
+            && state.get()._idleDelinquentEpochs.get(locals.slotIdx) > 0
+            && qpi.epoch() - state.get()._idleDelinquentEpochs.get(locals.slotIdx) >= state.get()._idleGraceEpochs
             && locals.gate.active == 1)
         {
             if (locals.gate.currentBalance > 0)
@@ -3209,9 +3210,10 @@ public:
             return;
         }
 
-        // Lazy expiry check: expire gate if inactive too long
-        if (state.get()._expiryEpochs > 0
-            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+        // Lazy expiry check: expire gate if delinquency grace has elapsed
+        if (state.get()._idleGraceEpochs > 0
+            && state.get()._idleDelinquentEpochs.get(locals.slotIdx) > 0
+            && qpi.epoch() - state.get()._idleDelinquentEpochs.get(locals.slotIdx) >= state.get()._idleGraceEpochs
             && locals.gate.active == 1)
         {
             if (locals.gate.currentBalance > 0)
@@ -3802,9 +3804,10 @@ public:
             return;
         }
 
-        // Lazy expiry check: expire gate if inactive too long
-        if (state.get()._expiryEpochs > 0
-            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+        // Lazy expiry check: expire gate if delinquency grace has elapsed
+        if (state.get()._idleGraceEpochs > 0
+            && state.get()._idleDelinquentEpochs.get(locals.slotIdx) > 0
+            && qpi.epoch() - state.get()._idleDelinquentEpochs.get(locals.slotIdx) >= state.get()._idleGraceEpochs
             && locals.gate.active == 1)
         {
             if (locals.gate.currentBalance > 0)
@@ -4061,9 +4064,10 @@ public:
             return;
         }
 
-        // Lazy expiry check: expire gate if inactive too long
-        if (state.get()._expiryEpochs > 0
-            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+        // Lazy expiry check: expire gate if delinquency grace has elapsed
+        if (state.get()._idleGraceEpochs > 0
+            && state.get()._idleDelinquentEpochs.get(locals.slotIdx) > 0
+            && qpi.epoch() - state.get()._idleDelinquentEpochs.get(locals.slotIdx) >= state.get()._idleGraceEpochs
             && locals.gate.active == 1)
         {
             if (locals.gate.currentBalance > 0)
@@ -4333,9 +4337,10 @@ public:
             return;
         }
 
-        // Lazy expiry check: expire gate if inactive too long
-        if (state.get()._expiryEpochs > 0
-            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+        // Lazy expiry check: expire gate if delinquency grace has elapsed
+        if (state.get()._idleGraceEpochs > 0
+            && state.get()._idleDelinquentEpochs.get(locals.slotIdx) > 0
+            && qpi.epoch() - state.get()._idleDelinquentEpochs.get(locals.slotIdx) >= state.get()._idleGraceEpochs
             && locals.gate.active == 1)
         {
             if (locals.gate.currentBalance > 0)
@@ -4689,9 +4694,10 @@ public:
             return;
         }
 
-        // Lazy expiry check: expire gate if inactive too long
-        if (state.get()._expiryEpochs > 0
-            && qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs
+        // Lazy expiry check: expire gate if delinquency grace has elapsed
+        if (state.get()._idleGraceEpochs > 0
+            && state.get()._idleDelinquentEpochs.get(locals.slotIdx) > 0
+            && qpi.epoch() - state.get()._idleDelinquentEpochs.get(locals.slotIdx) >= state.get()._idleGraceEpochs
             && locals.gate.active == 1)
         {
             if (locals.gate.currentBalance > 0)
@@ -7280,9 +7286,10 @@ public:
                     }
                 }
 
-                if ((locals.delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0
-                     && qpi.epoch() - locals.delinquentEpoch >= state.get()._idleGraceEpochs)
-                    || (qpi.epoch() - locals.gate.lastActivityEpoch >= state.get()._expiryEpochs))
+                // Expiry: only via delinquency grace expiry. Inactivity alone does not expire
+                // a gate — paying idle fees from reserve counts as "active use" of the slot.
+                if (locals.delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0
+                    && qpi.epoch() - locals.delinquentEpoch >= state.get()._idleGraceEpochs)
                 {
                     // Refund any held balance (THRESHOLD mode)
                     if (locals.gate.currentBalance > 0)
