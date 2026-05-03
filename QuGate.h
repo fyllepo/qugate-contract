@@ -71,7 +71,7 @@ constexpr uint8 QUGATE_EXEC_REJECTED  = 5;
 // Chain gate constants
 constexpr uint8  QUGATE_MAX_CHAIN_DEPTH            = 3;
 constexpr sint64 QUGATE_CHAIN_HOP_FEE              = 1000;
-constexpr sint64 QUGATE_HEARTBEAT_PING_FEE         = 1000;  // Minimum heartbeat() ping fee floor; actual cost is pro-rated maintenance
+constexpr sint64 QUGATE_HEARTBEAT_PING_FEE         = 1000;  // Flat heartbeat() ping fee (anti-spam)
 constexpr uint32 QUGATE_LOG_CHAIN_HOP              = 12;
 constexpr uint32 QUGATE_LOG_CHAIN_CYCLE            = 13;
 constexpr uint32 QUGATE_LOG_CHAIN_HOP_INSUFFICIENT = 14;
@@ -598,6 +598,7 @@ public:
         uint16 idleGraceRemainingEpochs;
         uint8  idleExpiryOverdue;
         Array<sint64, 8> recipientGateIds;
+        sint64 fundingSourceGateId;
     };
     struct getGateBySlot_locals
     {
@@ -5184,7 +5185,7 @@ public:
         // Reserve maintenance is handled separately via the funding source mechanism.
         locals.maintenanceCost = (uint64)QUGATE_HEARTBEAT_PING_FEE;
 
-        // Charge the pro-rated maintenance cost
+        // Charge the flat anti-spam fee
         if (locals.invReward < (sint64)locals.maintenanceCost)
         {
             if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
