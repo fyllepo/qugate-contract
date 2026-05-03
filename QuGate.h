@@ -34,7 +34,7 @@ constexpr uint64 QUGATE_IDLE_CHAIN_EXTRA_BPS = 5000;                 // +0.5x if
 // Escalating fee: fee = baseFee * (1 + QPI::div(activeGates, FEE_ESCALATION_STEP))
 constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
 
-// Gate expiry: gates with no activity for this many epochs auto-close
+// Gate expiry: legacy constant, retained for state compatibility. Expiry is now delinquency-only.
 constexpr uint64 QUGATE_DEFAULT_EXPIRY_EPOCHS = 50;
 
 // Versioned gate ID encoding: gateId = ((generation+1) << SLOT_BITS) | slotIndex
@@ -255,7 +255,7 @@ public:
         uint8  recipientCount;      // Number of active recipients (1 to QUGATE_MAX_RECIPIENTS)
         uint8  active;              // 1 = gate is active and routing; 0 = closed or expired
         uint16 createdEpoch;        // Network epoch when this gate was created
-        uint16 lastActivityEpoch;   // Network epoch of last sendToGate or updateGate call; used for expiry
+        uint16 lastActivityEpoch;   // Network epoch of last sendToGate or updateGate call; used for idle window checks
         uint64 totalReceived;       // Cumulative QU received by this gate across all sendToGate calls
         uint64 totalForwarded;      // Cumulative QU forwarded to recipients (excludes dust burns)
         uint64 currentBalance;      // Held balance awaiting release: THRESHOLD mode accumulates here
@@ -7156,7 +7156,7 @@ public:
                 }
 
                 // Funding source path: fee was charged from another gate's reserve.
-                // Refresh activity to prevent inactivity expiry on this gate.
+                // Refresh activity epoch and clear delinquency.
                 if (locals.fundedExternally == 1)
                 {
                     locals.gate.lastActivityEpoch = qpi.epoch();
@@ -7216,34 +7216,12 @@ public:
             locals.gate = state.get()._gates.get(locals.i);
             locals.delinquentEpoch = state.get()._idleDelinquentEpochs.get(locals.i);
 
-            // active==1 guard prevents double-close / activeGates underflow (intentional)
-            if (locals.gate.active == 1 && state.get()._expiryEpochs > 0)
+            // Expiry loop: delinquency grace check + admin gate orphan cleanup
+            if (locals.gate.active == 1)
             {
-                // Exempt long-duration modes from inactivity expiry
-                if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
-                {
-                    locals.tlCfg = state.get()._timeLockConfigs.get(locals.i);
-                    if (locals.delinquentEpoch == 0 && locals.tlCfg.active == 1 && locals.tlCfg.fired == 0 && locals.tlCfg.cancelled == 0)
-                    {
-                        continue;
-                    }
-                }
-                if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
-                {
-                    locals.inhCfg = state.get()._heartbeatConfigs.get(locals.i);
-                    if (locals.delinquentEpoch == 0 && locals.inhCfg.active == 1 && locals.inhCfg.triggered == 0)
-                    {
-                        continue;
-                    }
-                }
-                if (locals.delinquentEpoch == 0 && locals.gate.mode == QUGATE_MODE_MULTISIG && locals.gate.currentBalance > 0)
-                {
-                    continue;
-                }
-                // Admin gate expiry exemption: if this multisig gate (recipientCount==0)
-                // actively governs at least one active gate, exempt from expiry.
-                // The admin gate may still be delinquent (unfunded), but it stays alive
-                // as long as it has governance responsibilities.
+                // Admin gate exemption: governance-only multisigs that actively govern
+                // at least one gate survive even when delinquent (admin drain keeps
+                // them alive when the governed gate has reserve).
                 if (locals.gate.mode == QUGATE_MODE_MULTISIG && locals.gate.recipientCount == 0)
                 {
                     locals.adminGateGovernsActive = 0;
