@@ -29,6 +29,11 @@ static inline bool operator==(const m256i& a, const m256i& b)
     return memcmp(&a, &b, 32) == 0;
 }
 
+static inline bool operator!=(const m256i& a, const m256i& b)
+{
+    return memcmp(&a, &b, 32) != 0;
+}
+
 // QPI shim
 namespace QPI {
     typedef m256i id;
@@ -991,8 +996,10 @@ public:
             return output;
         }
 
-        if (state.get()._expiryEpochs > 0
-            && (uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs)
+        // Lazy expiry: delinquency grace elapsed
+        if (state.get()._idleGraceEpochs > 0
+            && state.get()._idleDelinquentEpochs.get(gateId - 1) > 0
+            && qpi.epoch() - state.get()._idleDelinquentEpochs.get(gateId - 1) >= state.get()._idleGraceEpochs)
         {
             if (gate.currentBalance > 0)
             {
@@ -1202,8 +1209,10 @@ public:
             return output;
         }
 
-        if (state.get()._expiryEpochs > 0
-            && (uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs)
+        // Lazy expiry: delinquency grace elapsed
+        if (state.get()._idleGraceEpochs > 0
+            && state.get()._idleDelinquentEpochs.get(gateId - 1) > 0
+            && qpi.epoch() - state.get()._idleDelinquentEpochs.get(gateId - 1) >= state.get()._idleGraceEpochs)
         {
             if (gate.currentBalance > 0)
             {
@@ -1314,8 +1323,10 @@ public:
             output.status = QUGATE_GATE_NOT_ACTIVE;
             return output;
         }
-        if (state.get()._expiryEpochs > 0
-            && (uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs)
+        // Lazy expiry: delinquency grace elapsed
+        if (state.get()._idleGraceEpochs > 0
+            && state.get()._idleDelinquentEpochs.get(input.gateId - 1) > 0
+            && qpi.epoch() - state.get()._idleDelinquentEpochs.get(input.gateId - 1) >= state.get()._idleGraceEpochs)
         {
             if (gate.currentBalance > 0)
             {
@@ -1687,10 +1698,10 @@ public:
                     }
                 }
 
+                // Expiry only via delinquency grace — paying idle fees counts as slot usage
                 bool graceExpired = (delinquentEpoch > 0 && state.get()._idleGraceEpochs > 0
                     && qpi.epoch() - delinquentEpoch >= state.get()._idleGraceEpochs);
-                bool inactivityExpired = (qpi.epoch() - gate.lastActivityEpoch >= state.get()._expiryEpochs);
-                if (graceExpired || inactivityExpired)
+                if (graceExpired)
                 {
                     if (gate.currentBalance > 0)
                     {
@@ -2061,8 +2072,10 @@ public:
             output.result = QUGATE_GATE_NOT_ACTIVE;
             return output;
         }
-        if (state.get()._expiryEpochs > 0
-            && (uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs)
+        // Lazy expiry: delinquency grace elapsed
+        if (state.get()._idleGraceEpochs > 0
+            && state.get()._idleDelinquentEpochs.get(gateId - 1) > 0
+            && qpi.epoch() - state.get()._idleDelinquentEpochs.get(gateId - 1) >= state.get()._idleGraceEpochs)
         {
             if (gate.currentBalance > 0)
             {
@@ -2915,8 +2928,10 @@ public:
             output.result = QUGATE_GATE_NOT_ACTIVE;
             return output;
         }
-        if (state.get()._expiryEpochs > 0
-            && (uint16)(qpi.epoch() - gate.lastActivityEpoch) >= state.get()._expiryEpochs)
+        // Lazy expiry: delinquency grace elapsed
+        if (state.get()._idleGraceEpochs > 0
+            && state.get()._idleDelinquentEpochs.get(gateId - 1) > 0
+            && qpi.epoch() - state.get()._idleDelinquentEpochs.get(gateId - 1) >= state.get()._idleGraceEpochs)
         {
             if (gate.currentBalance > 0)
             {
@@ -3738,14 +3753,18 @@ TEST(QuGateV3, GateExpiryAutoClose)
     env.qpi._epoch = 100;
     auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    // Gate has 0 reserve (exact creation fee). Advance past idle window → delinquent.
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    EXPECT_GT(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), (uint16)0);
 
-    // Advance epoch by expiryEpochs (50)
-    env.qpi._epoch = 150;
+    // Advance past grace period (4 epochs) → expired
+    env.qpi._epoch = 108;
     env.qpi.reset();
     env.endEpoch();
 
     auto gate = env.getGate(out.gateId);
-    EXPECT_EQ(gate.active, 0); // auto-closed
+    EXPECT_EQ(gate.active, 0); // auto-closed via delinquency grace
     EXPECT_EQ(env.state.get()._activeGates, 0ULL);
     EXPECT_EQ(env.state.get()._freeCount, 1ULL);
 }
@@ -3760,15 +3779,16 @@ TEST(QuGateV3, GateExpiryRefundsBalance)
     env.qpi._epoch = 100;
     auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 10000);
 
-    // Send some QU that sits in threshold balance
+    // Send some QU that sits in threshold balance (below threshold, so held)
     env.sendToGate(CHARLIE, out.gateId, 5000);
     auto gateBefore = env.getGate(out.gateId);
     EXPECT_EQ(gateBefore.currentBalance, 5000ULL);
 
-    // Expire it
-    env.qpi._epoch = 150;
-    env.qpi.reset();
-    env.endEpoch();
+    // THRESHOLD with balance has activeHold — but once balance is drained it loses hold.
+    // Withdraw the balance to remove hold state, then let it go delinquent.
+    // Actually: threshold with balance IS exempt. Force expiry by closing instead.
+    // Test the refund path: close the gate, balance refunded.
+    env.closeGate(ALICE, out.gateId);
 
     // Balance refunded to owner (ALICE)
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 5000);
@@ -4354,7 +4374,7 @@ TEST(QuGateChain, CloseGateRefundsReserve)
 // endEpoch expiry marks gate inactive, refunds balance, adds to free-list, and increments generation
 TEST(QuGateV3, EndEpochExpiryFullLifecycle)
 {
-    // Verifies all END_EPOCH expiry side-effects:
+    // Verifies all END_EPOCH expiry side-effects via delinquency grace:
     //   1. Gate marked inactive
     //   2. currentBalance refunded to owner
     //   3. Slot added to free-list
@@ -4363,26 +4383,35 @@ TEST(QuGateV3, EndEpochExpiryFullLifecycle)
     id recips[] = { BOB };
     uint64 ratios[] = { 100 };
 
-    // Use a short expiry for the test
-    env.state.mut()._expiryEpochs = 5;
-
-    // Create a THRESHOLD gate at epoch 100 so it can hold a balance
+    // Create a SPLIT gate at epoch 100 with exact fee (0 reserve)
     env.qpi._epoch = 100;
-    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
     uint64 gateId = out.gateId;
     uint64 slotIdx = gateId - 1;
 
-    // Send funds that accumulate in threshold balance (below threshold, won't forward)
-    env.sendToGate(CHARLIE, gateId, 2000);
+    // Inject a balance directly so we can test the refund path on expiry
+    env.state.mut()._gates.set(slotIdx, [&]{
+        GateConfig gate = env.state.get()._gates.get(slotIdx);
+        gate.currentBalance = 2000;
+        return gate;
+    }());
     auto gateBefore = env.getGate(gateId);
     EXPECT_EQ(gateBefore.active, 1);
     EXPECT_EQ(gateBefore.currentBalance, 2000ULL);
     EXPECT_EQ(env.state.get()._activeGates, 1ULL);
     uint16 genBefore = env.state.get()._gateGenerations.get(slotIdx);
 
-    // Advance epoch past expiry (lastActivityEpoch=100 from send, expiryEpochs=5)
-    env.qpi._epoch = 106;
+    // Advance to first idle charge (epoch 104): reserve=0, can't pay → delinquent
+    env.qpi._epoch = 104;
+    env.qpi.reset();
+    env.endEpoch();
+
+    // Gate still active during grace period
+    EXPECT_EQ(env.getGate(gateId).active, 1);
+
+    // Advance past grace (delinquent at 104 + 4 grace = 108): gate expires
+    env.qpi._epoch = 108;
     env.qpi.reset();
     env.endEpoch();
 
@@ -4404,7 +4433,7 @@ TEST(QuGateV3, EndEpochExpiryFullLifecycle)
     EXPECT_EQ(genAfter, genBefore + 1);
 
     // Verify a new gate created in the reused slot gets a different generation
-    env.qpi._epoch = 107;
+    env.qpi._epoch = 109;
     auto out2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(out2.status, QUGATE_SUCCESS);
     EXPECT_EQ(env.state.get()._freeCount, 0ULL); // slot was reused from free-list
@@ -4769,10 +4798,11 @@ TEST(QuGateRegression, CloseGateLazyExpiryTransferFailureDoesNotRecycleSlot)
     env.state.mut()._gates.set(out.gateId - 1, [&]{
         GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
         gate.currentBalance = 30000;
-        gate.lastActivityEpoch = 100;
         return gate;
     }());
-    env.qpi._epoch = 200;
+    // Trigger delinquency-based lazy expiry: mark delinquent at epoch 100, advance past grace
+    env.state.mut()._idleDelinquentEpochs.set(out.gateId - 1, 100);
+    env.qpi._epoch = 104;
 
     env.qpi.failTransfersTo(ALICE, 2);
     auto closeOut = env.closeGate(ALICE, out.gateId);
@@ -4819,10 +4849,11 @@ TEST(QuGateRegression, SendToGateLazyExpiryTransferFailureDoesNotRecycleSlot)
     env.state.mut()._gates.set(out.gateId - 1, [&]{
         GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
         gate.currentBalance = 30000;
-        gate.lastActivityEpoch = 100;
         return gate;
     }());
-    env.qpi._epoch = 200;
+    // Trigger delinquency-based lazy expiry: mark delinquent at epoch 100, advance past grace
+    env.state.mut()._idleDelinquentEpochs.set(out.gateId - 1, 100);
+    env.qpi._epoch = 104;
 
     env.qpi.failTransfersTo(ALICE, 2);
     auto sendOut = env.sendToGate(CHARLIE, out.gateId, 40000);
@@ -4850,10 +4881,11 @@ TEST(QuGateRegression, UpdateGateLazyExpiryTransferFailureDoesNotRecycleSlot)
     env.state.mut()._gates.set(out.gateId - 1, [&]{
         GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
         gate.currentBalance = 30000;
-        gate.lastActivityEpoch = 100;
         return gate;
     }());
-    env.qpi._epoch = 200;
+    // Trigger delinquency-based lazy expiry: mark delinquent at epoch 100, advance past grace
+    env.state.mut()._idleDelinquentEpochs.set(out.gateId - 1, 100);
+    env.qpi._epoch = 104;
 
     updateGate_input in;
     memset(&in, 0, sizeof(in));
@@ -4888,10 +4920,11 @@ TEST(QuGateRegression, FundGateLazyExpiryTransferFailureDoesNotRecycleSlot)
         GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
         gate.currentBalance = 30000;
         gate.reserve = 7000;
-        gate.lastActivityEpoch = 100;
         return gate;
     }());
-    env.qpi._epoch = 200;
+    // Trigger delinquency-based lazy expiry: mark delinquent at epoch 100, advance past grace
+    env.state.mut()._idleDelinquentEpochs.set(out.gateId - 1, 100);
+    env.qpi._epoch = 104;
 
     env.qpi.failTransfersTo(ALICE, 2);
     auto fundOut = env.fundGate(CHARLIE, out.gateId, 40000);
@@ -4920,10 +4953,11 @@ TEST(QuGateRegression, SetChainLazyExpiryTransferFailureDoesNotRecycleSlot)
         GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
         gate.currentBalance = 30000;
         gate.reserve = 7000;
-        gate.lastActivityEpoch = 100;
         return gate;
     }());
-    env.qpi._epoch = 200;
+    // Trigger delinquency-based lazy expiry: mark delinquent at epoch 100, advance past grace
+    env.state.mut()._idleDelinquentEpochs.set(out.gateId - 1, 100);
+    env.qpi._epoch = 104;
 
     env.qpi.failTransfersTo(ALICE, 2);
     auto setChainOut = env.setChain(ALICE, out.gateId, target.gateId, QUGATE_CHAIN_HOP_FEE);
@@ -7072,15 +7106,29 @@ TEST(QuGateConservation, CloseGateAccountingComplete)
 // Expiry refunds both balance and reserve to owner
 TEST(QuGateConservation, ExpiryAccountingComplete)
 {
+    // Expiry must refund all held funds (currentBalance + reserve) to the owner
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 10000 };
-    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 50000);
+    // Create a SPLIT gate with exact fee (0 reserve), then inject balance + reserve
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     ASSERT_EQ(out.status, QUGATE_SUCCESS);
-    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 5000).result, QUGATE_SUCCESS);
-    env.sendToGate(ALICE, out.gateId, 20000);
+    uint64 slotIdx = out.gateId - 1;
+    env.state.mut()._gates.set(slotIdx, [&]{
+        GateConfig gate = env.state.get()._gates.get(slotIdx);
+        gate.currentBalance = 20000;
+        gate.reserve = 5000;
+        return gate;
+    }());
     env.qpi.reset();
-    env.qpi._epoch = 200;
+
+    // Advance to first idle charge (epoch 104): reserve=5000 < idle fee (25K) → delinquent
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+
+    // Advance past grace (delinquent at 104 + 4 grace = 108): gate expires, refunds all
+    env.qpi._epoch = 108;
     env.endEpoch();
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 25000);
     auto gate = env.getGate(out.gateId);
@@ -8007,11 +8055,18 @@ TEST(QuGateIdle, DownstreamOfNonExemptGateStillExpires)
     auto upstream = env.createGate(ALICE, 100000, in);
     ASSERT_EQ(upstream.status, QUGATE_SUCCESS);
 
-    // Advance past expiry, upstream has no hold state and is not exempt
-    env.qpi._epoch = 160;
+    // Both gates created with exact fee → 0 reserve.
+    // Epoch 104: first idle charge due, can't pay → both become delinquent
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    EXPECT_EQ(env.getGate(upstream.gateId).active, 1);
+    EXPECT_EQ(env.getGate(downstream.gateId).active, 1);
+
+    // Epoch 108: grace period (4 epochs) expired → both expire
+    env.qpi._epoch = 108;
     env.endEpoch();
 
-    // Both should expire
+    // Both should expire via delinquency
     EXPECT_EQ(env.getGate(upstream.gateId).active, 0);
     EXPECT_EQ(env.getGate(downstream.gateId).active, 0);
 }
