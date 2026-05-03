@@ -605,6 +605,7 @@ public:
         GateConfig gate;
         QUGATE_AllowedSendersConfig asCfg;
         uint64 i;
+        uint64 slotIdx;
         uint16 delinquentEpoch;
     };
 
@@ -6750,6 +6751,7 @@ public:
     PUBLIC_FUNCTION_WITH_LOCALS(getGateBySlot)
     {
         output.valid = 0;
+        locals.slotIdx = input.slotIndex;
         if (input.slotIndex >= state.get()._gateCount)
         {
             return;
