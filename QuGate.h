@@ -1547,7 +1547,7 @@ public:
         locals.logger.gateId = 0;
         locals.logger.amount = locals.invReward;
 
-        // Calculate escalated fee: baseFee * (1 + QPI::div(activeGates, STEP))
+        // Dynamic fee escalation: increases with active gate count to throttle spam at capacity
         locals.currentFee = state.get()._creationFee * (1 + QPI::div(state.get()._activeGates, QUGATE_FEE_ESCALATION_STEP));
 
         // Validate creation fee (escalated)
@@ -1954,6 +1954,7 @@ public:
             }
             else
             {
+                // Two-part ratio: base share + proportional remainder to avoid dust in last recipient
                 locals.share = QPI::div((uint64)input.amount, locals.totalRatio) * locals.gate.ratios.get(locals.i)
                     + QPI::div(QPI::mod((uint64)input.amount, locals.totalRatio) * locals.gate.ratios.get(locals.i), locals.totalRatio);
             }
@@ -3738,7 +3739,7 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        // Authorization: owner OR admin gate approval
+        // Authorization: owner can act unless STRICT_ADMIN requires admin approval window.
         locals.adminApprovalUsed = 0;
         if (locals.gate.owner != qpi.invocator()
             || (locals.gate.adminGateId >= 0
@@ -3997,7 +3998,7 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        // Authorization: owner OR admin gate approval
+        // Authorization: owner can act unless STRICT_ADMIN requires admin approval window.
         locals.adminApprovalUsed = 0;
         if (locals.gate.owner != qpi.invocator()
             || (locals.gate.adminGateId >= 0
@@ -4625,7 +4626,7 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        // Authorization: owner OR admin gate approval
+        // Authorization: owner can act unless STRICT_ADMIN requires admin approval window.
         locals.adminApprovalUsed = 0;
         if (locals.gate.owner != qpi.invocator()
             || (locals.gate.adminGateId >= 0
@@ -4905,7 +4906,7 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        // Authorization: owner OR admin gate approval
+        // Authorization: owner can act unless STRICT_ADMIN requires admin approval window.
         locals.adminApprovalUsed = 0;
         if (locals.gate.owner != qpi.invocator()
             || (locals.gate.adminGateId >= 0
@@ -5312,7 +5313,7 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        // Authorization: owner OR admin gate approval
+        // Authorization: owner can act unless STRICT_ADMIN requires admin approval window.
         locals.adminApprovalUsed = 0;
         if (locals.gate.owner != qpi.invocator()
             || (locals.gate.adminGateId >= 0
@@ -5597,7 +5598,7 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        // Authorization: owner OR admin gate approval
+        // Authorization: owner can act unless STRICT_ADMIN requires admin approval window.
         locals.adminApprovalUsed = 0;
         if (locals.gate.owner != qpi.invocator()
             || (locals.gate.adminGateId >= 0
@@ -5813,7 +5814,7 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        // Authorization: owner OR admin gate approval
+        // Authorization: owner can act unless STRICT_ADMIN requires admin approval window.
         locals.adminApprovalUsed = 0;
         if (locals.gate.owner != qpi.invocator()
             || (locals.gate.adminGateId >= 0
@@ -6453,7 +6454,7 @@ public:
             return;
         }
 
-        // Authorization: owner OR admin gate approval
+        // Authorization: owner can act unless STRICT_ADMIN requires admin approval window.
         locals.adminApprovalUsed = 0;
         if (locals.gate.owner != qpi.invocator()
             || (locals.gate.adminGateId >= 0
@@ -6550,7 +6551,7 @@ public:
             return;
         }
 
-        // Source gate owner must match caller
+        // Source gate owner must match caller — prevents draining another user's reserve
         if (locals.sourceGate.owner != qpi.invocator())
         {
             if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
@@ -6636,7 +6637,7 @@ public:
 
         locals.gate = state.get()._gates.get(locals.slotIdx);
 
-        // Authorization: owner OR admin gate approval
+        // Authorization: owner can act unless STRICT_ADMIN requires admin approval window.
         locals.adminApprovalUsed = 0;
         if (locals.gate.owner != qpi.invocator())
         {
@@ -6964,6 +6965,8 @@ public:
             // Admin gate drain: any gate with an admin multisig pays its admin's idle fees.
             // Only fires once per idle window cycle (when nextIdleChargeEpoch is due).
             // Admin gate survival is handled by the expiry exemption in the expiry loop.
+            // cycleDue: (a) epoch boundary hit, or (b) first cycle (epoch==0).
+            // Ensures drain fires exactly once per idle window, not every epoch.
             locals.cycleDue = 0;
             if (locals.gate.nextIdleChargeEpoch > 0 && qpi.epoch() >= locals.gate.nextIdleChargeEpoch) locals.cycleDue = 1;
             else if (locals.gate.nextIdleChargeEpoch == 0) locals.cycleDue = 1;
@@ -7097,7 +7100,8 @@ public:
                 && locals.gate.nextIdleChargeEpoch > 0
                 && qpi.epoch() >= locals.gate.nextIdleChargeEpoch)
             {
-                // Compute complexity multiplier
+                // Complexity multiplier: 1x base, 1.5x for 3+ recipients or HEARTBEAT/MULTISIG,
+                // 2x for 8 recipients, +0.5x for chain link
                 locals.idleMultiplierBps = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
                 if (locals.gate.recipientCount >= QUGATE_MAX_RECIPIENTS)
                 {
@@ -7143,6 +7147,8 @@ public:
                     }
                 }
 
+                // Funding source path: fee was charged from another gate's reserve.
+                // Refresh activity to prevent inactivity expiry on this gate.
                 if (locals.fundedExternally == 1)
                 {
                     locals.gate.lastActivityEpoch = qpi.epoch();
@@ -7159,6 +7165,7 @@ public:
                     state.mut()._earnedMaintenanceDividends += locals.maintenanceDividendAmount;
                     state.mut()._totalMaintenanceDividends += locals.maintenanceDividendAmount;
                 }
+                // Self-funded fallback: no funding source, or source couldn't pay — use own reserve
                 else if (locals.gate.reserve >= (sint64)locals.effectiveIdleFee)
                 {
                     locals.gate.reserve -= locals.effectiveIdleFee;
@@ -7404,6 +7411,7 @@ public:
                                 {
                                     locals.inhPriorSum += (sint64)QPI::div((uint64)(locals.inhPayoutTotal * (sint64)locals.inhCfg.beneficiaryShares.get(locals.inhK)), (uint64)100);
                                 }
+                                // Last beneficiary gets remainder to avoid rounding dust
                                 locals.inhShare = locals.inhPayoutTotal - locals.inhPriorSum;
                             }
                             else
