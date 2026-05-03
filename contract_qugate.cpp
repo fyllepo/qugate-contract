@@ -7120,6 +7120,44 @@ TEST(QuGateRecipient, SplitMixedWalletAndGateRecipients)
     EXPECT_GT(result.forwarded, 0);
 }
 
+// Deferred gate-recipient: undelivered amount returns to source gate
+TEST(QuGateRecipient, ClosedGateRecipientReturnsToSource)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto source = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 2, recips, ratios);
+
+    // Set up: 50% to CHARLIE wallet, 50% to downstream gate
+    GateConfig gate = env.state.get()._gates.get(source.gateId - 1);
+    gate.recipientCount = 2;
+    gate.recipients.set(0, CHARLIE);
+    gate.recipients.set(1, id::zero());
+    gate.ratios.set(0, 5000);
+    gate.ratios.set(1, 5000);
+    gate.recipientGateIds.set(0, -1);
+    gate.recipientGateIds.set(1, downstream.gateId);
+    env.state.mut()._gates.set(source.gateId - 1, gate);
+
+    // Close the downstream gate so routing will fail
+    env.closeGate(ALICE, downstream.gateId);
+    EXPECT_EQ(env.getGate(downstream.gateId).active, 0);
+
+    // Send 10000 QU through the split
+    env.qpi.reset();
+    auto result = env.routeToGate(source.gateId - 1, 10000, 0);
+
+    // CHARLIE should receive 50%
+    EXPECT_GT(env.qpi.totalTransferredTo(CHARLIE), 0);
+
+    // The 50% destined for the closed gate should return to source's currentBalance
+    GateConfig sourceAfter = env.state.get()._gates.get(source.gateId - 1);
+    EXPECT_GT(sourceAfter.currentBalance, 0ULL);
+    // totalForwarded should NOT include the failed portion
+    EXPECT_LT(sourceAfter.totalForwarded, 10000ULL);
+}
+
 // Split gate with zero recipients and no chain is rejected
 TEST(QuGateEdge, ZeroRecipientGateWithoutChainRejected)
 {
