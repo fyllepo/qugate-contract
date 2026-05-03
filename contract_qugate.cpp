@@ -1109,8 +1109,38 @@ public:
             }
             if (senderAllowed)
             {
-                qpi.transfer(gate.recipients.get(0), amount);
-                gate.totalForwarded += amount;
+                if (gate.recipientCount > 0 && gate.recipientGateIds.get(0) >= 0)
+                {
+                    // Gate-as-recipient: route via routeToGate with recovery
+                    uint64 targetSlot = slotFromGateId(gate.recipientGateIds.get(0));
+                    if (targetSlot < state.get()._gateCount
+                        && gateIdMatchesCurrentGeneration(gate.recipientGateIds.get(0))
+                        && state.get()._gates.get(targetSlot).active == 1)
+                    {
+                        RouteResult deferred = routeToGate(targetSlot, amount, 0);
+                        if (deferred.accepted)
+                        {
+                            gate.totalForwarded += amount;
+                        }
+                        else
+                        {
+                            gate.currentBalance += amount;
+                        }
+                    }
+                    else
+                    {
+                        gate.currentBalance += amount;
+                    }
+                }
+                else if (gate.recipientCount > 0)
+                {
+                    qpi.transfer(gate.recipients.get(0), amount);
+                    gate.totalForwarded += amount;
+                }
+                else
+                {
+                    gate.totalForwarded += amount;
+                }
             }
             else {
                 qpi.transfer(sender, amount);
@@ -2870,8 +2900,16 @@ public:
                     }
                     else if (gate.chainNextGateId != -1)
                     {
-                        released = true;
-                        routeChain((uint64)gate.chainNextGateId, releaseAmount);
+                        uint64 nextSlot = slotFromGateId(gate.chainNextGateId);
+                        if (nextSlot < state.get()._gateCount
+                            && gateIdMatchesCurrentGeneration(gate.chainNextGateId))
+                        {
+                            RouteResult routed = routeToGate(nextSlot, releaseAmount, 0);
+                            if (routed.accepted)
+                            {
+                                released = true;
+                            }
+                        }
                     }
                 }
 
@@ -3121,9 +3159,14 @@ public:
             }
             gate = state.get()._gates.get(slotIdx);
             gate.totalForwarded += distributed;
+            // Recovery: undelivered shares return to currentBalance
+            if (distributed < (uint64)amountAfterFee)
+            {
+                gate.currentBalance += ((uint64)amountAfterFee - distributed);
+            }
             state.mut()._gates.set(slotIdx, gate);
             result.forwarded = distributed;
-            result.accepted = (distributed > 0);
+            result.accepted = (distributed > 0 || gate.currentBalance > 0);
         }
         else if (gate.mode == MODE_ROUND_ROBIN)
         {
@@ -3239,14 +3282,10 @@ public:
             if (accepted)
             {
                 gate.totalForwarded += amountAfterFee;
-                state.mut()._gates.set(slotIdx, gate);
                 result.forwarded = amountAfterFee;
                 result.accepted = true;
             }
-            else
-            {
-                state.mut()._gates.set(slotIdx, gate);
-            }
+            state.mut()._gates.set(slotIdx, gate);
         }
         else if (gate.mode == MODE_HEARTBEAT || gate.mode == MODE_MULTISIG)
         {
@@ -7156,6 +7195,75 @@ TEST(QuGateRecipient, ClosedGateRecipientReturnsToSource)
     EXPECT_GT(sourceAfter.currentBalance, 0ULL);
     // totalForwarded should NOT include the failed portion
     EXPECT_LT(sourceAfter.totalForwarded, 10000ULL);
+}
+
+// CONDITIONAL gate-as-recipient: closed target returns funds to source
+TEST(QuGateRecipient, ConditionalClosedGateRecipientReturnsToSource)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 10000 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+
+    // Create CONDITIONAL gate with gate-as-recipient pointing to downstream
+    id allowed[] = { CHARLIE };
+    auto source = makeSimpleGate(env, ALICE, 100000, MODE_CONDITIONAL, 1, recips, ratios, 0, allowed, 1);
+
+    // Set recipient to be the downstream gate (gate-as-recipient)
+    GateConfig gate = env.state.get()._gates.get(source.gateId - 1);
+    gate.recipientGateIds.set(0, downstream.gateId);
+    env.state.mut()._gates.set(source.gateId - 1, gate);
+
+    // Close the downstream gate so routing will fail
+    env.closeGate(ALICE, downstream.gateId);
+    EXPECT_EQ(env.getGate(downstream.gateId).active, 0);
+
+    // Send from allowed sender to the CONDITIONAL gate
+    env.sendToGate(CHARLIE, source.gateId, 5000);
+
+    // Funds should return to source gate's currentBalance, not be lost
+    GateConfig sourceAfter = env.state.get()._gates.get(source.gateId - 1);
+    EXPECT_EQ(sourceAfter.currentBalance, 5000ULL);
+    // totalForwarded should NOT include the failed portion
+    EXPECT_EQ(sourceAfter.totalForwarded, 0ULL);
+}
+
+// MULTISIG chain forward: closed chain target returns funds to source
+TEST(QuGateRecipient, MultisigChainForwardClosedGateReturnsToSource)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+
+    // Create MULTISIG gate with recipientCount=0 and chain to downstream
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    for (uint8 _ri = 0; _ri < 8; _ri++) in.recipientGateIds.set(_ri, -1);
+    in.mode = MODE_MULTISIG;
+    in.recipientCount = 0;
+    in.chainNextGateId = downstream.gateId;
+    auto out = env.createGate(ALICE, 100000, in);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    id guardians[] = { CHARLIE, DAVE };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 5, 3), QUGATE_SUCCESS);
+
+    // Fund the multisig gate (first vote)
+    env.sendToMultisigGate(CHARLIE, out.gateId, 3000);
+
+    // Close the downstream gate so chain forwarding will fail
+    env.closeGate(ALICE, downstream.gateId);
+    EXPECT_EQ(env.getGate(downstream.gateId).active, 0);
+
+    // Second vote triggers quorum and release
+    env.sendToMultisigGate(DAVE, out.gateId, 2000);
+
+    // Funds should return to source gate's currentBalance, not be lost
+    GateConfig sourceAfter = env.state.get()._gates.get(out.gateId - 1);
+    EXPECT_GT(sourceAfter.currentBalance, 0ULL);
+    // totalForwarded should NOT include the failed chain forward
+    EXPECT_EQ(sourceAfter.totalForwarded, 0ULL);
 }
 
 // Split gate with zero recipients and no chain is rejected

@@ -2904,6 +2904,14 @@ public:
                     locals.chainIn.amount = locals.condOut.deferredGateAmount;
                     locals.chainIn.hopCount = 0;
                     routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    // Recovery: if routeToGate failed, return undelivered amount to source gate
+                    if (locals.chainOut.accepted == 0 && locals.chainIn.amount > 0)
+                    {
+                        locals.gate = state.get()._gates.get(locals.slotIdx);
+                        locals.gate.currentBalance += (uint64)locals.chainIn.amount;
+                        locals.gate.totalForwarded -= (uint64)locals.chainIn.amount;
+                        state.mut()._gates.set(locals.slotIdx, locals.gate);
+                    }
                 }
             }
             else
@@ -2995,6 +3003,14 @@ public:
                         locals.chainIn.amount = locals.msigOut.chainForwardAmount;
                         locals.chainIn.hopCount = 0;
                         routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                        // Recovery: if routeToGate failed, return undelivered amount to source gate
+                        if (locals.chainOut.accepted == 0 && locals.chainIn.amount > 0)
+                        {
+                            locals.gate = state.get()._gates.get(locals.slotIdx);
+                            locals.gate.currentBalance += (uint64)locals.chainIn.amount;
+                            locals.gate.totalForwarded -= (uint64)locals.chainIn.amount;
+                            state.mut()._gates.set(locals.slotIdx, locals.gate);
+                        }
                     }
                 }
             }
@@ -3431,6 +3447,14 @@ public:
                     locals.chainIn.amount = locals.condOut.deferredGateAmount;
                     locals.chainIn.hopCount = 0;
                     routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                    // Recovery: if routeToGate failed, return undelivered amount to source gate
+                    if (locals.chainOut.accepted == 0 && locals.chainIn.amount > 0)
+                    {
+                        locals.gate = state.get()._gates.get(locals.slotIdx);
+                        locals.gate.currentBalance += (uint64)locals.chainIn.amount;
+                        locals.gate.totalForwarded -= (uint64)locals.chainIn.amount;
+                        state.mut()._gates.set(locals.slotIdx, locals.gate);
+                    }
                 }
             }
             else
@@ -3522,6 +3546,14 @@ public:
                         locals.chainIn.amount = locals.msigOut.chainForwardAmount;
                         locals.chainIn.hopCount = 0;
                         routeToGate(qpi, state, locals.chainIn, locals.chainOut, locals.chainLocals);
+                        // Recovery: if routeToGate failed, return undelivered amount to source gate
+                        if (locals.chainOut.accepted == 0 && locals.chainIn.amount > 0)
+                        {
+                            locals.gate = state.get()._gates.get(locals.slotIdx);
+                            locals.gate.currentBalance += (uint64)locals.chainIn.amount;
+                            locals.gate.totalForwarded -= (uint64)locals.chainIn.amount;
+                            state.mut()._gates.set(locals.slotIdx, locals.gate);
+                        }
                     }
                 }
             }
