@@ -111,6 +111,7 @@ constexpr sint64 QUGATE_INVALID_GATE_RECIPIENT    = -28; // recipientGateIds ent
 constexpr sint64 QUGATE_INVALID_ADMIN_CYCLE       = -29; // adminGateId creates a circular admin chain (self or loop)
 constexpr sint64 QUGATE_MULTISIG_PROPOSAL_ACTIVE  = -30; // configureMultisig blocked while proposal is in progress
 constexpr sint64 QUGATE_INVALID_PARAMS            = -31; // Generic invalid parameter (e.g. bad lockMode or zero delayEpochs)
+constexpr sint64 QUGATE_INVALID_FUNDING_SOURCE    = -32; // Funding source gate invalid, closed, or owner mismatch
 
 // Log type constants (positive = success events, high numbers = actions)
 constexpr uint32 QUGATE_LOG_GATE_CREATED = 1;
@@ -524,6 +525,18 @@ public:
         Array<id, 8> guardians;    // Guardian public keys from the admin gate's QUGATE_MultisigConfig
     };
 
+    // Set or clear the funding source for a gate. Owner only (or admin gate).
+    // When set, the target gate's idle fees are charged from the source gate's reserve.
+    struct setFundingSource_input
+    {
+        uint64 gateId;               // gate to configure (target)
+        sint64 fundingSourceGateId;   // -1 to clear (self-funded), >= 0 = versioned gate ID of source
+    };
+    struct setFundingSource_output
+    {
+        sint64 status;
+    };
+
     // Withdraw from a gate's unified reserve without closing. Owner only (or admin gate).
     struct withdrawReserve_input
     {
@@ -674,6 +687,9 @@ public:
 
         // Gate-as-recipient
         Array<sint64, 8> recipientGateIds;
+
+        // Funding source
+        sint64 fundingSourceGateId;  // -1 = self-funded, >= 0 = versioned gate ID
     };
 
     struct getGateCount_input
@@ -778,6 +794,10 @@ public:
 
         // Minimal latest execution metadata — one record per gate slot
         Array<QUGATE_LatestExecution, QUGATE_MAX_GATES> _latestExecutions;
+
+        // Per-gate funding source — indexed by gate slot
+        // -1 = self-funded (default), >= 0 = versioned gate ID of the funding source
+        Array<sint64, QUGATE_MAX_GATES> _fundingSourceGateIds;
     };
 
     // =============================================
@@ -1212,16 +1232,13 @@ public:
         uint8  recentlyActive;
         uint8  activeHold;
         uint8  cycleDue;
-        // Downstream reserve drain + admin gate drain
-        uint8  downstreamIdx;
-        uint64 downstreamSlot;
-        uint64 downstreamGen;
-        GateConfig downstreamGate;
-        uint64 downstreamIdleFee;
-        uint64 downstreamMultiplierBps;
-        uint8  downstreamCount;
-        uint64 downstreamBurnAmount;
-        uint64 downstreamDividendAmount;
+        // Funding source drain
+        sint64 fundingSourceId;
+        uint64 fundingSourceSlot;
+        uint64 fundingSourceGen;
+        GateConfig fundingSourceGate;
+        uint8  fundedExternally;
+        // Admin gate drain
         uint64 adminDrainSlot;
         uint64 adminDrainGen;
         GateConfig adminDrainGate;
@@ -1359,6 +1376,25 @@ public:
         QUGATE_MultisigConfig adminCfg;
         QUGATE_AdminApprovalState adminApproval;
         uint8 i;
+    };
+
+    struct setFundingSource_locals
+    {
+        sint64 invReward;
+        QuGateLogger logger;
+        GateConfig gate;
+        GateConfig sourceGate;
+        uint64 slotIdx;
+        uint64 encodedGen;
+        uint64 sourceSlot;
+        uint64 sourceGen;
+        // Admin gate auth
+        uint64 adminCheckSlot;
+        uint64 adminCheckEncodedGen;
+        GateConfig adminCheckGate;
+        QUGATE_AdminApprovalState adminCheckApproval;
+        uint8 adminApprovalUsed;
+        uint8 adminAuth;
     };
 
     struct withdrawReserve_locals
@@ -3889,6 +3925,9 @@ public:
             state.mut()._timeLockConfigs.set(locals.slotIdx, locals.tlZeroCfg);
         }
 
+        // Clear funding source
+        state.mut()._fundingSourceGateIds.set(locals.slotIdx, -1);
+
         // Guard against double-close underflow
         if (locals.gate.active == 1)
         {
@@ -4410,6 +4449,9 @@ public:
         {
             output.recipientGateIds.set(locals.i, locals.gate.recipientGateIds.get(locals.i));
         }
+
+        // Funding source
+        output.fundingSourceGateId = state.get()._fundingSourceGateIds.get(locals.slotIdx);
 
     }
 
@@ -5138,114 +5180,9 @@ public:
             return;
         }
 
-        // Compute maintenance cost: gate's own idle fee + downstream drain + admin drain
-        // This is the same calculation as END_EPOCH idle charging.
-        locals.ownMultiplierBps = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
-        if (locals.gate.recipientCount >= QUGATE_MAX_RECIPIENTS)
-        {
-            locals.ownMultiplierBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
-        }
-        else if (locals.gate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD && locals.ownMultiplierBps < QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS)
-        {
-            locals.ownMultiplierBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
-        }
-        if (locals.gate.chainNextGateId >= 0)
-        {
-            locals.ownMultiplierBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
-        }
-        locals.ownIdleFee = QPI::div(state.get()._idleFee * locals.ownMultiplierBps, 10000ULL);
-
-        // Count and compute downstream drain (chain target + gate-as-recipients)
-        locals.downstreamCount = 0;
-        locals.downstreamTotalFee = 0;
-        if (locals.gate.chainNextGateId >= 0)
-        {
-            locals.downstreamSlot = (uint64)(locals.gate.chainNextGateId) & QUGATE_GATE_ID_SLOT_MASK;
-            locals.downstreamGen = (uint64)(locals.gate.chainNextGateId) >> QUGATE_GATE_ID_SLOT_BITS;
-            if (locals.downstreamSlot < state.get()._gateCount
-                && locals.downstreamGen > 0
-                && state.get()._gateGenerations.get(locals.downstreamSlot) == (uint16)(locals.downstreamGen - 1))
-            {
-                locals.downstreamGate = state.get()._gates.get(locals.downstreamSlot);
-                if (locals.downstreamGate.active == 1)
-                {
-                    locals.downstreamMultBps = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
-                    if (locals.downstreamGate.recipientCount >= QUGATE_MAX_RECIPIENTS) locals.downstreamMultBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
-                    else if (locals.downstreamGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD) locals.downstreamMultBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
-                    if (locals.downstreamGate.mode == QUGATE_MODE_HEARTBEAT && locals.downstreamMultBps < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS) locals.downstreamMultBps = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
-                    if (locals.downstreamGate.mode == QUGATE_MODE_MULTISIG && locals.downstreamMultBps < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS) locals.downstreamMultBps = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
-                    if (locals.downstreamGate.chainNextGateId >= 0) locals.downstreamMultBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
-                    locals.downstreamTotalFee += QPI::div(state.get()._idleFee * locals.downstreamMultBps, 10000ULL);
-                    locals.downstreamCount++;
-                }
-            }
-        }
-        for (locals.dsIdx = 0; locals.dsIdx < locals.gate.recipientCount; locals.dsIdx++)
-        {
-            if (locals.gate.recipientGateIds.get(locals.dsIdx) >= 0)
-            {
-                locals.downstreamSlot = (uint64)(locals.gate.recipientGateIds.get(locals.dsIdx)) & QUGATE_GATE_ID_SLOT_MASK;
-                locals.downstreamGen = (uint64)(locals.gate.recipientGateIds.get(locals.dsIdx)) >> QUGATE_GATE_ID_SLOT_BITS;
-                if (locals.downstreamSlot < state.get()._gateCount
-                    && locals.downstreamGen > 0
-                    && state.get()._gateGenerations.get(locals.downstreamSlot) == (uint16)(locals.downstreamGen - 1))
-                {
-                    locals.downstreamGate = state.get()._gates.get(locals.downstreamSlot);
-                    if (locals.downstreamGate.active == 1)
-                    {
-                        locals.downstreamMultBps = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
-                        if (locals.downstreamGate.recipientCount >= QUGATE_MAX_RECIPIENTS) locals.downstreamMultBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
-                        else if (locals.downstreamGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD) locals.downstreamMultBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
-                        if (locals.downstreamGate.mode == QUGATE_MODE_HEARTBEAT && locals.downstreamMultBps < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS) locals.downstreamMultBps = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
-                        if (locals.downstreamGate.mode == QUGATE_MODE_MULTISIG && locals.downstreamMultBps < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS) locals.downstreamMultBps = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
-                        if (locals.downstreamGate.chainNextGateId >= 0) locals.downstreamMultBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
-                        locals.downstreamTotalFee += QPI::div(state.get()._idleFee * locals.downstreamMultBps, 10000ULL);
-                        locals.downstreamCount++;
-                    }
-                }
-            }
-        }
-
-        // Admin gate fee
-        locals.adminFee = 0;
-        if (locals.gate.adminGateId >= 0)
-        {
-            locals.downstreamSlot = (uint64)(locals.gate.adminGateId) & QUGATE_GATE_ID_SLOT_MASK;
-            locals.downstreamGen = (uint64)(locals.gate.adminGateId) >> QUGATE_GATE_ID_SLOT_BITS;
-            if (locals.downstreamSlot < state.get()._gateCount
-                && locals.downstreamGen > 0
-                && state.get()._gateGenerations.get(locals.downstreamSlot) == (uint16)(locals.downstreamGen - 1)
-                && state.get()._gates.get(locals.downstreamSlot).active == 1)
-            {
-                locals.adminFee = QPI::div(state.get()._idleFee * QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS, 10000ULL);
-            }
-        }
-
-        // Total full-cycle maintenance cost
-        locals.maintenanceCost = locals.ownIdleFee + locals.downstreamTotalFee + locals.adminFee;
-
-        // Pro-rate by elapsed time since last heartbeat:
-        // fee = max(QUGATE_HEARTBEAT_PING_FEE, fullCost * elapsedEpochs / idleWindow)
-        // This ensures diligent pingers pay proportionally, not a full cycle per ping.
-        locals.elapsedEpochs = (uint64)(qpi.epoch() - locals.cfg.lastHeartbeatEpoch);
-        if (locals.elapsedEpochs == 0)
-        {
-            locals.elapsedEpochs = 1;
-        }
-        if (state.get()._idleWindowEpochs > 0 && locals.elapsedEpochs < state.get()._idleWindowEpochs)
-        {
-            locals.proratedCost = QPI::div(locals.maintenanceCost * locals.elapsedEpochs, state.get()._idleWindowEpochs);
-        }
-        else
-        {
-            locals.proratedCost = locals.maintenanceCost;
-        }
-        // Floor at legacy ping fee to prevent spam/zero-fee pings
-        if (locals.proratedCost < (uint64)QUGATE_HEARTBEAT_PING_FEE)
-        {
-            locals.proratedCost = (uint64)QUGATE_HEARTBEAT_PING_FEE;
-        }
-        locals.maintenanceCost = locals.proratedCost;
+        // Heartbeat ping cost: flat anti-spam fee (1,000 QU).
+        // Reserve maintenance is handled separately via the funding source mechanism.
+        locals.maintenanceCost = (uint64)QUGATE_HEARTBEAT_PING_FEE;
 
         // Charge the pro-rated maintenance cost
         if (locals.invReward < (sint64)locals.maintenanceCost)
@@ -6476,6 +6413,192 @@ public:
     }
 
     // =============================================
+    // setFundingSource — set or clear the funding source for a gate's idle fees
+    // =============================================
+
+    PUBLIC_PROCEDURE_WITH_LOCALS(setFundingSource)
+    {
+        locals.invReward = qpi.invocationReward();
+        output.status = QUGATE_SUCCESS;
+
+        locals.logger._contractIndex = CONTRACT_INDEX;
+        locals.logger.sender = qpi.invocator();
+        locals.logger.gateId = input.gateId;
+        locals.logger.amount = 0;
+
+        // Decode versioned gateId
+        locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
+        locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.gateId == 0
+            || locals.slotIdx >= state.get()._gateCount
+            || locals.encodedGen == 0
+            || state.get()._gateGenerations.get(locals.slotIdx) != (uint16)(locals.encodedGen - 1))
+        {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+            output.status = QUGATE_INVALID_GATE_ID;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_GATE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.gate = state.get()._gates.get(locals.slotIdx);
+
+        if (locals.gate.active == 0)
+        {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+            output.status = QUGATE_GATE_NOT_ACTIVE;
+            locals.logger._type = QUGATE_LOG_FAIL_NOT_ACTIVE;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Authorization: owner OR admin gate approval
+        locals.adminApprovalUsed = 0;
+        if (locals.gate.owner != qpi.invocator()
+            || (locals.gate.adminGateId >= 0
+                && locals.gate.governancePolicy == QUGATE_GOVERNANCE_STRICT_ADMIN))
+        {
+            locals.adminAuth = 0;
+            if (locals.gate.adminGateId >= 0)
+            {
+                locals.adminCheckSlot = locals.gate.adminGateId & QUGATE_GATE_ID_SLOT_MASK;
+                locals.adminCheckEncodedGen = (uint64)(locals.gate.adminGateId) >> QUGATE_GATE_ID_SLOT_BITS;
+                if (locals.gate.adminGateId > 0
+                    && locals.adminCheckSlot < state.get()._gateCount
+                    && locals.adminCheckEncodedGen > 0
+                    && state.get()._gateGenerations.get(locals.adminCheckSlot) == (uint16)(locals.adminCheckEncodedGen - 1))
+                {
+                    locals.adminCheckGate = state.get()._gates.get(locals.adminCheckSlot);
+                    if (locals.adminCheckGate.active && locals.adminCheckGate.mode == QUGATE_MODE_MULTISIG)
+                    {
+                        locals.adminCheckApproval = state.get()._adminApprovalStates.get(locals.adminCheckSlot);
+                        if (locals.adminCheckApproval.active == 1)
+                        {
+                            if ((uint32)qpi.epoch() <= locals.adminCheckApproval.validUntilEpoch)
+                            {
+                                locals.adminAuth = 1;
+                                locals.adminApprovalUsed = 1;
+                            }
+                            else
+                            {
+                                locals.adminCheckApproval.active = 0;
+                                locals.adminCheckApproval.validUntilEpoch = 0;
+                                state.mut()._adminApprovalStates.set(locals.adminCheckSlot, locals.adminCheckApproval);
+                            }
+                        }
+                    }
+                }
+            }
+            if (locals.adminAuth == 0)
+            {
+                if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+                output.status = QUGATE_UNAUTHORIZED;
+                locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+                LOG_WARNING(locals.logger);
+                return;
+            }
+        }
+
+        // Clear funding source
+        if (input.fundingSourceGateId == -1)
+        {
+            // Charge anti-spam fee
+            if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
+            {
+                if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+                output.status = QUGATE_INSUFFICIENT_FEE;
+                locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
+                LOG_INFO(locals.logger);
+                return;
+            }
+            qpi.burn(QUGATE_CHAIN_HOP_FEE);
+            state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+            if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
+            {
+                qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
+            }
+
+            state.mut()._fundingSourceGateIds.set(locals.slotIdx, -1);
+            output.status = QUGATE_SUCCESS;
+            LOG_INFO(locals.logger);
+            return;
+        }
+
+        // Validate source gate
+        locals.sourceSlot = (uint64)(input.fundingSourceGateId) & QUGATE_GATE_ID_SLOT_MASK;
+        locals.sourceGen = (uint64)(input.fundingSourceGateId) >> QUGATE_GATE_ID_SLOT_BITS;
+        if (input.fundingSourceGateId <= 0
+            || locals.sourceSlot >= state.get()._gateCount
+            || locals.sourceGen == 0
+            || state.get()._gateGenerations.get(locals.sourceSlot) != (uint16)(locals.sourceGen - 1))
+        {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+            output.status = QUGATE_INVALID_FUNDING_SOURCE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        locals.sourceGate = state.get()._gates.get(locals.sourceSlot);
+        if (locals.sourceGate.active == 0)
+        {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+            output.status = QUGATE_INVALID_FUNDING_SOURCE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Source gate owner must match caller
+        if (locals.sourceGate.owner != qpi.invocator())
+        {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+            output.status = QUGATE_INVALID_FUNDING_SOURCE;
+            locals.logger._type = QUGATE_LOG_FAIL_UNAUTHORIZED;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // Cannot fund from self
+        if (locals.sourceSlot == locals.slotIdx)
+        {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+            output.status = QUGATE_INVALID_FUNDING_SOURCE;
+            locals.logger._type = QUGATE_LOG_FAIL_INVALID_PARAMS;
+            LOG_WARNING(locals.logger);
+            return;
+        }
+
+        // All validation passed — charge anti-spam fee
+        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
+        {
+            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
+            output.status = QUGATE_INSUFFICIENT_FEE;
+            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
+            LOG_INFO(locals.logger);
+            return;
+        }
+        qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
+        {
+            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
+        }
+
+        // Consume admin approval if used
+        if (locals.adminApprovalUsed)
+        {
+            locals.adminCheckApproval.active = 0;
+            locals.adminCheckApproval.validUntilEpoch = 0;
+            state.mut()._adminApprovalStates.set(locals.adminCheckSlot, locals.adminCheckApproval);
+        }
+
+        state.mut()._fundingSourceGateIds.set(locals.slotIdx, input.fundingSourceGateId);
+        output.status = QUGATE_SUCCESS;
+        LOG_INFO(locals.logger);
+    }
+
+    // =============================================
     // withdrawReserve — withdraw from gate's unified reserve
     // =============================================
 
@@ -6689,6 +6812,8 @@ public:
             output.allowedSenders.set(locals.i, locals.asCfg.senders.get(locals.i));
             output.recipientGateIds.set(locals.i, locals.gate.recipientGateIds.get(locals.i));
         }
+
+        output.fundingSourceGateId = state.get()._fundingSourceGateIds.get(locals.slotIdx);
     }
 
     PUBLIC_FUNCTION_WITH_LOCALS(getLatestExecution)
@@ -6727,7 +6852,7 @@ public:
 
     REGISTER_USER_FUNCTIONS_AND_PROCEDURES()
     {
-        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState 18=configureTimeLock 19=cancelTimeLock 20=getTimeLockState 21=setAdminGate 22=getAdminGate 23=withdrawReserve 24=getGatesByMode 25=getGateBySlot 26=getLatestExecution
+        // Index assignments: 1=createGate 2=sendToGate 3=closeGate 4=updateGate 5=getGate 6=getGateCount 7=getGatesByOwner 8=getGateBatch 9=getFees 10=fundGate 11=setChain 12=sendToGateVerified 13=configureHeartbeat 14=heartbeat 15=getHeartbeat 16=configureMultisig 17=getMultisigState 18=configureTimeLock 19=cancelTimeLock 20=getTimeLockState 21=setAdminGate 22=getAdminGate 23=withdrawReserve 24=getGatesByMode 25=getGateBySlot 26=getLatestExecution 27=setFundingSource
         REGISTER_USER_PROCEDURE(createGate, 1);
         REGISTER_USER_PROCEDURE(sendToGate, 2);
         REGISTER_USER_PROCEDURE(closeGate, 3);
@@ -6754,6 +6879,7 @@ public:
         REGISTER_USER_FUNCTION(getGatesByMode, 24);
         REGISTER_USER_FUNCTION(getGateBySlot, 25);
         REGISTER_USER_FUNCTION(getLatestExecution, 26);
+        REGISTER_USER_PROCEDURE(setFundingSource, 27);
     }
 
     // =============================================
@@ -6784,6 +6910,7 @@ public:
         {
             state.mut()._gateGenerations.set(locals.i, 0);
             state.mut()._idleDelinquentEpochs.set(locals.i, 0);
+            state.mut()._fundingSourceGateIds.set(locals.i, -1);
         }
     }
 
@@ -6952,143 +7079,6 @@ public:
                     state.mut()._idleDelinquentEpochs.set(locals.i, 0);
                 }
 
-                // Reserve drain: pay downstream gates' idle fees from the upstream gate's reserve.
-                // Only fires once per idle window cycle (not every epoch).
-                // No recentlyActive guard — downstream gates need protection from the first cycle.
-                if (locals.cycleDue == 1 && locals.activeHold == 1 && locals.gate.reserve > 0)
-                {
-                    // Re-read the gate in case it was modified above
-                    locals.gate = state.get()._gates.get(locals.i);
-                    locals.downstreamCount = 0;
-
-                    // Count and pay for chain target
-                    if (locals.gate.chainNextGateId >= 0)
-                    {
-                        locals.downstreamSlot = (uint64)(locals.gate.chainNextGateId) & QUGATE_GATE_ID_SLOT_MASK;
-                        locals.downstreamGen = (uint64)(locals.gate.chainNextGateId) >> QUGATE_GATE_ID_SLOT_BITS;
-                        if (locals.downstreamSlot < state.get()._gateCount
-                            && locals.downstreamGen > 0
-                            && state.get()._gateGenerations.get(locals.downstreamSlot) == (uint16)(locals.downstreamGen - 1))
-                        {
-                            locals.downstreamGate = state.get()._gates.get(locals.downstreamSlot);
-                            if (locals.downstreamGate.active == 1)
-                            {
-                                locals.downstreamCount++;
-                                // Compute downstream gate's effective idle fee
-                                locals.downstreamMultiplierBps = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
-                                if (locals.downstreamGate.recipientCount >= QUGATE_MAX_RECIPIENTS)
-                                {
-                                    locals.downstreamMultiplierBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
-                                }
-                                else if (locals.downstreamGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD)
-                                {
-                                    locals.downstreamMultiplierBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
-                                }
-                                if (locals.downstreamGate.mode == QUGATE_MODE_HEARTBEAT && locals.downstreamMultiplierBps < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS)
-                                {
-                                    locals.downstreamMultiplierBps = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
-                                }
-                                if (locals.downstreamGate.mode == QUGATE_MODE_MULTISIG && locals.downstreamMultiplierBps < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS)
-                                {
-                                    locals.downstreamMultiplierBps = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
-                                }
-                                if (locals.downstreamGate.chainNextGateId >= 0)
-                                {
-                                    locals.downstreamMultiplierBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
-                                }
-                                locals.downstreamIdleFee = QPI::div(state.get()._idleFee * locals.downstreamMultiplierBps, 10000ULL);
-
-                                if (locals.gate.reserve >= (sint64)locals.downstreamIdleFee)
-                                {
-                                    locals.gate.reserve -= locals.downstreamIdleFee;
-                                    locals.downstreamGate.lastActivityEpoch = qpi.epoch();
-                                    if (state.get()._idleWindowEpochs > 0)
-                                    {
-                                        locals.downstreamGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
-                                    }
-                                    state.mut()._gates.set(locals.downstreamSlot, locals.downstreamGate);
-                                    state.mut()._idleDelinquentEpochs.set(locals.downstreamSlot, 0);
-                                    state.mut()._totalMaintenanceCharged += locals.downstreamIdleFee;
-
-                                    locals.downstreamBurnAmount = QPI::div(locals.downstreamIdleFee * state.get()._feeBurnBps, 10000ULL);
-                                    locals.downstreamDividendAmount = locals.downstreamIdleFee - locals.downstreamBurnAmount;
-                                    qpi.burn(locals.downstreamBurnAmount);
-                                    state.mut()._totalBurned += locals.downstreamBurnAmount;
-                                    state.mut()._totalMaintenanceBurned += locals.downstreamBurnAmount;
-                                    state.mut()._earnedMaintenanceDividends += locals.downstreamDividendAmount;
-                                    state.mut()._totalMaintenanceDividends += locals.downstreamDividendAmount;
-                                }
-                            }
-                        }
-                    }
-
-                    // Count and pay for gate-as-recipient targets
-                    for (locals.downstreamIdx = 0; locals.downstreamIdx < locals.gate.recipientCount; locals.downstreamIdx++)
-                    {
-                        if (locals.gate.recipientGateIds.get(locals.downstreamIdx) >= 0)
-                        {
-                            locals.downstreamSlot = (uint64)(locals.gate.recipientGateIds.get(locals.downstreamIdx)) & QUGATE_GATE_ID_SLOT_MASK;
-                            locals.downstreamGen = (uint64)(locals.gate.recipientGateIds.get(locals.downstreamIdx)) >> QUGATE_GATE_ID_SLOT_BITS;
-                            if (locals.downstreamSlot < state.get()._gateCount
-                                && locals.downstreamGen > 0
-                                && state.get()._gateGenerations.get(locals.downstreamSlot) == (uint16)(locals.downstreamGen - 1))
-                            {
-                                locals.downstreamGate = state.get()._gates.get(locals.downstreamSlot);
-                                if (locals.downstreamGate.active == 1)
-                                {
-                                    locals.downstreamCount++;
-                                    locals.downstreamMultiplierBps = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
-                                    if (locals.downstreamGate.recipientCount >= QUGATE_MAX_RECIPIENTS)
-                                    {
-                                        locals.downstreamMultiplierBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
-                                    }
-                                    else if (locals.downstreamGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD)
-                                    {
-                                        locals.downstreamMultiplierBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
-                                    }
-                                    if (locals.downstreamGate.mode == QUGATE_MODE_HEARTBEAT && locals.downstreamMultiplierBps < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS)
-                                    {
-                                        locals.downstreamMultiplierBps = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
-                                    }
-                                    if (locals.downstreamGate.mode == QUGATE_MODE_MULTISIG && locals.downstreamMultiplierBps < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS)
-                                    {
-                                        locals.downstreamMultiplierBps = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
-                                    }
-                                    if (locals.downstreamGate.chainNextGateId >= 0)
-                                    {
-                                        locals.downstreamMultiplierBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
-                                    }
-                                    locals.downstreamIdleFee = QPI::div(state.get()._idleFee * locals.downstreamMultiplierBps, 10000ULL);
-
-                                    if (locals.gate.reserve >= (sint64)locals.downstreamIdleFee)
-                                    {
-                                        locals.gate.reserve -= locals.downstreamIdleFee;
-                                        locals.downstreamGate.lastActivityEpoch = qpi.epoch();
-                                        if (state.get()._idleWindowEpochs > 0)
-                                        {
-                                            locals.downstreamGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
-                                        }
-                                        state.mut()._gates.set(locals.downstreamSlot, locals.downstreamGate);
-                                        state.mut()._idleDelinquentEpochs.set(locals.downstreamSlot, 0);
-                                        state.mut()._totalMaintenanceCharged += locals.downstreamIdleFee;
-
-                                        locals.downstreamBurnAmount = QPI::div(locals.downstreamIdleFee * state.get()._feeBurnBps, 10000ULL);
-                                        locals.downstreamDividendAmount = locals.downstreamIdleFee - locals.downstreamBurnAmount;
-                                        qpi.burn(locals.downstreamBurnAmount);
-                                        state.mut()._totalBurned += locals.downstreamBurnAmount;
-                                        state.mut()._totalMaintenanceBurned += locals.downstreamBurnAmount;
-                                        state.mut()._earnedMaintenanceDividends += locals.downstreamDividendAmount;
-                                        state.mut()._totalMaintenanceDividends += locals.downstreamDividendAmount;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Persist updated reserve
-                    state.mut()._gates.set(locals.i, locals.gate);
-                }
-
                 continue;
             }
 
@@ -7130,7 +7120,45 @@ public:
                 }
                 locals.effectiveIdleFee = QPI::div(state.get()._idleFee * locals.idleMultiplierBps, 10000ULL);
 
-                if (locals.gate.reserve >= (sint64)locals.effectiveIdleFee)
+                // Check for external funding source
+                locals.fundedExternally = 0;
+                locals.fundingSourceId = state.get()._fundingSourceGateIds.get(locals.i);
+                if (locals.fundingSourceId >= 0)
+                {
+                    locals.fundingSourceSlot = (uint64)(locals.fundingSourceId) & QUGATE_GATE_ID_SLOT_MASK;
+                    locals.fundingSourceGen = (uint64)(locals.fundingSourceId) >> QUGATE_GATE_ID_SLOT_BITS;
+                    if (locals.fundingSourceSlot < state.get()._gateCount
+                        && locals.fundingSourceGen > 0
+                        && state.get()._gateGenerations.get(locals.fundingSourceSlot) == (uint16)(locals.fundingSourceGen - 1))
+                    {
+                        locals.fundingSourceGate = state.get()._gates.get(locals.fundingSourceSlot);
+                        if (locals.fundingSourceGate.active == 1
+                            && locals.fundingSourceGate.reserve >= (sint64)locals.effectiveIdleFee)
+                        {
+                            locals.fundingSourceGate.reserve -= locals.effectiveIdleFee;
+                            state.mut()._gates.set(locals.fundingSourceSlot, locals.fundingSourceGate);
+                            locals.fundedExternally = 1;
+                        }
+                    }
+                }
+
+                if (locals.fundedExternally == 1)
+                {
+                    locals.gate.lastActivityEpoch = qpi.epoch();
+                    locals.gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                    state.mut()._gates.set(locals.i, locals.gate);
+                    state.mut()._idleDelinquentEpochs.set(locals.i, 0);
+                    state.mut()._totalMaintenanceCharged += locals.effectiveIdleFee;
+
+                    locals.maintenanceBurnAmount = QPI::div(locals.effectiveIdleFee * state.get()._feeBurnBps, 10000ULL);
+                    locals.maintenanceDividendAmount = locals.effectiveIdleFee - locals.maintenanceBurnAmount;
+                    qpi.burn(locals.maintenanceBurnAmount);
+                    state.mut()._totalBurned += locals.maintenanceBurnAmount;
+                    state.mut()._totalMaintenanceBurned += locals.maintenanceBurnAmount;
+                    state.mut()._earnedMaintenanceDividends += locals.maintenanceDividendAmount;
+                    state.mut()._totalMaintenanceDividends += locals.maintenanceDividendAmount;
+                }
+                else if (locals.gate.reserve >= (sint64)locals.effectiveIdleFee)
                 {
                     locals.gate.reserve -= locals.effectiveIdleFee;
                     locals.gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;

@@ -317,6 +317,7 @@ constexpr sint64 QUGATE_INVALID_GATE_RECIPIENT = -28;
 constexpr sint64 QUGATE_INVALID_ADMIN_CYCLE = -29;
 constexpr sint64 QUGATE_MULTISIG_PROPOSAL_ACTIVE = -30;
 constexpr sint64 QUGATE_INVALID_PARAMS = -31;
+constexpr sint64 QUGATE_INVALID_FUNDING_SOURCE = -32;
 
 // GateConfig (matches QuGate.h exactly)
 struct GateConfig {
@@ -429,6 +430,9 @@ struct QuGateState {
     Array<QUGATE_MultisigConfig_Test, QUGATE_MAX_GATES> _multisigConfigs;
     Array<QUGATE_TimeLockConfig_Test, QUGATE_MAX_GATES> _timeLockConfigs;
     Array<QUGATE_AdminApprovalState_Test, QUGATE_MAX_GATES> _adminApprovalStates;
+
+    // Funding source per gate (-1 = self-funded, >= 0 = versioned gate ID)
+    Array<sint64, QUGATE_MAX_GATES> _fundingSourceGateIds;
 };
 
 // Procedure I/O structs (match QuGate.h)
@@ -576,6 +580,10 @@ public:
         state.mut()._totalMaintenanceDividends = 0;
         state.mut()._earnedMaintenanceDividends = 0;
         state.mut()._distributedMaintenanceDividends = 0;
+        for (uint64 fi = 0; fi < QUGATE_MAX_GATES; fi++)
+        {
+            state.mut()._fundingSourceGateIds.set(fi, -1);
+        }
     }
 
     ~QuGateTest()
@@ -1262,6 +1270,7 @@ public:
         gate.active = 0;
         state.mut()._gates.set(gateId - 1, gate);
         state.mut()._activeGates -= 1;
+        state.mut()._fundingSourceGateIds.set(gateId - 1, -1);
 
         state.mut()._freeSlots.set(state.get()._freeCount, gateId - 1);
         state.mut()._freeCount += 1;
@@ -1538,133 +1547,6 @@ public:
                     state.mut()._idleDelinquentEpochs.set(i, 0);
                 }
 
-                // Reserve drain: only fires once per idle window cycle.
-                if (cycleDue && activeHold == 1 && gate.reserve > 0)
-                {
-                    // Re-read the gate in case it was modified above
-                    gate = state.get()._gates.get(i);
-                    uint64 downstreamCount = 0;
-
-                    // Count and pay for chain target
-                    if (gate.chainNextGateId >= 0)
-                    {
-                        uint64 dsSlot = slotFromGateId(gate.chainNextGateId);
-                        if (dsSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(gate.chainNextGateId))
-                        {
-                            GateConfig dsGate = state.get()._gates.get(dsSlot);
-                            if (dsGate.active == 1)
-                            {
-                                downstreamCount++;
-                                // Compute downstream gate's effective idle fee
-                                uint64 dsMultiplierBps = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
-                                if (dsGate.recipientCount >= QUGATE_MAX_RECIPIENTS)
-                                    dsMultiplierBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
-                                else if (dsGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD)
-                                    dsMultiplierBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
-                                if (dsGate.mode == MODE_HEARTBEAT && dsMultiplierBps < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS)
-                                    dsMultiplierBps = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
-                                if (dsGate.mode == MODE_MULTISIG && dsMultiplierBps < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS)
-                                    dsMultiplierBps = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
-                                if (dsGate.chainNextGateId >= 0)
-                                    dsMultiplierBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
-                                uint64 dsIdleFee = QPI::div(state.get()._idleFee * dsMultiplierBps, 10000ULL);
-
-                                if (gate.reserve >= (sint64)dsIdleFee)
-                                {
-                                    gate.reserve -= dsIdleFee;
-                                    dsGate.lastActivityEpoch = qpi.epoch();
-                                    if (state.get()._idleWindowEpochs > 0)
-                                        dsGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
-                                    state.mut()._gates.set(dsSlot, dsGate);
-                                    state.mut()._idleDelinquentEpochs.set(dsSlot, 0);
-                                    state.mut()._totalMaintenanceCharged += dsIdleFee;
-
-                                    uint64 dsBurnAmount = QPI::div(dsIdleFee * state.get()._feeBurnBps, 10000ULL);
-                                    uint64 dsDividendAmount = dsIdleFee - dsBurnAmount;
-                                    qpi.burn(dsBurnAmount);
-                                    state.mut()._totalBurned += dsBurnAmount;
-                                    state.mut()._totalMaintenanceBurned += dsBurnAmount;
-                                    state.mut()._earnedMaintenanceDividends += dsDividendAmount;
-                                    state.mut()._totalMaintenanceDividends += dsDividendAmount;
-                                }
-                            }
-                        }
-                    }
-
-                    // Count and pay for gate-as-recipient targets
-                    for (uint8 ri = 0; ri < gate.recipientCount; ri++)
-                    {
-                        if (gate.recipientGateIds.get(ri) >= 0)
-                        {
-                            uint64 dsSlot = slotFromGateId(gate.recipientGateIds.get(ri));
-                            if (dsSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(gate.recipientGateIds.get(ri)))
-                            {
-                                GateConfig dsGate = state.get()._gates.get(dsSlot);
-                                if (dsGate.active == 1)
-                                {
-                                    downstreamCount++;
-                                    uint64 dsMultiplierBps = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
-                                    if (dsGate.recipientCount >= QUGATE_MAX_RECIPIENTS)
-                                        dsMultiplierBps = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
-                                    else if (dsGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD)
-                                        dsMultiplierBps = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
-                                    if (dsGate.mode == MODE_HEARTBEAT && dsMultiplierBps < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS)
-                                        dsMultiplierBps = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
-                                    if (dsGate.mode == MODE_MULTISIG && dsMultiplierBps < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS)
-                                        dsMultiplierBps = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
-                                    if (dsGate.chainNextGateId >= 0)
-                                        dsMultiplierBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
-                                    uint64 dsIdleFee = QPI::div(state.get()._idleFee * dsMultiplierBps, 10000ULL);
-
-                                    if (gate.reserve >= (sint64)dsIdleFee)
-                                    {
-                                        gate.reserve -= dsIdleFee;
-                                        dsGate.lastActivityEpoch = qpi.epoch();
-                                        if (state.get()._idleWindowEpochs > 0)
-                                            dsGate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
-                                        state.mut()._gates.set(dsSlot, dsGate);
-                                        state.mut()._idleDelinquentEpochs.set(dsSlot, 0);
-                                        state.mut()._totalMaintenanceCharged += dsIdleFee;
-
-                                        uint64 dsBurnAmount = QPI::div(dsIdleFee * state.get()._feeBurnBps, 10000ULL);
-                                        uint64 dsDividendAmount = dsIdleFee - dsBurnAmount;
-                                        qpi.burn(dsBurnAmount);
-                                        state.mut()._totalBurned += dsBurnAmount;
-                                        state.mut()._totalMaintenanceBurned += dsBurnAmount;
-                                        state.mut()._earnedMaintenanceDividends += dsDividendAmount;
-                                        state.mut()._totalMaintenanceDividends += dsDividendAmount;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Apply shielding surcharge: upstream gate's own idle fee increases
-                    // per downstream target it is paying for
-                    if (downstreamCount > 0)
-                    {
-                        uint64 surcharge = QPI::div(
-                            state.get()._idleFee * (uint64)downstreamCount * QUGATE_IDLE_SHIELD_PER_TARGET_BPS,
-                            10000ULL);
-                        if (gate.reserve >= (sint64)surcharge)
-                        {
-                            gate.reserve -= surcharge;
-                            state.mut()._totalMaintenanceCharged += surcharge;
-
-                            uint64 surchargeBurn = QPI::div(surcharge * state.get()._feeBurnBps, 10000ULL);
-                            uint64 surchargeDividend = surcharge - surchargeBurn;
-                            qpi.burn(surchargeBurn);
-                            state.mut()._totalBurned += surchargeBurn;
-                            state.mut()._totalMaintenanceBurned += surchargeBurn;
-                            state.mut()._earnedMaintenanceDividends += surchargeDividend;
-                            state.mut()._totalMaintenanceDividends += surchargeDividend;
-                        }
-                    }
-
-                    // Persist updated reserve
-                    state.mut()._gates.set(i, gate);
-                }
-
                 continue;
             }
 
@@ -1695,7 +1577,41 @@ public:
                     idleMultiplierBps += QUGATE_IDLE_CHAIN_EXTRA_BPS;
                 uint64 effectiveIdleFee = QPI::div(state.get()._idleFee * idleMultiplierBps, 10000ULL);
 
-                if (gate.reserve >= (sint64)effectiveIdleFee)
+                // Check for external funding source
+                bool fundedExternally = false;
+                sint64 fundingSourceId = state.get()._fundingSourceGateIds.get(i);
+                if (fundingSourceId >= 0)
+                {
+                    uint64 fsSlot = slotFromGateId(fundingSourceId);
+                    if (fsSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(fundingSourceId))
+                    {
+                        GateConfig fsGate = state.get()._gates.get(fsSlot);
+                        if (fsGate.active == 1 && fsGate.reserve >= (sint64)effectiveIdleFee)
+                        {
+                            fsGate.reserve -= effectiveIdleFee;
+                            state.mut()._gates.set(fsSlot, fsGate);
+                            fundedExternally = true;
+                        }
+                    }
+                }
+
+                if (fundedExternally)
+                {
+                    gate.lastActivityEpoch = qpi.epoch();
+                    gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
+                    state.mut()._gates.set(i, gate);
+                    state.mut()._idleDelinquentEpochs.set(i, 0);
+                    state.mut()._totalMaintenanceCharged += effectiveIdleFee;
+
+                    uint64 maintenanceBurnAmount = QPI::div(effectiveIdleFee * state.get()._feeBurnBps, 10000ULL);
+                    uint64 maintenanceDividendAmount = effectiveIdleFee - maintenanceBurnAmount;
+                    qpi.burn(maintenanceBurnAmount);
+                    state.mut()._totalBurned += maintenanceBurnAmount;
+                    state.mut()._totalMaintenanceBurned += maintenanceBurnAmount;
+                    state.mut()._earnedMaintenanceDividends += maintenanceDividendAmount;
+                    state.mut()._totalMaintenanceDividends += maintenanceDividendAmount;
+                }
+                else if (gate.reserve >= (sint64)effectiveIdleFee)
                 {
                     gate.reserve -= effectiveIdleFee;
                     gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
@@ -2928,6 +2844,43 @@ public:
         state.mut()._gates.set(idx, gate);
         state.mut()._multisigConfigs.set(idx, msigCfg);
         return output;
+    }
+
+    // ---- setFundingSource ----
+    sint64 setFundingSource(const id& caller, uint64 gateId, sint64 fundingSourceGateId)
+    {
+        qpi.reset();
+        qpi._invocator = caller;
+
+        if (gateId == 0 || gateId > state.get()._gateCount) return QUGATE_INVALID_GATE_ID;
+        uint64 idx = gateId - 1;
+        GateConfig gate = state.get()._gates.get(idx);
+        sint64 authStatus = QUGATE_SUCCESS;
+        if (!authorizeGateMutation(caller, idx, authStatus)) return authStatus;
+        consumeAdminApprovalIfUsed(caller, idx);
+        if (gate.active == 0) return QUGATE_GATE_NOT_ACTIVE;
+
+        if (fundingSourceGateId == -1)
+        {
+            qpi.burn(QUGATE_CHAIN_HOP_FEE);
+            state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+            state.mut()._fundingSourceGateIds.set(idx, -1);
+            return QUGATE_SUCCESS;
+        }
+
+        if (fundingSourceGateId <= 0) return QUGATE_INVALID_FUNDING_SOURCE;
+        uint64 sourceSlot = slotFromGateId(fundingSourceGateId);
+        if (sourceSlot >= state.get()._gateCount || !gateIdMatchesCurrentGeneration(fundingSourceGateId))
+            return QUGATE_INVALID_FUNDING_SOURCE;
+        GateConfig sourceGate = state.get()._gates.get(sourceSlot);
+        if (sourceGate.active == 0) return QUGATE_INVALID_FUNDING_SOURCE;
+        if (sourceGate.owner != caller) return QUGATE_INVALID_FUNDING_SOURCE;
+        if (sourceSlot == idx) return QUGATE_INVALID_FUNDING_SOURCE;
+
+        qpi.burn(QUGATE_CHAIN_HOP_FEE);
+        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
+        state.mut()._fundingSourceGateIds.set(idx, fundingSourceGateId);
+        return QUGATE_SUCCESS;
     }
 
     // ---- setChain ----
@@ -6803,6 +6756,147 @@ TEST(QuGateFinancial, LargeExcessSeedsLargeReserve)
     EXPECT_EQ(env.qpi.totalTransferredTo(ALICE), 0);
 }
 
+// ============ Funding Source Tests ============
+
+TEST(QuGateFunding, SetFundingSourceSuccess)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto source = makeSimpleGate(env, ALICE, 200000, MODE_SPLIT, 1, recips, ratios);
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.setFundingSource(ALICE, target.gateId, source.gateId), QUGATE_SUCCESS);
+    EXPECT_EQ(env.state.get()._fundingSourceGateIds.get(target.gateId - 1), (sint64)source.gateId);
+}
+
+TEST(QuGateFunding, SetFundingSourceClear)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto source = makeSimpleGate(env, ALICE, 200000, MODE_SPLIT, 1, recips, ratios);
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.setFundingSource(ALICE, target.gateId, source.gateId), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setFundingSource(ALICE, target.gateId, -1), QUGATE_SUCCESS);
+    EXPECT_EQ(env.state.get()._fundingSourceGateIds.get(target.gateId - 1), -1);
+}
+
+TEST(QuGateFunding, SetFundingSourceRejectsOwnerMismatch)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto source = makeSimpleGate(env, BOB, 200000, MODE_SPLIT, 1, recips, ratios);
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    EXPECT_EQ(env.setFundingSource(ALICE, target.gateId, source.gateId), QUGATE_INVALID_FUNDING_SOURCE);
+}
+
+TEST(QuGateFunding, SetFundingSourceRejectsSelf)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto gate = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    EXPECT_EQ(env.setFundingSource(ALICE, gate.gateId, gate.gateId), QUGATE_INVALID_FUNDING_SOURCE);
+}
+
+TEST(QuGateFunding, SetFundingSourceBurnsExactlyOnce)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto source = makeSimpleGate(env, ALICE, 200000, MODE_SPLIT, 1, recips, ratios);
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    ASSERT_EQ(env.setFundingSource(ALICE, target.gateId, source.gateId), QUGATE_SUCCESS);
+    EXPECT_EQ(env.qpi.totalBurned, QUGATE_CHAIN_HOP_FEE);
+    EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, QUGATE_CHAIN_HOP_FEE);
+}
+
+TEST(QuGateFunding, FundingSourceChargesFromSourceReserve)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    // Create source with large reserve
+    auto source = makeSimpleGate(env, ALICE, 500000, MODE_SPLIT, 1, recips, ratios);
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.setFundingSource(ALICE, target.gateId, source.gateId), QUGATE_SUCCESS);
+
+    sint64 sourceReserveBefore = env.state.get()._gates.get(source.gateId - 1).reserve;
+    EXPECT_GT(sourceReserveBefore, 0);
+
+    // Advance past idle window to trigger idle charge on target
+    env.qpi._epoch = 200;
+    env.endEpoch();
+
+    // Source reserve should decrease, target should survive
+    sint64 sourceReserveAfter = env.state.get()._gates.get(source.gateId - 1).reserve;
+    EXPECT_LT(sourceReserveAfter, sourceReserveBefore);
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(target.gateId - 1), 0);
+}
+
+TEST(QuGateFunding, FundingSourceFallsBackWhenSourceEmpty)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    // Create source with NO reserve
+    auto source = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto target = makeSimpleGate(env, ALICE, 200000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.setFundingSource(ALICE, target.gateId, source.gateId), QUGATE_SUCCESS);
+
+    sint64 targetReserveBefore = env.state.get()._gates.get(target.gateId - 1).reserve;
+
+    // Source has 0 reserve — target should fall back to self-funded
+    env.qpi._epoch = 200;
+    env.endEpoch();
+
+    sint64 targetReserveAfter = env.state.get()._gates.get(target.gateId - 1).reserve;
+    // Target's own reserve should be consumed (self-funded fallback)
+    EXPECT_LT(targetReserveAfter, targetReserveBefore);
+}
+
+TEST(QuGateFunding, FundingSourceClearedOnClose)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto source = makeSimpleGate(env, ALICE, 200000, MODE_SPLIT, 1, recips, ratios);
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.setFundingSource(ALICE, target.gateId, source.gateId), QUGATE_SUCCESS);
+    EXPECT_NE(env.state.get()._fundingSourceGateIds.get(target.gateId - 1), -1);
+
+    env.closeGate(ALICE, target.gateId);
+    EXPECT_EQ(env.state.get()._fundingSourceGateIds.get(target.gateId - 1), -1);
+}
+
+TEST(QuGateFunding, FundingSourceDeepChainCoverage)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    // Create 3-gate chain: source → middle → leaf
+    auto source = makeSimpleGate(env, ALICE, 1000000, MODE_SPLIT, 1, recips, ratios);
+    auto middle = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto leaf = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+
+    // All three funded from source's reserve
+    ASSERT_EQ(env.setFundingSource(ALICE, middle.gateId, source.gateId), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setFundingSource(ALICE, leaf.gateId, source.gateId), QUGATE_SUCCESS);
+
+    // Advance past idle window
+    env.qpi._epoch = 200;
+    env.endEpoch();
+
+    // Neither middle nor leaf should be delinquent
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(middle.gateId - 1), 0);
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(leaf.gateId - 1), 0);
+    // Source reserve should have been consumed for both
+    sint64 sourceReserve = env.state.get()._gates.get(source.gateId - 1).reserve;
+    EXPECT_LT(sourceReserve, 900000);
+}
+
 // Split gate conserves total input across all recipient transfers
 TEST(QuGateConservation, SplitConservation)
 {
@@ -7828,7 +7922,7 @@ TEST(QuGateRegression, MultisigVoteBelowMinSendIsDust)
 }
 
 // Downstream chain target of an exempt heartbeat gate stays alive, upstream reserve pays for it
-TEST(QuGateIdle, DownstreamChainExemptionFromHeartbeat)
+TEST(QuGateIdle, DownstreamChainFundedByFundingSource)
 {
     QuGateTest env;
     id recips[] = { BOB };
@@ -7847,8 +7941,10 @@ TEST(QuGateIdle, DownstreamChainExemptionFromHeartbeat)
     uint8 shares[] = { 100 };
     ASSERT_EQ(env.configureHeartbeat(ALICE, hb.gateId, 60, 100, 0, beneficiaries, shares, 1), QUGATE_SUCCESS);
     env.sendToGate(ALICE, hb.gateId, 50000);
-    // Fund the heartbeat gate's reserve so it can pay downstream fees
+    // Fund the heartbeat gate's reserve
     env.fundGate(ALICE, hb.gateId, 500000);
+    // Set downstream to be funded from heartbeat's reserve
+    ASSERT_EQ(env.setFundingSource(ALICE, downstream.gateId, hb.gateId), QUGATE_SUCCESS);
     sint64 reserveBefore = env.getGate(hb.gateId).reserve;
     ASSERT_GT(reserveBefore, 0);
 
@@ -7858,14 +7954,15 @@ TEST(QuGateIdle, DownstreamChainExemptionFromHeartbeat)
 
     // Heartbeat is exempt (active, untriggered)
     EXPECT_EQ(env.getGate(hb.gateId).active, 1);
-    // Downstream chain target should also be alive, upstream reserve paid for it
+    // Downstream should be alive — funded from heartbeat's reserve
     EXPECT_EQ(env.getGate(downstream.gateId).active, 1);
-    // Upstream reserve should have decreased (paid downstream fee + surcharge)
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(downstream.gateId - 1), 0);
+    // Heartbeat reserve should have decreased
     EXPECT_LT(env.getGate(hb.gateId).reserve, reserveBefore);
 }
 
-// Downstream gate-as-recipient of an exempt time-lock gate stays alive, upstream reserve pays
-TEST(QuGateIdle, DownstreamRecipientExemptionFromTimeLock)
+// Downstream gate funded from time-lock's reserve via setFundingSource
+TEST(QuGateIdle, DownstreamRecipientFundedByTimeLock)
 {
     QuGateTest env;
     id recips[] = { BOB };
@@ -7874,26 +7971,20 @@ TEST(QuGateIdle, DownstreamRecipientExemptionFromTimeLock)
 
     auto tl = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
     ASSERT_EQ(tl.status, QUGATE_SUCCESS);
-    // Point recipient to downstream gate
-    GateConfig tlGate = env.state.get()._gates.get(tl.gateId - 1);
-    tlGate.recipientGateIds.set(0, env.encodeCurrentGateId(downstream.gateId - 1));
-    env.state.mut()._gates.set(tl.gateId - 1, tlGate);
     ASSERT_EQ(env.configureTimeLock(ALICE, tl.gateId, 200, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
     env.sendToGate(ALICE, tl.gateId, 50000);
-    // Fund the time-lock gate's reserve so it can pay downstream fees
     env.fundGate(ALICE, tl.gateId, 500000);
+    // Set downstream to be funded from time-lock's reserve
+    ASSERT_EQ(env.setFundingSource(ALICE, downstream.gateId, tl.gateId), QUGATE_SUCCESS);
     sint64 reserveBefore = env.getGate(tl.gateId).reserve;
     ASSERT_GT(reserveBefore, 0);
 
-    // Advance past 50-epoch expiry but before unlock
     env.qpi._epoch = 160;
     env.endEpoch();
 
-    // Time-lock is exempt (active, unfired, has balance)
     EXPECT_EQ(env.getGate(tl.gateId).active, 1);
-    // Downstream recipient gate should also be alive, upstream reserve paid for it
     EXPECT_EQ(env.getGate(downstream.gateId).active, 1);
-    // Upstream reserve should have decreased (paid downstream fee + surcharge)
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(downstream.gateId - 1), 0);
     EXPECT_LT(env.getGate(tl.gateId).reserve, reserveBefore);
 }
 
@@ -7925,8 +8016,8 @@ TEST(QuGateIdle, DownstreamOfNonExemptGateStillExpires)
     EXPECT_EQ(env.getGate(downstream.gateId).active, 0);
 }
 
-// Heartbeat with funded reserve pays for downstream chain target's idle fee + surcharge
-TEST(QuGateIdle, ReserveDrainHeartbeatPaysForDownstream)
+// Funding source: heartbeat reserve pays downstream's idle fee when funding source is set
+TEST(QuGateIdle, FundingSourceHeartbeatPaysForDownstream)
 {
     QuGateTest env;
     id recips[] = { BOB };
@@ -7946,21 +8037,21 @@ TEST(QuGateIdle, ReserveDrainHeartbeatPaysForDownstream)
     ASSERT_EQ(env.configureHeartbeat(ALICE, hb.gateId, 60, 100, 0, beneficiaries, shares, 1), QUGATE_SUCCESS);
     env.sendToGate(ALICE, hb.gateId, 50000);
     env.fundGate(ALICE, hb.gateId, 500000);
+    // Set downstream to be funded from heartbeat's reserve
+    ASSERT_EQ(env.setFundingSource(ALICE, downstream.gateId, hb.gateId), QUGATE_SUCCESS);
     sint64 reserveBefore = env.getGate(hb.gateId).reserve;
 
     // Advance to idle charge epoch (window = 4 epochs)
     env.qpi._epoch = 104;
     env.endEpoch();
 
-    // Downstream stays alive with refreshed activity
+    // Downstream stays alive — funded from heartbeat reserve
     EXPECT_EQ(env.getGate(downstream.gateId).active, 1);
-    EXPECT_EQ(env.getGate(downstream.gateId).lastActivityEpoch, 104);
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(downstream.gateId - 1), 0);
 
-    // Upstream reserve decreased by: downstream fee (25000) + surcharge (12500)
-    // Downstream gate is simple 1-recipient SPLIT => multiplier 10000 => fee = 25000
-    // Surcharge = _idleFee * 1 * 5000 / 10000 = 25000 * 5000 / 10000 = 12500
+    // Upstream reserve decreased by downstream fee (25000)
     sint64 reserveAfter = env.getGate(hb.gateId).reserve;
-    uint64 expectedDrain = 25000 + 12500;  // downstream fee + surcharge
+    uint64 expectedDrain = 25000;  // downstream fee only, no surcharge
     EXPECT_EQ(reserveBefore - reserveAfter, (sint64)expectedDrain);
 }
 
@@ -8000,8 +8091,8 @@ TEST(QuGateIdle, EmptyHeartbeatDoesNotShieldDownstream)
     EXPECT_GT(delinquentEpoch, (uint16)0);
 }
 
-// Upstream reserve drains on the first cycle then has nothing left, so the downstream becomes delinquent on the second cycle
-TEST(QuGateIdle, ReserveDrainExhaustsUpstream)
+// Funding source exhausts: after reserve is empty, downstream becomes delinquent
+TEST(QuGateIdle, FundingSourceExhaustsUpstream)
 {
     QuGateTest env;
     id recips[] = { BOB };
@@ -8021,9 +8112,10 @@ TEST(QuGateIdle, ReserveDrainExhaustsUpstream)
     ASSERT_EQ(env.configureHeartbeat(ALICE, hb.gateId, 60, 100, 0, beneficiaries, shares, 1), QUGATE_SUCCESS);
     env.sendToGate(ALICE, hb.gateId, 50000);
 
-    // Fund just enough for 1 cycle of downstream drain + surcharge (25000 + 12500 = 37500)
-    env.fundGate(ALICE, hb.gateId, 37500);
-    ASSERT_EQ(env.getGate(hb.gateId).reserve, 37500);
+    // Fund just enough for 1 cycle of downstream fee (25000)
+    env.fundGate(ALICE, hb.gateId, 25000);
+    ASSERT_EQ(env.setFundingSource(ALICE, downstream.gateId, hb.gateId), QUGATE_SUCCESS);
+    ASSERT_EQ(env.getGate(hb.gateId).reserve, 25000);
 
     // First cycle, reserve drains fully
     env.qpi._epoch = 104;
@@ -8031,64 +8123,42 @@ TEST(QuGateIdle, ReserveDrainExhaustsUpstream)
     EXPECT_EQ(env.getGate(downstream.gateId).active, 1);
     EXPECT_EQ(env.getGate(hb.gateId).reserve, 0);
 
-    // Second cycle, no reserve left, downstream gets no protection
+    // Second cycle, no reserve left, downstream falls back to self-funded and goes delinquent
     env.qpi._epoch = 108;
     env.endEpoch();
-    // Downstream should now have delinquency set (reserve depleted, no longer shielded)
-    EXPECT_EQ(env.getGate(downstream.gateId).lastActivityEpoch, 104);
     uint16 delinquentEpoch = env.state.get()._idleDelinquentEpochs.get(downstream.gateId - 1);
     EXPECT_GT(delinquentEpoch, (uint16)0);
 }
 
-// Shielding surcharge scales linearly with number of downstream gate-as-recipient targets
-TEST(QuGateIdle, ShieldingSurchargeScalesWithTargets)
+// Multiple gates funded from same source: each consumes from source reserve independently
+TEST(QuGateIdle, FundingSourceMultipleTargetsSameSource)
 {
     QuGateTest env;
-    // Create 3 downstream split gates
     id recips[] = { BOB };
     uint64 ratios[] = { 10000 };
     auto ds1 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     auto ds2 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
     auto ds3 = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto source = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    env.fundGate(ALICE, source.gateId, 2000000);
 
-    // Create heartbeat gate with 3 gate-as-recipient targets
-    createGate_input in;
-    memset(&in, 0, sizeof(in));
-    for (uint8 _ri = 0; _ri < 8; _ri++) in.recipientGateIds.set(_ri, -1);
-    in.mode = MODE_HEARTBEAT;
-    in.recipientCount = 3;
-    in.recipients.set(0, BOB);
-    in.recipients.set(1, CHARLIE);
-    in.recipients.set(2, DAVE);
-    in.recipientGateIds.set(0, env.encodeCurrentGateId(ds1.gateId - 1));
-    in.recipientGateIds.set(1, env.encodeCurrentGateId(ds2.gateId - 1));
-    in.recipientGateIds.set(2, env.encodeCurrentGateId(ds3.gateId - 1));
-    in.chainNextGateId = -1;
-    auto hb = env.createGate(ALICE, 100000, in);
-    ASSERT_EQ(hb.status, QUGATE_SUCCESS);
-    id beneficiaries[] = { BOB };
-    uint8 shares[] = { 100 };
-    ASSERT_EQ(env.configureHeartbeat(ALICE, hb.gateId, 60, 100, 0, beneficiaries, shares, 1), QUGATE_SUCCESS);
-    env.sendToGate(ALICE, hb.gateId, 50000);
-    env.fundGate(ALICE, hb.gateId, 2000000);
-    sint64 reserveBefore = env.getGate(hb.gateId).reserve;
+    ASSERT_EQ(env.setFundingSource(ALICE, ds1.gateId, source.gateId), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setFundingSource(ALICE, ds2.gateId, source.gateId), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setFundingSource(ALICE, ds3.gateId, source.gateId), QUGATE_SUCCESS);
+    sint64 reserveBefore = env.getGate(source.gateId).reserve;
 
-    env.qpi._epoch = 104;
+    env.qpi._epoch = 104;  // first idle window
     env.endEpoch();
 
-    // Each downstream is a simple 1-recipient SPLIT => fee = 25000 each
-    // 3 downstream fees = 3 * 25000 = 75000
-    // Surcharge = _idleFee * 3 * 5000 / 10000 = 25000 * 3 * 5000 / 10000 = 37500
-    // Total drain = 75000 + 37500 = 112500
-    sint64 reserveAfter = env.getGate(hb.gateId).reserve;
-    uint64 expectedDrain = 3 * 25000 + 37500;  // 3 ds fees + surcharge
-    EXPECT_EQ(reserveBefore - reserveAfter, (sint64)expectedDrain);
+    // All 3 should survive — funded from source
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(ds1.gateId - 1), 0);
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(ds2.gateId - 1), 0);
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(ds3.gateId - 1), 0);
 
-    // All 3 downstream gates should be alive with refreshed activity
-    EXPECT_EQ(env.getGate(ds1.gateId).active, 1);
-    EXPECT_EQ(env.getGate(ds1.gateId).lastActivityEpoch, 104);
-    EXPECT_EQ(env.getGate(ds2.gateId).active, 1);
-    EXPECT_EQ(env.getGate(ds3.gateId).active, 1);
+    // Source reserve decreased by: its own fee (25000) + 3 funded gates (3 * 25000) = 100000
+    sint64 reserveAfter = env.getGate(source.gateId).reserve;
+    uint64 expectedDrain = 25000 + 3 * 25000;  // source's own + 3 funded
+    EXPECT_EQ(reserveBefore - reserveAfter, (sint64)expectedDrain);
 }
 
 // Admin-only multisig with 0 balance and no reserve does not drain for downstream
@@ -8128,27 +8198,16 @@ TEST(QuGateIdle, AdminOnlyMultisigDoesNotDrain)
     EXPECT_GT(delinquentEpoch, (uint16)0);
 }
 
-// Reserve drain is properly tracked in _totalMaintenanceCharged including downstream fees
-TEST(QuGateIdle, ReserveDrainTracksMaintenanceTotals)
+// Funding source drain is properly tracked in _totalMaintenanceCharged
+TEST(QuGateIdle, FundingSourceTracksMaintenanceTotals)
 {
     QuGateTest env;
     id recips[] = { BOB };
     uint64 ratios[] = { 10000 };
     auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
-
-    createGate_input in;
-    memset(&in, 0, sizeof(in));
-    for (uint8 _ri = 0; _ri < 8; _ri++) in.recipientGateIds.set(_ri, -1);
-    in.mode = MODE_HEARTBEAT;
-    in.recipientCount = 0;
-    in.chainNextGateId = downstream.gateId;
-    auto hb = env.createGate(ALICE, 100000, in);
-    ASSERT_EQ(hb.status, QUGATE_SUCCESS);
-    id beneficiaries[] = { BOB };
-    uint8 shares[] = { 100 };
-    ASSERT_EQ(env.configureHeartbeat(ALICE, hb.gateId, 60, 100, 0, beneficiaries, shares, 1), QUGATE_SUCCESS);
-    env.sendToGate(ALICE, hb.gateId, 50000);
-    env.fundGate(ALICE, hb.gateId, 500000);
+    auto source = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    env.fundGate(ALICE, source.gateId, 500000);
+    ASSERT_EQ(env.setFundingSource(ALICE, downstream.gateId, source.gateId), QUGATE_SUCCESS);
 
     uint64 chargedBefore = env.state.get()._totalMaintenanceCharged;
     uint64 burnedBefore = env.state.get()._totalMaintenanceBurned;
@@ -8161,17 +8220,15 @@ TEST(QuGateIdle, ReserveDrainTracksMaintenanceTotals)
     uint64 burnedAfter = env.state.get()._totalMaintenanceBurned;
     uint64 dividendsAfter = env.state.get()._totalMaintenanceDividends;
 
-    // Downstream fee (25000) + surcharge (12500) = 37500 total charged for drain
-    uint64 expectedDrain = 25000 + 12500;
-    EXPECT_EQ(chargedAfter - chargedBefore, expectedDrain);
+    // Source gate's own idle fee (25000) + downstream fee funded from source (25000) = 50000
+    uint64 expectedTotal = 25000 + 25000;
+    EXPECT_EQ(chargedAfter - chargedBefore, expectedTotal);
     // Burn + dividends should equal total charged
     uint64 totalBurnDelta = burnedAfter - burnedBefore;
     uint64 totalDividendDelta = dividendsAfter - dividendsBefore;
-    EXPECT_EQ(totalBurnDelta + totalDividendDelta, expectedDrain);
-    // Burn is 50% of each fee component
-    uint64 dsFee = 25000;
-    uint64 surcharge = 12500;
-    uint64 expectedBurn = QPI::div(dsFee * 5000, 10000ULL) + QPI::div(surcharge * 5000, 10000ULL);
+    EXPECT_EQ(totalBurnDelta + totalDividendDelta, expectedTotal);
+    // Burn is 50% of total
+    uint64 expectedBurn = QPI::div(expectedTotal * 5000, 10000ULL);
     EXPECT_EQ(totalBurnDelta, expectedBurn);
 }
 
