@@ -5364,22 +5364,6 @@ public:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        // Anti-spam fee: 1,000 QU burned upfront (non-refundable on rejection)
-        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
-        {
-            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
-            output.status = QUGATE_INSUFFICIENT_FEE;
-            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
-            LOG_INFO(locals.logger);
-            return;
-        }
-        qpi.burn(QUGATE_CHAIN_HOP_FEE);
-        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
-        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
-        {
-            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
-        }
-
         // Decode versioned gateId
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
         locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
@@ -5881,22 +5865,6 @@ public:
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
 
-        // Anti-spam fee: 1,000 QU burned upfront (non-refundable on rejection)
-        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
-        {
-            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
-            output.status = QUGATE_INSUFFICIENT_FEE;
-            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
-            LOG_INFO(locals.logger);
-            return;
-        }
-        qpi.burn(QUGATE_CHAIN_HOP_FEE);
-        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
-        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
-        {
-            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
-        }
-
         // Decode versioned gateId
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
         locals.encodedGen = input.gateId >> QUGATE_GATE_ID_SLOT_BITS;
@@ -6166,22 +6134,6 @@ public:
         locals.logger.sender = qpi.invocator();
         locals.logger.gateId = input.gateId;
         locals.logger.amount = 0;
-
-        // Anti-spam fee: 1,000 QU burned upfront (non-refundable on rejection)
-        if (locals.invReward < QUGATE_CHAIN_HOP_FEE)
-        {
-            if (locals.invReward > 0) { qpi.transfer(qpi.invocator(), locals.invReward); }
-            output.status = QUGATE_INSUFFICIENT_FEE;
-            locals.logger._type = QUGATE_LOG_FAIL_INSUFFICIENT_FEE;
-            LOG_INFO(locals.logger);
-            return;
-        }
-        qpi.burn(QUGATE_CHAIN_HOP_FEE);
-        state.mut()._totalBurned += QUGATE_CHAIN_HOP_FEE;
-        if (locals.invReward > QUGATE_CHAIN_HOP_FEE)
-        {
-            qpi.transfer(qpi.invocator(), locals.invReward - QUGATE_CHAIN_HOP_FEE);
-        }
 
         // Decode versioned gateId
         locals.slotIdx = input.gateId & QUGATE_GATE_ID_SLOT_MASK;
