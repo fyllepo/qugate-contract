@@ -6694,6 +6694,58 @@ TEST(QuGateFinancial, SetAdminGateRejectedDoesNotBurnAntiSpamFee)
     EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, 0ULL);
 }
 
+// Successful configureMultisig burns exactly 1,000 QU (anti-spam fee), not more
+TEST(QuGateFinancial, ConfigureMultisigBurnsExactlyOnce)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+
+    id guardians[] = { CHARLIE, DAVE };
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    auto cfgStatus = env.configureMultisig(ALICE, out.gateId, guardians, 2, 2, 5, 3);
+    EXPECT_EQ(cfgStatus, QUGATE_SUCCESS);
+    EXPECT_EQ(env.qpi.totalBurned, QUGATE_CHAIN_HOP_FEE);
+    EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, QUGATE_CHAIN_HOP_FEE);
+}
+
+// Successful cancelTimeLock burns exactly 1,000 QU (anti-spam fee), not more
+TEST(QuGateFinancial, CancelTimeLockBurnsExactlyOnce)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 200, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1), QUGATE_SUCCESS);
+
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    auto cancelStatus = env.cancelTimeLock(ALICE, out.gateId);
+    EXPECT_EQ(cancelStatus, QUGATE_SUCCESS);
+    EXPECT_EQ(env.qpi.totalBurned, QUGATE_CHAIN_HOP_FEE);
+    EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, QUGATE_CHAIN_HOP_FEE);
+}
+
+// Successful setAdminGate burns exactly 1,000 QU (anti-spam fee), not more
+TEST(QuGateFinancial, SetAdminGateBurnsExactlyOnce)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 5, 3), QUGATE_SUCCESS);
+
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    auto status = env.setAdminGate(ALICE, target.gateId, admin.gateId);
+    EXPECT_EQ(status, QUGATE_SUCCESS);
+    EXPECT_EQ(env.qpi.totalBurned, QUGATE_CHAIN_HOP_FEE);
+    EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, QUGATE_CHAIN_HOP_FEE);
+}
+
 // Excess creation fee above required amount goes to gate reserve
 TEST(QuGateFinancial, ExcessCreationFeeSeedsReserve)
 {
