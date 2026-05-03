@@ -29,7 +29,7 @@ constexpr uint64 QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS = 20000;   // 2x for 8
 constexpr uint64 QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS = 15000;       // 1.5x for HEARTBEAT
 constexpr uint64 QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS = 15000;        // 1.5x for MULTISIG
 constexpr uint64 QUGATE_IDLE_CHAIN_EXTRA_BPS = 5000;                 // +0.5x if chained
-constexpr uint64 QUGATE_IDLE_SHIELD_PER_TARGET_BPS = 5000;          // +0.5x surcharge per downstream target shielded
+// Shielding surcharge removed — added negligible value and complicated reserve estimation
 
 // Escalating fee: fee = baseFee * (1 + QPI::div(activeGates, FEE_ESCALATION_STEP))
 constexpr uint64 QUGATE_FEE_ESCALATION_STEP = 1024;
@@ -5138,7 +5138,7 @@ public:
             return;
         }
 
-        // Compute maintenance cost: gate's own idle fee + downstream drain + admin drain + surcharge
+        // Compute maintenance cost: gate's own idle fee + downstream drain + admin drain
         // This is the same calculation as END_EPOCH idle charging.
         locals.ownMultiplierBps = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
         if (locals.gate.recipientCount >= QUGATE_MAX_RECIPIENTS)
@@ -5206,13 +5206,6 @@ public:
             }
         }
 
-        // Shielding surcharge
-        locals.surcharge = 0;
-        if (locals.downstreamCount > 0)
-        {
-            locals.surcharge = QPI::div(state.get()._idleFee * locals.downstreamCount * QUGATE_IDLE_SHIELD_PER_TARGET_BPS, 10000ULL);
-        }
-
         // Admin gate fee
         locals.adminFee = 0;
         if (locals.gate.adminGateId >= 0)
@@ -5229,7 +5222,7 @@ public:
         }
 
         // Total full-cycle maintenance cost
-        locals.maintenanceCost = locals.ownIdleFee + locals.downstreamTotalFee + locals.surcharge + locals.adminFee;
+        locals.maintenanceCost = locals.ownIdleFee + locals.downstreamTotalFee + locals.adminFee;
 
         // Pro-rate by elapsed time since last heartbeat:
         // fee = max(QUGATE_HEARTBEAT_PING_FEE, fullCost * elapsedEpochs / idleWindow)
@@ -7089,28 +7082,6 @@ public:
                                     }
                                 }
                             }
-                        }
-                    }
-
-                    // Apply shielding surcharge: upstream gate's own idle fee increases
-                    // per downstream target it is paying for
-                    if (locals.downstreamCount > 0)
-                    {
-                        locals.downstreamIdleFee = QPI::div(
-                            state.get()._idleFee * (uint64)locals.downstreamCount * QUGATE_IDLE_SHIELD_PER_TARGET_BPS,
-                            10000ULL);
-                        if (locals.gate.reserve >= (sint64)locals.downstreamIdleFee)
-                        {
-                            locals.gate.reserve -= locals.downstreamIdleFee;
-                            state.mut()._totalMaintenanceCharged += locals.downstreamIdleFee;
-
-                            locals.downstreamBurnAmount = QPI::div(locals.downstreamIdleFee * state.get()._feeBurnBps, 10000ULL);
-                            locals.downstreamDividendAmount = locals.downstreamIdleFee - locals.downstreamBurnAmount;
-                            qpi.burn(locals.downstreamBurnAmount);
-                            state.mut()._totalBurned += locals.downstreamBurnAmount;
-                            state.mut()._totalMaintenanceBurned += locals.downstreamBurnAmount;
-                            state.mut()._earnedMaintenanceDividends += locals.downstreamDividendAmount;
-                            state.mut()._totalMaintenanceDividends += locals.downstreamDividendAmount;
                         }
                     }
 
