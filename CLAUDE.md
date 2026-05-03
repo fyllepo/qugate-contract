@@ -92,7 +92,7 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 5. **No preprocessor directives** (`#define`, `#ifndef`) — `qubic-contract-verify` rejects them
 6. **Global scope names** must start with `QUGATE` (structs outside the main struct)
 7. **`recipientCount=0` is valid** for HEARTBEAT, MULTISIG, TIME_LOCK modes
-8. **Expiry exemptions**: TIME_LOCK (active+unfired), HEARTBEAT (active+untriggered), MULTISIG (has balance), admin-only MULTISIG (governs active gate) — exempt from inactivity expiry in END_EPOCH
+8. **No inactivity expiry** — gates only expire via delinquency (can't pay idle fee → 4-epoch grace → expired). Paying idle fees from reserve counts as slot usage. Hold-state gates (HEARTBEAT, TIME_LOCK, MULTISIG, THRESHOLD) are exempt from idle fees while in hold. Admin-only multisigs governing active gates are exempt from expiry.
 9. **Admin drain fires per idle cycle** — admin gate drain checks `nextIdleChargeEpoch` to fire once per idle window, not every epoch
 10. **Anti-spam fees charge after validation** — all validation (gate ID, auth, mode, params) completes before the fee is burned. Rejected calls are fully refunded. No duplicate fee blocks.
 
