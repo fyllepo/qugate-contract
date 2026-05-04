@@ -26,10 +26,66 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+      - name: Pull verifier image
+        run: docker pull ghcr.io/franziska-mueller/qubic-contract-verify:latest
+      - name: Inspect verifier image
+        run: |
+          docker image inspect ghcr.io/franziska-mueller/qubic-contract-verify:latest --format '
+          Id: {{.Id}}
+          Entrypoint: {{json .Config.Entrypoint}}
+          Cmd: {{json .Config.Cmd}}
+          WorkingDir: {{json .Config.WorkingDir}}
+          Env: {{json .Config.Env}}
+          '
       - name: Contract verify
-        uses: Franziska-Mueller/qubic-contract-verify@v1.1.1
-        with:
-          filepaths: 'QuGate.h'
+        run: |
+          set -euo pipefail
+
+          image="ghcr.io/franziska-mueller/qubic-contract-verify:latest"
+          name="qugate-contract-verify"
+
+          docker rm -f "$name" >/dev/null 2>&1 || true
+
+          docker run -d \
+            --name "$name" \
+            --workdir /github/workspace \
+            -e INPUT_FILEPATHS='QuGate.h' \
+            -v "$PWD:/github/workspace" \
+            "$image" >/tmp/qugate-contract-verify.cid
+
+          cid="$(cat /tmp/qugate-contract-verify.cid)"
+          echo "Started verifier container: $cid"
+          echo "Streaming logs and container diagnostics every 15s until completion..."
+
+          while true; do
+            status="$(docker inspect --format '{{.State.Status}}' "$cid")"
+            running="$(docker inspect --format '{{.State.Running}}' "$cid")"
+            started="$(docker inspect --format '{{.State.StartedAt}}' "$cid")"
+            finished="$(docker inspect --format '{{.State.FinishedAt}}' "$cid")"
+
+            echo "---- verifier status ----"
+            echo "status=$status running=$running started=$started finished=$finished"
+
+            if [ "$running" = "true" ]; then
+              docker stats --no-stream "$cid" || true
+              docker top "$cid" || true
+            fi
+
+            echo "---- verifier logs ----"
+            docker logs "$cid" 2>&1 || true
+
+            if [ "$running" != "true" ]; then
+              break
+            fi
+
+            sleep 15
+          done
+
+          exit_code="$(docker inspect --format '{{.State.ExitCode}}' "$cid")"
+          echo "Verifier exited with code $exit_code"
+          docker logs "$cid" 2>&1 || true
+          docker rm -f "$cid" >/dev/null 2>&1 || true
+          exit "$exit_code"
 
   # ── Style lint (best-effort) ───────────────────────────────────────────
   # Best-effort brace-style check.  May produce false positives on
@@ -44,13 +100,11 @@ jobs:
         run: |
           status=0
 
-          # Same-line opening braces:  ) {  or  ) { //
           if grep -rn --include='*.h' --include='*.cpp' -P '\)\s*\{' .; then
             echo "::warning::Found same-line opening braces (expected brace on next line)"
             status=1
           fi
 
-          # } else {  on one line
           if grep -rn --include='*.h' --include='*.cpp' -P '\}\s*else' .; then
             echo "::warning::Found '} else' on same line (expected else on its own line)"
             status=1
@@ -79,18 +133,16 @@ jobs:
         run: pip install pytest requests
       - name: Run tests (skip if no node)
         run: |
-          # All Python tests require a live testnet node.
-          # In CI, no node is available — verify imports work, then skip.
           python3 -c "
           import sys, requests
           try:
               r = requests.get('http://127.0.0.1:41841/live/v1/tick-info', timeout=2)
               if r.status_code == 200:
-                  sys.exit(0)  # Node available — run tests
+                  sys.exit(0)
           except Exception:
               pass
           print('::notice::Testnet node not available — skipping integration tests')
-          sys.exit(2)  # Special exit code = skip
+          sys.exit(2)
           " && pytest tests/ --ignore=tests/test_testnet.py -v --tb=short || {
             code=$?
             if [ "$code" -eq 2 ]; then
