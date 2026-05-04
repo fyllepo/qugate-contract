@@ -71,10 +71,16 @@ jobs:
               docker stats --no-stream "$cid" || true
               docker top "$cid" || true
 
-              verifier_pid="$(docker exec "$cid" sh -lc "pgrep -f '/contract-verify/build/src/contractverify' | head -n1" || true)"
-              if [ -n "${verifier_pid:-}" ]; then
-                echo "---- verifier stack sample (pid=$verifier_pid) ----"
-                docker exec "$cid" sh -lc "gdb -q -batch -ex 'thread apply all bt' -p $verifier_pid" 2>&1 || true
+              host_pid="$(docker top "$cid" -eo pid,cmd | awk '/\/contract-verify\/build\/src\/contractverify/ {print $1; exit}' || true)"
+              if [ -n "${host_pid:-}" ]; then
+                echo "---- verifier host sample (pid=$host_pid) ----"
+                if command -v gdb >/dev/null 2>&1; then
+                  gdb -q -batch -ex 'thread apply all bt' -p "$host_pid" 2>&1 || true
+                elif command -v strace >/dev/null 2>&1; then
+                  timeout 5 strace -p "$host_pid" -f -s 120 2>&1 || true
+                else
+                  echo "Neither gdb nor strace is available on the runner."
+                fi
               fi
             fi
 
