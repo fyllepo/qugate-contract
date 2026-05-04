@@ -51,9 +51,8 @@ jobs:
           docker run -d \
             --name "$name" \
             --workdir /github/workspace \
-            -e INPUT_FILEPATHS='QuGate.h' \
             -v "$PWD:/github/workspace" \
-            "$image" >/tmp/qugate-contract-verify.cid
+            "$image" 'QuGate.h' >/tmp/qugate-contract-verify.cid
 
           cid="$(cat /tmp/qugate-contract-verify.cid)"
           echo "Started verifier container: $cid"
