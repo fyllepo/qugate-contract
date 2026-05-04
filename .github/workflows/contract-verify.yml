@@ -37,6 +37,8 @@ jobs:
           WorkingDir: {{json .Config.WorkingDir}}
           Env: {{json .Config.Env}}
           '
+      - name: Inspect entrypoint script
+        run: docker run --rm --entrypoint /bin/sh ghcr.io/franziska-mueller/qubic-contract-verify:latest -lc 'ls -la && echo "--- entrypoint.sh ---" && cat /entrypoint.sh 2>/dev/null || echo "No /entrypoint.sh found"'
       - name: Contract verify
         run: |
           set -euo pipefail
