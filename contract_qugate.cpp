@@ -1475,20 +1475,8 @@ public:
             if (gate.active == 0) continue;
             if (state.get()._idleFee == 0) continue;
 
-            // Maintenance eligibility: unconfigured mode-specific gates skip maintenance
-            bool maintenanceEligible = true;
-            if (gate.mode == MODE_HEARTBEAT)
-            {
-                QUGATE_HeartbeatConfig_Test hbCfg = state.get()._heartbeatConfigs.get(i);
-                if (hbCfg.active == 0) maintenanceEligible = false;
-            }
-            else if (gate.mode == MODE_MULTISIG)
-            {
-                QUGATE_MultisigConfig_Test msCfg = state.get()._multisigConfigs.get(i);
-                if (msCfg.guardianCount == 0 || msCfg.required == 0) maintenanceEligible = false;
-            }
-            // TIME_LOCK: unconfigured gates ARE maintenance-eligible (they must go delinquent)
-            if (!maintenanceEligible) continue;
+            // All gates are maintenance-eligible regardless of configuration state.
+            // Unconfigured gates must still pay idle fees or go delinquent and expire.
 
             // Admin gate drain: governed gate pays its admin multisig's idle fees.
             // Only fires once per idle window cycle.
@@ -8551,6 +8539,46 @@ TEST(QuGateRegression, OrphanAdminMultisigStillExpires)
     env.endEpoch();
 
     EXPECT_EQ(env.getGate(admin.gateId).active, 0) << "Orphaned standalone admin gate must be cleaned up";
+}
+
+// Unconfigured HEARTBEAT with no reserve expires via delinquency
+TEST(QuGateRegression, UnconfiguredHeartbeatExpiresViaDelinquency)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    // Do NOT call configureHeartbeat
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+
+    for (int epoch = 101; epoch <= 120; epoch++)
+    {
+        env.qpi._epoch = epoch;
+        env.endEpoch();
+    }
+
+    EXPECT_EQ(env.getGate(out.gateId).active, 0)
+        << "Unconfigured HEARTBEAT with no reserve must expire via delinquency";
+}
+
+// Unconfigured MULTISIG with no reserve expires via delinquency
+TEST(QuGateRegression, UnconfiguredMultisigExpiresViaDelinquency)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    // Do NOT call configureMultisig
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+
+    for (int epoch = 101; epoch <= 120; epoch++)
+    {
+        env.qpi._epoch = epoch;
+        env.endEpoch();
+    }
+
+    EXPECT_EQ(env.getGate(out.gateId).active, 0)
+        << "Unconfigured MULTISIG with no reserve must expire via delinquency";
 }
 
 // Unconfigured TIME_LOCK with no reserve expires via delinquency

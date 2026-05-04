@@ -7135,32 +7135,23 @@ public:
                 continue;
             }
 
-            locals.maintenanceEligible = 1;
+            // Read mode-specific configs for the activeHold check below.
+            // All gates are maintenance-eligible regardless of configuration state —
+            // unconfigured gates must still pay idle fees or go delinquent and expire.
             if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)
             {
                 locals.inhCfg = state.get()._heartbeatConfigs.get(locals.i);
-                if (locals.inhCfg.active == 0)
-                {
-                    locals.maintenanceEligible = 0;
-                }
             }
             else if (locals.gate.mode == QUGATE_MODE_MULTISIG)
             {
                 locals.msigCfg = state.get()._multisigConfigs.get(locals.i);
-                if (locals.msigCfg.guardianCount == 0 || locals.msigCfg.required == 0)
-                {
-                    locals.maintenanceEligible = 0;
-                }
             }
             else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
             {
                 locals.tlCfg = state.get()._timeLockConfigs.get(locals.i);
-                // Unconfigured TIME_LOCK gates (active==0) are still maintenance-eligible
-                // so they become delinquent and expire if they can't pay idle fees.
-                // Only read the config here for the activeHold check below.
             }
 
-            if (locals.maintenanceEligible == 0 || state.get()._idleFee == 0)
+            if (state.get()._idleFee == 0)
             {
                 continue;
             }
