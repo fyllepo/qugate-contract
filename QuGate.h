@@ -7418,7 +7418,8 @@ public:
                 // Admin gate exemption: governance-only multisigs that actively govern
                 // at least one gate survive even when delinquent (admin drain keeps
                 // them alive when the governed gate has reserve).
-                if (locals.gate.mode == QUGATE_MODE_MULTISIG && locals.gate.recipientCount == 0)
+                if (locals.gate.mode == QUGATE_MODE_MULTISIG && locals.gate.recipientCount == 0
+                    && locals.gate.chainNextGateId == -1)
                 {
                     locals.adminGateGovernsActive = 0;
                     for (locals.adminExpiryCheckIdx = 0; locals.adminExpiryCheckIdx < state.get()._gateCount; locals.adminExpiryCheckIdx++)

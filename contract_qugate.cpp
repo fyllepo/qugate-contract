@@ -1668,7 +1668,9 @@ public:
                 if (gate.mode == MODE_MULTISIG && delinquentEpoch == 0 && gate.currentBalance > 0)
                     continue;
                 // Admin gate expiry exemption: admin-only multisig stays alive while governing
-                if (gate.mode == MODE_MULTISIG && gate.recipientCount == 0)
+                // Only applies to standalone admin gates (no chain), not chain-target multisigs
+                if (gate.mode == MODE_MULTISIG && gate.recipientCount == 0
+                    && gate.chainNextGateId == -1)
                 {
                     bool governsActive = false;
                     for (uint64 j = 0; j < state.get()._gateCount; j++)
@@ -8472,6 +8474,60 @@ TEST(QuGateIdle, ActiveGateStillPaysAdminDrain)
     auto adminAfter = env.getGate(admin.gateId);
     EXPECT_EQ(adminAfter.active, 1);
     EXPECT_EQ(adminAfter.lastActivityEpoch, 104);
+}
+
+// Chain-target multisig (recipientCount=0 with chain) must NOT be killed by orphan cleanup
+TEST(QuGateRegression, ChainTargetMultisigSurvivesOrphanCleanup)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    // Create a SPLIT gate as the chain target of the multisig
+    auto split = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+
+    // Create a chain-target MULTISIG (recipientCount=0, chains to split)
+    createGate_input msIn;
+    memset(&msIn, 0, sizeof(msIn));
+    for (uint8 _ri = 0; _ri < 8; _ri++) msIn.recipientGateIds.set(_ri, -1);
+    msIn.mode = MODE_MULTISIG;
+    msIn.recipientCount = 0;
+    msIn.chainNextGateId = split.gateId;
+    auto ms = env.createGate(ALICE, 100000, msIn);
+    ASSERT_EQ(ms.status, QUGATE_SUCCESS);
+
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, ms.gateId, guardians, 1, 1, 10, 5), QUGATE_SUCCESS);
+
+    // The multisig has no balance and no reserve — but it has a chain
+    EXPECT_EQ(env.getGate(ms.gateId).active, 1);
+
+    // Run epoch sweep — orphan cleanup should NOT kill this gate
+    env.qpi._epoch = 104;
+    env.endEpoch();
+
+    EXPECT_EQ(env.getGate(ms.gateId).active, 1) << "Chain-target multisig must survive orphan cleanup";
+}
+
+// Standalone admin-only multisig with no governed gates and no balance still expires
+TEST(QuGateRegression, OrphanAdminMultisigStillExpires)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+
+    // Create a standalone admin-only multisig (no recipients, no chain)
+    auto admin = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 0, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, admin.gateId, guardians, 1, 1, 10, 5), QUGATE_SUCCESS);
+
+    // No governed gates, no balance, no reserve, no chain
+    EXPECT_EQ(env.getGate(admin.gateId).active, 1);
+
+    env.qpi._epoch = 104;
+    env.endEpoch();
+
+    EXPECT_EQ(env.getGate(admin.gateId).active, 0) << "Orphaned standalone admin gate must be cleaned up";
 }
 
 // ── Auto-reset time-lock tests ──────────────────────────────────────────
