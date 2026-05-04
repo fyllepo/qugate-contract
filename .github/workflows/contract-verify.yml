@@ -70,6 +70,12 @@ jobs:
             if [ "$running" = "true" ]; then
               docker stats --no-stream "$cid" || true
               docker top "$cid" || true
+
+              verifier_pid="$(docker exec "$cid" sh -lc "pgrep -f '/contract-verify/build/src/contractverify' | head -n1" || true)"
+              if [ -n "${verifier_pid:-}" ]; then
+                echo "---- verifier stack sample (pid=$verifier_pid) ----"
+                docker exec "$cid" sh -lc "gdb -q -batch -ex 'thread apply all bt' -p $verifier_pid" 2>&1 || true
+              fi
             fi
 
             echo "---- verifier logs ----"
