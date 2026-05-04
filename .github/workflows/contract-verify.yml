@@ -44,7 +44,8 @@ jobs:
           status=0
 
           # Same-line opening braces:  ) {  or  ) { //
-          if grep -rn --include='*.h' --include='*.cpp' -P '\)\s*\{' .; then
+          # Exclude single-line guards like: if (...) { single_statement; }
+          if grep -rn --include='*.h' --include='*.cpp' -P '\)\s*\{' . | grep -v -P '\{[^}]*\}' | grep -v 'constexpr'; then
             echo "::warning::Found same-line opening braces (expected brace on next line)"
             status=1
           fi
