@@ -7329,6 +7329,7 @@ public:
                     state.mut()._gates.set(locals.i, locals.gate);
                     state.mut()._activeGates -= 1;
                     state.mut()._idleDelinquentEpochs.set(locals.i, 0);
+                    state.mut()._fundingSourceGateIds.set(locals.i, -1);
 
                     // Push slot onto free-list
                     state.mut()._freeSlots.set(state.get()._freeCount, locals.i);

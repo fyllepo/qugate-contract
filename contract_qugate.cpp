@@ -1726,6 +1726,7 @@ public:
                     state.mut()._gates.set(i, gate);
                     state.mut()._activeGates -= 1;
                     state.mut()._idleDelinquentEpochs.set(i, 0);
+                    state.mut()._fundingSourceGateIds.set(i, -1);
                     state.mut()._freeSlots.set(state.get()._freeCount, i);
                     state.mut()._freeCount += 1;
                     // Increment generation so recycled slot gets a new gateId
@@ -2205,87 +2206,8 @@ public:
         if (cfg.active == 0) return QUGATE_HEARTBEAT_NOT_ACTIVE;
         if (cfg.triggered == 1) return QUGATE_HEARTBEAT_TRIGGERED;
 
-        // Compute full maintenance cost (same as END_EPOCH idle charging)
-        uint64 ownMult = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
-        if (gate.recipientCount >= QUGATE_MAX_RECIPIENTS)
-            ownMult = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
-        else if (gate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD && ownMult < QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS)
-            ownMult = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
-        if (gate.chainNextGateId >= 0)
-            ownMult += QUGATE_IDLE_CHAIN_EXTRA_BPS;
-        uint64 ownFee = QPI::div(state.get()._idleFee * ownMult, 10000ULL);
-
-        uint64 dsCount = 0;
-        uint64 dsTotalFee = 0;
-        // Chain target
-        if (gate.chainNextGateId >= 0)
-        {
-            uint64 dsSlot = slotFromGateId(gate.chainNextGateId);
-            if (dsSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(gate.chainNextGateId))
-            {
-                GateConfig dsGate = state.get()._gates.get(dsSlot);
-                if (dsGate.active == 1)
-                {
-                    uint64 dsMult = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
-                    if (dsGate.recipientCount >= QUGATE_MAX_RECIPIENTS) dsMult = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
-                    else if (dsGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD) dsMult = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
-                    if (dsGate.mode == MODE_HEARTBEAT && dsMult < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS) dsMult = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
-                    if (dsGate.mode == MODE_MULTISIG && dsMult < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS) dsMult = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
-                    if (dsGate.chainNextGateId >= 0) dsMult += QUGATE_IDLE_CHAIN_EXTRA_BPS;
-                    dsTotalFee += QPI::div(state.get()._idleFee * dsMult, 10000ULL);
-                    dsCount++;
-                }
-            }
-        }
-        // Gate-as-recipient targets
-        for (uint8 ri = 0; ri < gate.recipientCount; ri++)
-        {
-            if (gate.recipientGateIds.get(ri) >= 0)
-            {
-                uint64 dsSlot = slotFromGateId(gate.recipientGateIds.get(ri));
-                if (dsSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(gate.recipientGateIds.get(ri)))
-                {
-                    GateConfig dsGate = state.get()._gates.get(dsSlot);
-                    if (dsGate.active == 1)
-                    {
-                        uint64 dsMult = QUGATE_IDLE_BASE_MULTIPLIER_BPS;
-                        if (dsGate.recipientCount >= QUGATE_MAX_RECIPIENTS) dsMult = QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS;
-                        else if (dsGate.recipientCount >= QUGATE_IDLE_MULTI_RECIPIENT_THRESHOLD) dsMult = QUGATE_IDLE_MULTI_RECIPIENT_MULTIPLIER_BPS;
-                        if (dsGate.mode == MODE_HEARTBEAT && dsMult < QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS) dsMult = QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS;
-                        if (dsGate.mode == MODE_MULTISIG && dsMult < QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS) dsMult = QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS;
-                        if (dsGate.chainNextGateId >= 0) dsMult += QUGATE_IDLE_CHAIN_EXTRA_BPS;
-                        dsTotalFee += QPI::div(state.get()._idleFee * dsMult, 10000ULL);
-                        dsCount++;
-                    }
-                }
-            }
-        }
-        uint64 surcharge = dsCount > 0 ? QPI::div(state.get()._idleFee * dsCount * QUGATE_IDLE_SHIELD_PER_TARGET_BPS, 10000ULL) : 0;
-        // Admin gate fee
-        uint64 adminFee = 0;
-        if (gate.adminGateId > 0)
-        {
-            uint64 adminSlot = slotFromGateId(gate.adminGateId);
-            if (adminSlot < state.get()._gateCount && gateIdMatchesCurrentGeneration(gate.adminGateId)
-                && state.get()._gates.get(adminSlot).active == 1)
-            {
-                adminFee = QPI::div(state.get()._idleFee * QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS, 10000ULL);
-            }
-        }
-        uint64 fullCost = ownFee + dsTotalFee + surcharge + adminFee;
-        // Pro-rate by elapsed time since last heartbeat
-        uint64 elapsed = (uint64)(qpi.epoch() - cfg.lastHeartbeatEpoch);
-        if (elapsed == 0) elapsed = 1;
-        uint64 maintenanceCost = fullCost;
-        if (state.get()._idleWindowEpochs > 0 && elapsed < state.get()._idleWindowEpochs)
-        {
-            maintenanceCost = QPI::div(fullCost * elapsed, state.get()._idleWindowEpochs);
-        }
-        if (maintenanceCost < (uint64)QUGATE_HEARTBEAT_PING_FEE)
-        {
-            maintenanceCost = (uint64)QUGATE_HEARTBEAT_PING_FEE;
-        }
-
+        // Flat 1,000 QU anti-spam fee (no pro-rating, no downstream costs)
+        uint64 maintenanceCost = (uint64)QUGATE_HEARTBEAT_PING_FEE;
         // Apply burn/dividend split
         uint64 burnAmt = QPI::div(maintenanceCost * state.get()._feeBurnBps, 10000ULL);
         uint64 divAmt = maintenanceCost - burnAmt;
@@ -5387,7 +5309,7 @@ TEST(QuGateHeartbeat, HeartbeatZeroBeneficiariesDefensiveRefund)
 
 // Heartbeat ping burns 1000 QU fee
 // Standalone heartbeat ping charges own idle fee (1.5x base, 1 recipient)
-TEST(QuGateHeartbeat, HeartbeatPingChargesMaintenanceCost)
+TEST(QuGateHeartbeat, HeartbeatPingChargesFlat1000)
 {
     QuGateTest env;
     id recips[] = { BOB };
@@ -5402,13 +5324,13 @@ TEST(QuGateHeartbeat, HeartbeatPingChargesMaintenanceCost)
     ASSERT_EQ(env.sendHeartbeat(ALICE, out.gateId), QUGATE_SUCCESS);
 
     uint64 chargedAfter = env.state.get()._totalMaintenanceCharged;
-    // Full-cycle heartbeat ping on a 1-recipient HEARTBEAT gate = 1.5x multiplier = 37,500 QU
-    uint64 expectedFee = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS, 10000ULL);
-    EXPECT_EQ(chargedAfter - chargedBefore, expectedFee);
+    // Flat 1,000 QU anti-spam fee regardless of gate complexity
+    EXPECT_EQ(chargedAfter - chargedBefore, (uint64)QUGATE_HEARTBEAT_PING_FEE);
 }
 
 // Heartbeat with downstream chain charges own fee + downstream fee + surcharge
-TEST(QuGateHeartbeat, HeartbeatPingWithDownstreamCostsMore)
+// Heartbeat ping with downstream chain still charges flat 1,000 QU (no downstream cost)
+TEST(QuGateHeartbeat, HeartbeatPingWithDownstreamStillFlat)
 {
     QuGateTest env;
     id recips[] = { BOB };
@@ -5425,10 +5347,8 @@ TEST(QuGateHeartbeat, HeartbeatPingWithDownstreamCostsMore)
     ASSERT_EQ(env.sendHeartbeat(ALICE, hb.gateId), QUGATE_SUCCESS);
 
     uint64 chargedAfter = env.state.get()._totalMaintenanceCharged;
-    uint64 ownFee = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * (QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS + QUGATE_IDLE_CHAIN_EXTRA_BPS), 10000ULL);
-    uint64 dsFee = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * QUGATE_IDLE_BASE_MULTIPLIER_BPS, 10000ULL);
-    uint64 surcharge = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * 1 * QUGATE_IDLE_SHIELD_PER_TARGET_BPS, 10000ULL);
-    EXPECT_EQ(chargedAfter - chargedBefore, ownFee + dsFee + surcharge);
+    // Flat 1,000 QU regardless of downstream complexity
+    EXPECT_EQ(chargedAfter - chargedBefore, (uint64)QUGATE_HEARTBEAT_PING_FEE);
 }
 
 // configureHeartbeat charges threshold-scaled fee
@@ -5474,7 +5394,8 @@ TEST(QuGateHeartbeat, LongerThresholdCostsMore)
 }
 
 // Pro-rated ping: 1 epoch elapsed costs 1/4 of full maintenance
-TEST(QuGateHeartbeat, HeartbeatPingProratedByElapsed)
+// Flat ping cost is the same regardless of elapsed time since last ping
+TEST(QuGateHeartbeat, HeartbeatPingFlatRegardlessOfElapsed)
 {
     QuGateTest env;
     id recips[] = { BOB };
@@ -5484,23 +5405,22 @@ TEST(QuGateHeartbeat, HeartbeatPingProratedByElapsed)
     auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
     ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 8, 25, 10, beneficiaries, shares, 1), QUGATE_SUCCESS);
 
-    // First ping at epoch 101 (1 epoch after config at 100)
+    // First ping at epoch 101 (1 epoch after config)
     env.qpi._epoch = 101;
     uint64 chargedBefore = env.state.get()._totalMaintenanceCharged;
     ASSERT_EQ(env.sendHeartbeat(ALICE, out.gateId), QUGATE_SUCCESS);
     uint64 cost1 = env.state.get()._totalMaintenanceCharged - chargedBefore;
 
-    // Second ping at epoch 105 (4 epochs after last ping, full cycle)
+    // Second ping at epoch 105 (4 epochs after last ping)
     env.qpi._epoch = 105;
     chargedBefore = env.state.get()._totalMaintenanceCharged;
     ASSERT_EQ(env.sendHeartbeat(ALICE, out.gateId), QUGATE_SUCCESS);
     uint64 cost4 = env.state.get()._totalMaintenanceCharged - chargedBefore;
 
-    // 1-epoch ping should cost ~1/4 of 4-epoch ping
-    EXPECT_LT(cost1, cost4);
-    // Full cycle (4 epochs) should equal the full maintenance cost
-    uint64 fullCost = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS, 10000ULL);
-    EXPECT_EQ(cost4, fullCost);
+    // Both pings should cost the same flat fee — no pro-rating
+    EXPECT_EQ(cost1, (uint64)QUGATE_HEARTBEAT_PING_FEE);
+    EXPECT_EQ(cost4, (uint64)QUGATE_HEARTBEAT_PING_FEE);
+    EXPECT_EQ(cost1, cost4);
 }
 
 
@@ -6929,6 +6849,145 @@ TEST(QuGateFunding, FundingSourceDeepChainCoverage)
     // Source reserve should have been consumed for both
     sint64 sourceReserve = env.state.get()._gates.get(source.gateId - 1).reserve;
     EXPECT_LT(sourceReserve, 900000);
+}
+
+// ============ Inactivity Expiry Removal Regression ============
+
+// Gate with reserve survives past the old 50-epoch inactivity threshold
+TEST(QuGateExpiry, GateWithReserveSurvivesPast50Epochs)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 500000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    sint64 reserveBefore = env.state.get()._gates.get(out.gateId - 1).reserve;
+    ASSERT_GT(reserveBefore, 0);
+
+    // Advance well past the old 50-epoch expiry threshold
+    env.qpi._epoch = 200;
+    env.endEpoch();
+
+    // Gate should still be alive — reserve pays idle fees, no inactivity expiry
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+    // Reserve should have decreased from idle fee charges
+    EXPECT_LT(env.state.get()._gates.get(out.gateId - 1).reserve, reserveBefore);
+}
+
+// Gate with zero reserve becomes delinquent and expires via grace only
+TEST(QuGateExpiry, ZeroReserveExpiresViaGraceOnly)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.state.get()._gates.get(out.gateId - 1).reserve, 0);
+
+    // First idle window: gate becomes delinquent
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    EXPECT_EQ(env.getGate(out.gateId).active, 1); // still alive during grace
+    EXPECT_GT(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), (uint16)0);
+
+    // Grace period expires (4 epochs)
+    env.qpi._epoch = 108;
+    env.endEpoch();
+    EXPECT_EQ(env.getGate(out.gateId).active, 0); // expired via grace
+}
+
+// Funding source cleared on gate expiry
+TEST(QuGateExpiry, FundingSourceClearedOnExpiry)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto source = makeSimpleGate(env, ALICE, 200000, MODE_SPLIT, 1, recips, ratios);
+    auto target = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.setFundingSource(ALICE, target.gateId, source.gateId), QUGATE_SUCCESS);
+    EXPECT_NE(env.state.get()._fundingSourceGateIds.get(target.gateId - 1), -1);
+
+    // Drain the source reserve so the target becomes delinquent
+    GateConfig sg = env.state.get()._gates.get(source.gateId - 1);
+    sg.reserve = 0;
+    env.state.mut()._gates.set(source.gateId - 1, sg);
+
+    // Delinquent
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    // Grace expires
+    env.qpi._epoch = 108;
+    env.endEpoch();
+
+    EXPECT_EQ(env.getGate(target.gateId).active, 0);
+    EXPECT_EQ(env.state.get()._fundingSourceGateIds.get(target.gateId - 1), -1);
+}
+
+// Funding source with closed source gate falls back to self-funded
+TEST(QuGateExpiry, ClosedFundingSourceFallsBackToSelf)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto source = makeSimpleGate(env, ALICE, 200000, MODE_SPLIT, 1, recips, ratios);
+    auto target = makeSimpleGate(env, ALICE, 200000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.setFundingSource(ALICE, target.gateId, source.gateId), QUGATE_SUCCESS);
+
+    // Close the source gate
+    env.closeGate(ALICE, source.gateId);
+    EXPECT_EQ(env.getGate(source.gateId).active, 0);
+
+    sint64 targetReserveBefore = env.state.get()._gates.get(target.gateId - 1).reserve;
+
+    // Advance past idle window — target should fall back to self-funded
+    env.qpi._epoch = 104;
+    env.endEpoch();
+
+    // Target's own reserve consumed (self-funded fallback)
+    sint64 targetReserveAfter = env.state.get()._gates.get(target.gateId - 1).reserve;
+    EXPECT_LT(targetReserveAfter, targetReserveBefore);
+    EXPECT_EQ(env.getGate(target.gateId).active, 1);
+}
+
+// Circular funding: A funds B, B funds A — both survive (economically neutral)
+TEST(QuGateExpiry, CircularFundingBothSurvive)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto gateA = makeSimpleGate(env, ALICE, 200000, MODE_SPLIT, 1, recips, ratios);
+    auto gateB = makeSimpleGate(env, ALICE, 200000, MODE_SPLIT, 1, recips, ratios);
+    ASSERT_EQ(env.setFundingSource(ALICE, gateA.gateId, gateB.gateId), QUGATE_SUCCESS);
+    ASSERT_EQ(env.setFundingSource(ALICE, gateB.gateId, gateA.gateId), QUGATE_SUCCESS);
+
+    env.qpi._epoch = 104;
+    env.endEpoch();
+
+    // Both should survive — each pays from the other's reserve
+    EXPECT_EQ(env.getGate(gateA.gateId).active, 1);
+    EXPECT_EQ(env.getGate(gateB.gateId).active, 1);
+}
+
+// Heartbeat ping charges exactly 1,000 QU (flat, not pro-rated)
+TEST(QuGateExpiry, HeartbeatPingFlat1000QU)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto hb = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 0, recips, ratios);
+    ASSERT_EQ(hb.status, QUGATE_SUCCESS);
+    id beneficiaries[] = { BOB };
+    uint8 shares[] = { 100 };
+    ASSERT_EQ(env.configureHeartbeat(ALICE, hb.gateId, 52, 100, 0, beneficiaries, shares, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, hb.gateId, 50000);
+
+    uint64 burnedBefore = env.state.get()._totalBurned;
+    auto hbResult = env.sendHeartbeat(ALICE, hb.gateId);
+    EXPECT_EQ(hbResult, QUGATE_SUCCESS);
+
+    // Should burn exactly 1000 * 50% = 500 (flat fee, not old pro-rated amount)
+    EXPECT_EQ(env.qpi.totalBurned, 500);
+    EXPECT_EQ(env.state.get()._totalBurned - burnedBefore, 500ULL);
 }
 
 // Split gate conserves total input across all recipient transfers
