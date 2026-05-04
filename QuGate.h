@@ -7250,7 +7250,10 @@ public:
                     {
                         locals.gate.active = 0;
                         state.mut()._gates.set(locals.i, locals.gate);
-                        if (state.get()._activeGates > 0) { state.mut()._activeGates -= 1; }
+                        if (state.get()._activeGates > 0)
+                        {
+                            state.mut()._activeGates -= 1;
+                        }
                         state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
                         state.mut()._freeCount += 1;
                         state.mut()._gateGenerations.set(locals.i, state.get()._gateGenerations.get(locals.i) + 1);
