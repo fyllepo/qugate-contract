@@ -2,7 +2,7 @@
 
 QuGate is shared, permissionless payment routing infrastructure for the Qubic network. It gives the ecosystem one reusable contract for routing, splitting, holding, and governing QU flows instead of rebuilding payment logic per project. Creation, heartbeat/time-lock configuration, heartbeat ping, and idle maintenance fees follow the governed burn/dividend split. Successful anti-spam mutations, dust, and chain-hop fees are 100% burned. Idle gates maintain a reserve-backed inactivity budget so long-lived infrastructure pays for the state it consumes.
 
-**Status**: Testnet verified. 221 unit tests passing, 132/132 integration scenarios passing.
+**Status**: Testnet verified. 256 unit tests passing, 132/132 integration scenarios passing.
 **Author**: fyllepo (Discord: phileepphilop)
 **Repository**: [github.com/fyllepo/qugate-contract](https://github.com/fyllepo/qugate-contract)
 
@@ -520,7 +520,7 @@ Inactivity maintenance is deducted from this reserve, not from the gate's operat
 
 ## Gate-as-Recipient (Internal Routing)
 
-Recipients can be other gates, not just wallets. When a gate distributes funds (SPLIT, ROUND_ROBIN, RANDOM, CONDITIONAL, THRESHOLD), each share can route internally to another gate via `routeToGate()` instead of `qpi.transfer()`.
+Recipients can be other gates, not just wallets. When a gate distributes funds (SPLIT, ROUND_ROBIN, RANDOM, CONDITIONAL, THRESHOLD, MULTISIG), each share can route internally to another gate via `routeToGate()` instead of `qpi.transfer()`.
 
 ### How it works
 
@@ -787,8 +787,11 @@ Performs a linear scan of all gate slots. Returns up to 16 gates.
 |-------|------|-------------|
 | creationFee | uint64 | Base creation fee |
 | currentCreationFee | uint64 | Actual fee after escalation |
+| feeBurnBps | uint64 | Burn/dividend split in basis points (default 5000 = 50%) |
+| idleFee | uint64 | Base idle maintenance fee (before complexity scaling) |
+| idleWindowEpochs | uint64 | Quiet-epoch window before idle fee is charged |
+| idleGraceEpochs | uint64 | Grace window before delinquent gates expire |
 | minSendAmount | uint64 | Minimum send amount |
-| expiryEpochs | uint64 | Epochs of inactivity before expiry |
 
 #### fundGate (Input Type 10)
 
@@ -1112,7 +1115,10 @@ _freeSlots      Array<uint64, MAX_GATES>        Free-list stack (slot indices)
 _freeCount      uint64                          Number of entries in free-list
 _creationFee    uint64                          Base creation fee (adjustable)
 _minSendAmount  uint64                          Minimum send amount (adjustable)
-_expiryEpochs   uint64                          Inactivity epochs before expiry (adjustable)
+_idleFee        uint64                          Base idle maintenance fee (before complexity scaling)
+_idleWindowEpochs uint64                        Quiet-epoch window before idle fee is charged
+_idleGraceEpochs uint64                         Grace window before delinquent gates expire
+_feeBurnBps     uint64                          Burn/dividend split in basis points
 ```
 
 ### GateConfig Structure (~280 bytes per gate)
@@ -1385,11 +1391,11 @@ If a gate's admin MULTISIG gate expires or is closed, the gate owner can still c
 
 ### Lazy Expiry on Interaction
 
-When a procedure (`sendToGate`, `updateGate`, `closeGate`, `fundGate`, `setChain`) encounters an expired gate, it expires the gate inline and refunds all balances to the owner. The caller receives `QUGATE_GATE_NOT_ACTIVE` and their invocation reward is refunded. This means most expiries happen on first interaction after the inactivity window, rather than waiting for the next `END_EPOCH` sweep. The `END_EPOCH` sweep remains as a safety net for gates that nobody interacts with.
+When a procedure (`sendToGate`, `updateGate`, `closeGate`, `fundGate`, `setChain`) encounters a delinquent gate past its grace window, it expires the gate inline and refunds all balances to the owner. The caller receives `QUGATE_GATE_NOT_ACTIVE` and their invocation reward is refunded. This means most expiries happen on first interaction after the grace window, rather than waiting for the next `END_EPOCH` sweep. The `END_EPOCH` sweep remains as a safety net for gates that nobody interacts with.
 
 ### Heartbeat + Expiry Interaction
 
-Calling heartbeat() refreshes lastActivityEpoch, preventing the 50-epoch expiry from firing. If the owner stops calling heartbeat(), the heartbeat trigger fires first (at thresholdEpochs), then payouts run. The gate won't expire during active payouts because END_EPOCH payout processing counts as implicit activity.
+Calling heartbeat() refreshes lastActivityEpoch. While a heartbeat gate is in active hold (configured, not yet triggered), it is exempt from idle fees. If the owner stops calling heartbeat(), the heartbeat trigger fires (at thresholdEpochs), then payouts run. After trigger, the gate resumes normal idle charging. If reserve runs out, it becomes delinquent and eventually expires via the grace window.
 
 ### Round Robin After Recipient Reduction
 
@@ -1534,7 +1540,7 @@ g++ -std=c++17 -I. contract_qugate.cpp -lgtest -lgtest_main -o qugate_tests
 ./qugate_tests
 ```
 
-The test suite (`contract_qugate.cpp`) contains 221 unit tests covering:
+The test suite (`contract_qugate.cpp`) contains 256 unit tests covering:
 - All 8 active gate modes (split even/uneven/rounding, round-robin cycling, threshold accumulation/release, random selection, conditional whitelist/bounce, heartbeat dead-man's switch, M-of-N multisig approval, epoch-based time lock)
 - Chain gates (hop fees, chain reserve, depth limits, cycle detection)
 - Versioned gate IDs and sendToGateVerified
@@ -1603,7 +1609,7 @@ python3 tests/test_attack_vectors.py   # Security edge cases
 ### Testnet Results
 
 Tested on Qubic Core-Lite v1.283.0 (local testnet, 2026-04-03):
-- **221 unit tests passing** (fund conservation, mode lifecycle, governance, idle maintenance, edge cases, regression)
+- **256 unit tests passing** (fund conservation, mode lifecycle, governance, idle maintenance, edge cases, regression)
 - **132/132 integration scenarios passing** across 8 parallel wallet lanes
 - All 8 active gate modes verified: SPLIT, ROUND_ROBIN, THRESHOLD, RANDOM, CONDITIONAL, HEARTBEAT, MULTISIG, TIME_LOCK
 - Full governance lifecycle: admin gate attachment, approval windows, governed mutations, expiry recovery
