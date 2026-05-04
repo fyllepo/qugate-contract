@@ -7272,10 +7272,10 @@ public:
                     locals.gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
                     state.mut()._gates.set(locals.i, locals.gate);
                 }
-                if (locals.delinquentEpoch > 0)
-                {
-                    state.mut()._idleDelinquentEpochs.set(locals.i, 0);
-                }
+                // Delinquency is only cleared when idle fees are actually paid
+                // (in the fundedExternally or self-funded paths below).
+                // Neither hold state nor recent activity alone cures delinquency —
+                // prevents free delinquency cure by depositing dust into hold-state gates.
 
                 continue;
             }

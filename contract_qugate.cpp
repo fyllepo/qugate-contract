@@ -1556,10 +1556,9 @@ public:
                     gate.nextIdleChargeEpoch = qpi.epoch() + (uint16)state.get()._idleWindowEpochs;
                     state.mut()._gates.set(i, gate);
                 }
-                if (delinquentEpoch > 0)
-                {
-                    state.mut()._idleDelinquentEpochs.set(i, 0);
-                }
+                // Delinquency is only cleared when idle fees are actually paid
+                // (in the fundedExternally or self-funded paths below).
+                // Neither hold state nor recent activity alone cures delinquency.
 
                 continue;
             }
@@ -7766,7 +7765,7 @@ TEST(QuGateIdle, IdleDelinquencyWhenReserveInsufficient)
 }
 
 // Gate activity clears delinquency flag
-TEST(QuGateIdle, IdleDelinquencyCureAfterActivity)
+TEST(QuGateIdle, IdleDelinquencyCureAfterFundingReserve)
 {
     QuGateTest env;
     id recips[] = { BOB };
@@ -7778,12 +7777,14 @@ TEST(QuGateIdle, IdleDelinquencyCureAfterActivity)
     env.endEpoch();
     EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), 104);
 
-    // Activity cures delinquency (send resets lastActivityEpoch)
-    env.qpi._epoch = 105;
-    env.sendToGate(ALICE, out.gateId, 1000);
-    // endEpoch sees recent activity → clears delinquent flag
+    // Fund reserve so gate can pay at next charge
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 200000).result, QUGATE_SUCCESS);
+
+    // Advance past recently-active window so gate is actually charged and cured
+    env.qpi._epoch = 112;
     env.endEpoch();
-    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), 0);
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), 0)
+        << "Paying idle fee from reserve must cure delinquency";
     EXPECT_EQ(env.getGate(out.gateId).active, 1);
 }
 
@@ -8539,6 +8540,93 @@ TEST(QuGateRegression, OrphanAdminMultisigStillExpires)
     env.endEpoch();
 
     EXPECT_EQ(env.getGate(admin.gateId).active, 0) << "Orphaned standalone admin gate must be cleaned up";
+}
+
+// Delinquent MULTISIG cannot cure delinquency by depositing dust (hold-state DoS)
+TEST(QuGateRegression, MultisigDustDepositDoesNotCureDelinquency)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 1, 1, 10, 5), QUGATE_SUCCESS);
+    // No reserve — gate will become delinquent
+
+    // Run past idle window to trigger delinquency
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    EXPECT_GT(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), (uint16)0)
+        << "Gate should be delinquent with no reserve";
+
+    // Attacker deposits dust to enter hold state (currentBalance > 0)
+    env.qpi._epoch = 105;
+    env.sendToGate(ALICE, out.gateId, 1000);
+    EXPECT_GT(env.getGate(out.gateId).currentBalance, 0ULL);
+
+    // Run epoch sweeps — gate should expire once delinquency grace elapses
+    // (delinquent at 104, grace = 4 epochs, expires at/after 108)
+    for (int epoch = 106; epoch <= 115; epoch++)
+    {
+        env.qpi._epoch = epoch;
+        env.endEpoch();
+    }
+    EXPECT_EQ(env.getGate(out.gateId).active, 0)
+        << "Delinquent MULTISIG with dust deposit must still expire via grace";
+}
+
+// Delinquent THRESHOLD cannot cure delinquency by depositing below threshold
+TEST(QuGateRegression, ThresholdDustDepositDoesNotCureDelinquency)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_THRESHOLD, 1, recips, ratios, 500000);
+    // Threshold is 500000, no reserve
+
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    EXPECT_GT(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), (uint16)0);
+
+    // Deposit dust (below threshold) to enter hold state
+    env.qpi._epoch = 105;
+    env.sendToGate(ALICE, out.gateId, 1000);
+    EXPECT_EQ(env.getGate(out.gateId).currentBalance, 1000ULL);
+
+    // Run epoch sweeps — gate should expire once delinquency grace elapses
+    for (int epoch = 106; epoch <= 115; epoch++)
+    {
+        env.qpi._epoch = epoch;
+        env.endEpoch();
+    }
+    EXPECT_EQ(env.getGate(out.gateId).active, 0)
+        << "Delinquent THRESHOLD with dust deposit must still expire via grace";
+}
+
+// Paying idle fee from reserve cures delinquency
+TEST(QuGateRegression, PayingIdleFeeCuresDelinquency)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    // No reserve — goes delinquent
+
+    env.qpi._epoch = 104;
+    env.endEpoch();
+    EXPECT_GT(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), (uint16)0);
+
+    // Fund reserve so the gate can pay at next charge
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 200000).result, QUGATE_SUCCESS);
+
+    // Advance past recently-active window so gate is actually charged
+    env.qpi._epoch = 112;
+    env.endEpoch();
+
+    // Paying the fee should cure delinquency
+    EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), (uint16)0)
+        << "Paying idle fee must cure delinquency";
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
 }
 
 // Unconfigured HEARTBEAT with no reserve expires via delinquency
