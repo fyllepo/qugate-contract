@@ -8530,6 +8530,27 @@ TEST(QuGateRegression, OrphanAdminMultisigStillExpires)
     EXPECT_EQ(env.getGate(admin.gateId).active, 0) << "Orphaned standalone admin gate must be cleaned up";
 }
 
+// Unconfigured TIME_LOCK with no reserve expires via delinquency
+TEST(QuGateRegression, UnconfiguredTimeLockExpiresViaDelinquency)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    // Do NOT call configureTimeLock — leave it unconfigured
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+
+    // Run epoch sweeps past idle window + grace period
+    for (int epoch = 101; epoch <= 120; epoch++)
+    {
+        env.qpi._epoch = epoch;
+        env.endEpoch();
+    }
+
+    EXPECT_EQ(env.getGate(out.gateId).active, 0)
+        << "Unconfigured TIME_LOCK with no reserve must expire via delinquency";
+}
+
 // ── Auto-reset time-lock tests ──────────────────────────────────────────
 
 // Auto-reset absolute: gate fires, resets, stays active, accepts new deposits
