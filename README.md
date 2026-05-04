@@ -149,7 +149,7 @@ A heartbeat gate holds funds and distributes them to direct wallet beneficiaries
 
 ### Procedures
 - `configureHeartbeat(gateId, thresholdEpochs, payoutPercent, minimumBalance, beneficiaries[])` - owner only, charges a threshold-scaled fee after validation
-- `heartbeat(gateId)` - owner only, resets epoch counter and charges a pro-rated maintenance cost with a 1,000 QU floor. Rejected after trigger.
+- `heartbeat(gateId)` - owner only, resets epoch counter and charges a flat 1,000 QU anti-spam fee. Rejected after trigger.
 - `getHeartbeat(gateId)` - read-only query
 
 ### Example use cases
@@ -866,7 +866,7 @@ Configures heartbeat mode on a HEARTBEAT gate. Owner only. Sets the inactivity t
 
 #### heartbeat (Input Type 14)
 
-Resets the heartbeat epoch counter. Owner only. Rejected after the gate has triggered. Charges a pro-rated maintenance cost based on elapsed time since the last heartbeat: `max(1000, fullMaintenanceCost * elapsedEpochs / idleWindow)`, where `fullMaintenanceCost` includes own idle fee, downstream drain, shielding surcharge, and any admin-gate drain.
+Resets the heartbeat epoch counter. Owner only. Rejected after the gate has triggered. Charges a flat 1,000 QU anti-spam fee. Reserve maintenance for the gate and any gates declaring it as their funding source is handled separately via the idle fee mechanism in END_EPOCH.
 
 **Input**: `gateId` (uint64)
 
@@ -1176,30 +1176,19 @@ Use `getFees()` to query the current escalated fee before creating a gate.
 
 ### Gate Expiry
 
-Gates can expire for two reasons:
+Gates expire only through **delinquency**: when a gate can't pay its idle fee, it becomes delinquent and gets a grace period before expiry. There is no separate inactivity expiry — paying idle fees from reserve counts as active slot usage. Well-funded gates survive indefinitely.
 
-1. inactivity for `_expiryEpochs` epochs
-2. unpaid maintenance after the delinquency grace window
+The contract uses two complementary mechanisms:
 
-The contract still uses two complementary mechanisms:
+1. **Lazy expiry on interaction**: When any procedure (`sendToGate`, `sendToGateVerified`, `updateGate`, `closeGate`, `fundGate`, `setChain`) touches a gate, it checks whether the gate's delinquency grace has elapsed. If so, the gate is expired inline, balances refunded, slot freed, and the caller refunded.
 
-1. **Lazy expiry on interaction** (primary): When any procedure (`sendToGate`, `sendToGateVerified`, `updateGate`, `closeGate`, `fundGate`, `setChain`) touches a gate, it checks whether the gate has exceeded its inactivity window. If so, the gate is expired inline, balances (currentBalance and reserve) are refunded to the owner, the slot is freed, and the caller is refunded. The `getGate` function also reports expired gates as `active=0` without mutating state.
-
-2. **END_EPOCH sweep** (safety net): The `END_EPOCH` handler still scans all gates each epoch. This catches gates that nobody interacts with. At scale, most expiries happen lazily, reducing `END_EPOCH` processing load.
-
-The inactivity expiry check uses:
-
-```
-if (epoch() - lastActivityEpoch >= expiryEpochs)  →  expire
-```
+2. **END_EPOCH sweep** (safety net): The `END_EPOCH` handler scans all gates each epoch, catching delinquent gates whose grace has elapsed.
 
 Expired gates:
 - Have any held balance (currentBalance and reserve) refunded to the owner
 - Are marked inactive
 - Have their slot pushed onto the free-list
 - Have their generation counter incremented (invalidates old gate IDs)
-
-Default inactivity expiry: 50 epochs (approximately 1 year at current epoch length). Set to 0 to disable inactivity expiry entirely. Shareholder-adjustable.
 
 ### Maintenance delinquency
 
@@ -1238,7 +1227,7 @@ QuGate uses a hybrid fee model with a governed burn/dividend split:
 - **Creation fees**: split between burn and shareholder dividends (default 50/50)
 - **Heartbeat configuration fees**: threshold-scaled and split between burn and shareholder dividends
 - **Time-lock configuration fees**: duration-scaled and split between burn and shareholder dividends
-- **Heartbeat pings**: pro-rated maintenance cost, split between burn and shareholder dividends
+- **Heartbeat pings**: flat 1,000 QU anti-spam fee, split between burn and shareholder dividends
 - **Successful anti-spam mutations** (`updateGate`, `configureMultisig`, `cancelTimeLock`, `setAdminGate`): 100% burned
 - **Dust amounts**: 100% burned when sends are below minimum
 - **Chain hop fees**: 100% burned on each routed hop

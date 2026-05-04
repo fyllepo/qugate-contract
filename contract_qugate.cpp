@@ -275,7 +275,6 @@ constexpr uint64 QUGATE_IDLE_MAX_RECIPIENT_MULTIPLIER_BPS = 20000;
 constexpr uint64 QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS = 15000;
 constexpr uint64 QUGATE_IDLE_MULTISIG_MULTIPLIER_BPS = 15000;
 constexpr uint64 QUGATE_IDLE_CHAIN_EXTRA_BPS = 5000;
-constexpr uint64 QUGATE_IDLE_SHIELD_PER_TARGET_BPS = 5000;  // +0.5x surcharge per downstream target shielded
 constexpr uint64 QUGATE_FEE_DIVIDEND_BPS = 5000;     // 50% to shareholders
 
 // Idle maintenance defaults
@@ -1645,14 +1644,14 @@ public:
             }
         }
 
-        // Expire inactive gates (inactivity expiry OR delinquency grace expiry)
+        // Expire gates via delinquency grace expiry
         for (uint64 i = 0; i < state.get()._gateCount; i++)
         {
             GateConfig gate = state.get()._gates.get(i);
             uint16 delinquentEpoch = state.get()._idleDelinquentEpochs.get(i);
             if (gate.active == 1 && state.get()._expiryEpochs > 0)
             {
-                // Exempt hold-state gates from inactivity expiry
+                // Exempt hold-state gates from expiry (admin gate scan)
                 if (gate.mode == MODE_TIME_LOCK)
                 {
                     QUGATE_TimeLockConfig_Test tlCfg = state.get()._timeLockConfigs.get(i);

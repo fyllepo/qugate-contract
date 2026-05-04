@@ -1470,23 +1470,10 @@ public:
         uint64 slotIdx;
         uint64 encodedGen;
         QUGATE_HeartbeatConfig cfg;
-        // Maintenance cost computation
+        // Flat ping fee
         uint64 maintenanceCost;
-        uint64 ownMultiplierBps;
-        uint64 ownIdleFee;
-        uint64 downstreamCount;
-        uint64 downstreamTotalFee;
-        uint64 downstreamSlot;
-        uint64 downstreamGen;
-        GateConfig downstreamGate;
-        uint64 downstreamMultBps;
-        uint64 surcharge;
-        uint64 adminFee;
-        uint64 elapsedEpochs;
-        uint64 proratedCost;
         uint64 burnAmount;
         uint64 dividendAmount;
-        uint8  dsIdx;
     };
 
     struct getHeartbeat_locals
