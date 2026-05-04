@@ -7155,10 +7155,9 @@ public:
             else if (locals.gate.mode == QUGATE_MODE_TIME_LOCK)
             {
                 locals.tlCfg = state.get()._timeLockConfigs.get(locals.i);
-                if (locals.tlCfg.active == 0)
-                {
-                    locals.maintenanceEligible = 0;
-                }
+                // Unconfigured TIME_LOCK gates (active==0) are still maintenance-eligible
+                // so they become delinquent and expire if they can't pay idle fees.
+                // Only read the config here for the activeHold check below.
             }
 
             if (locals.maintenanceEligible == 0 || state.get()._idleFee == 0)

@@ -1475,6 +1475,21 @@ public:
             if (gate.active == 0) continue;
             if (state.get()._idleFee == 0) continue;
 
+            // Maintenance eligibility: unconfigured mode-specific gates skip maintenance
+            bool maintenanceEligible = true;
+            if (gate.mode == MODE_HEARTBEAT)
+            {
+                QUGATE_HeartbeatConfig_Test hbCfg = state.get()._heartbeatConfigs.get(i);
+                if (hbCfg.active == 0) maintenanceEligible = false;
+            }
+            else if (gate.mode == MODE_MULTISIG)
+            {
+                QUGATE_MultisigConfig_Test msCfg = state.get()._multisigConfigs.get(i);
+                if (msCfg.guardianCount == 0 || msCfg.required == 0) maintenanceEligible = false;
+            }
+            // TIME_LOCK: unconfigured gates ARE maintenance-eligible (they must go delinquent)
+            if (!maintenanceEligible) continue;
+
             // Admin gate drain: governed gate pays its admin multisig's idle fees.
             // Only fires once per idle window cycle.
             bool adminCycleDue = (gate.nextIdleChargeEpoch > 0 && qpi.epoch() >= gate.nextIdleChargeEpoch)
@@ -7936,8 +7951,14 @@ TEST(QuGateComplexity, HeartbeatGatePaysHigherFee)
     id recips[] = { BOB };
     uint64 ratios[] = { 0 };
     auto out = makeSimpleGate(env, ALICE, 100000, MODE_HEARTBEAT, 1, recips, ratios);
+    uint8 shares[] = { 100 };
+    ASSERT_EQ(env.configureHeartbeat(ALICE, out.gateId, 10, 100, 0, recips, shares, 1), QUGATE_SUCCESS);
+    // Trigger heartbeat so gate exits hold state and pays idle fees
+    env.qpi._epoch = 111; // past threshold (10 epochs from epoch 100)
+    env.endEpoch(); // triggers payout
+    // Fund reserve for idle fee test
     ASSERT_EQ(env.fundGate(ALICE, out.gateId, 200000).result, QUGATE_SUCCESS);
-    env.qpi._epoch = 104;
+    env.qpi._epoch = 115; // past idle window from trigger
     env.endEpoch();
     uint64 charged = 200000 - (uint64)env.getGate(out.gateId).reserve;
     uint64 expected = QPI::div(QUGATE_DEFAULT_MAINTENANCE_FEE * QUGATE_IDLE_HEARTBEAT_MULTIPLIER_BPS, 10000ULL);
@@ -7951,6 +7972,8 @@ TEST(QuGateComplexity, MultisigGatePaysHigherFee)
     id recips[] = { DAVE };
     uint64 ratios[] = { 0 };
     auto out = makeSimpleGate(env, ALICE, 100000, MODE_MULTISIG, 1, recips, ratios);
+    id guardians[] = { BOB };
+    ASSERT_EQ(env.configureMultisig(ALICE, out.gateId, guardians, 1, 1, 10, 5), QUGATE_SUCCESS);
     ASSERT_EQ(env.fundGate(ALICE, out.gateId, 200000).result, QUGATE_SUCCESS);
     env.qpi._epoch = 104;
     env.endEpoch();
