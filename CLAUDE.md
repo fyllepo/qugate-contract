@@ -30,7 +30,7 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 - **Complexity-based idle fees**: Base fee (25K) scaled by gate complexity: 1x simple, 1.5x for 3+ recipients/HEARTBEAT/MULTISIG, 2x for 8 recipients, +0.5x for chain links.
 - **Heartbeat ping**: `heartbeat()` charges flat 1,000 QU anti-spam fee. `configureHeartbeat()` charges threshold-scaled fee: `creationFee * (1 + thresholdEpochs / idleWindow)`.
 - **Admin gate expiry exemption**: Admin-only multisigs that govern at least one active gate are exempt from expiry (scanned in expiry loop). Admin drain only refreshes activity on successful payment.
-- **Transfer-first**: All `qpi.transfer()` calls check `>= 0` before mutating state. Tagged `[QG-01]` through `[QG-17]`.
+- **Transfer-first**: All `qpi.transfer()` calls check `>= 0` before mutating state. Tagged `[QG-01]` through `[QG-19]`.
 - **invReward capture**: Every procedure captures `qpi.invocationReward()` into `locals.invReward` at entry.
 
 ## Procedures & Functions (27 total: 15 procedures + 12 functions)
