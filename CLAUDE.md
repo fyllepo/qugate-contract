@@ -17,7 +17,7 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 | _(reserved)_ | 5 | Reserved for future use |
 | HEARTBEAT | 6 | Dead-man's switch — distribute if no ping for N epochs |
 | MULTISIG | 7 | M-of-N guardian approval before release |
-| TIME_LOCK | 8 | Hold until unlock epoch |
+| TIME_LOCK | 8 | Hold until unlock epoch (optional auto-reset for repeating cycles) |
 
 ## Key Architecture
 - **Versioned gate IDs**: `gateId = ((generation+1) << 20) | slotIndex`. Prevents stale ID reuse.
@@ -73,6 +73,7 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 | `fundGate_input` | 8 bytes | just `gateId` (no reserveTarget) |
 | `withdrawReserve_input` | 16 bytes | `gateId` at 0, `amount` at 8 (no reserveTarget) |
 | `setFundingSource_input` | 16 bytes | `gateId` at 0, `fundingSourceGateId` at 8 |
+| `configureTimeLock_input` | 24 bytes | `gateId` at 0, `unlockEpoch` at 8, `delayEpochs` at 12, `lockMode` at 16, `cancellable` at 17, `autoReset` at 18 |
 | `heartbeat_output` | 20 bytes | `status` at 0, `epochRecorded` at 8, `feePaid` at 12 |
 
 ## Error Codes
@@ -97,7 +98,7 @@ QuGate is a Qubic blockchain smart contract — a programmable payment routing p
 10. **Anti-spam fees charge after validation** — all validation (gate ID, auth, mode, params) completes before the fee is burned. Rejected calls are fully refunded. No duplicate fee blocks.
 
 ## Testing
-- `contract_qugate.cpp` — 236 unit tests (Google Test, Allman style)
+- `contract_qugate.cpp` — 248 unit tests (Google Test, Allman style)
 - `tests/` — 18 Python integration test files, 132 scenarios (require live testnet node at 127.0.0.1:41841)
 - CI: style lint ✅, integration tests skip in CI ✅
 - Guard rails: `scripts/contract_guard.py` checks harness constant drift, public-function/private-procedure misuse, and warns on large locals hotspots

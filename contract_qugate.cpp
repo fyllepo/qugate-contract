@@ -395,6 +395,7 @@ struct QUGATE_TimeLockConfig_Test {
     uint8  fired;
     uint8  cancelled;
     uint8  active;
+    uint8  autoReset;
 };
 
 struct QUGATE_AdminApprovalState_Test {
@@ -1980,14 +1981,24 @@ public:
                     continue;
                 }
 
-                cfg.fired = 1;
-                state.mut()._timeLockConfigs.set(i, cfg);
-                gate.active = 0;
-                state.mut()._gates.set(i, gate);
-                state.mut()._activeGates -= 1;
-                state.mut()._freeSlots.set(state.get()._freeCount, i);
-                state.mut()._freeCount += 1;
-                state.mut()._gateGenerations.set(i, state.get()._gateGenerations.get(i) + 1);
+                if (cfg.autoReset == 1)
+                {
+                    // Auto-reset: ready for next deposit cycle
+                    cfg.fired = 0;
+                    cfg.unlockEpoch = 0; // relative mode re-anchors on next funding
+                    state.mut()._timeLockConfigs.set(i, cfg);
+                }
+                else
+                {
+                    cfg.fired = 1;
+                    state.mut()._timeLockConfigs.set(i, cfg);
+                    gate.active = 0;
+                    state.mut()._gates.set(i, gate);
+                    state.mut()._activeGates -= 1;
+                    state.mut()._freeSlots.set(state.get()._freeCount, i);
+                    state.mut()._freeCount += 1;
+                    state.mut()._gateGenerations.set(i, state.get()._gateGenerations.get(i) + 1);
+                }
             }
         }
     }
@@ -2452,7 +2463,7 @@ public:
 
     // ---- configureTimeLock (simplified harness) ----
     sint64 configureTimeLock(const id& caller, uint64 gateId, uint32 unlockEpoch,
-                             uint8 lockMode, uint8 cancellable)
+                             uint8 lockMode, uint8 cancellable, uint8 autoReset = 0)
     {
         qpi.reset();
         qpi._invocator = caller;
@@ -2501,6 +2512,7 @@ public:
 
         cfg.lockMode = lockMode;
         cfg.cancellable = cancellable;
+        cfg.autoReset = autoReset;
         cfg.active = 1;
         state.mut()._timeLockConfigs.set(idx, cfg);
         return QUGATE_SUCCESS;
@@ -8460,4 +8472,166 @@ TEST(QuGateIdle, ActiveGateStillPaysAdminDrain)
     auto adminAfter = env.getGate(admin.gateId);
     EXPECT_EQ(adminAfter.active, 1);
     EXPECT_EQ(adminAfter.lastActivityEpoch, 104);
+}
+
+// ── Auto-reset time-lock tests ──────────────────────────────────────────
+
+// Auto-reset absolute: gate fires, resets, stays active, accepts new deposits
+TEST(QuGateTimeLock, TimeLockAutoResetAbsoluteFiresAndResets)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 105, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1, 1), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 5000);
+
+    // Fire at unlock epoch
+    env.qpi._epoch = 105;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 5000);
+
+    // Gate stays active with reset state
+    auto g = env.getGate(out.gateId);
+    EXPECT_EQ(g.active, 1);
+    EXPECT_EQ(g.currentBalance, 0ULL);
+
+    auto cfg = env.state.get()._timeLockConfigs.get(out.gateId - 1);
+    EXPECT_EQ(cfg.fired, 0);
+    EXPECT_EQ(cfg.unlockEpoch, 0U);
+    EXPECT_EQ(cfg.autoReset, 1);
+}
+
+// Auto-reset: gate accepts new deposits after reset and fires again
+TEST(QuGateTimeLock, TimeLockAutoResetAcceptsNewDepositsAndFiresAgain)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 5, QUGATE_TIME_LOCK_RELATIVE_EPOCHS, 1, 1), QUGATE_SUCCESS);
+
+    // First cycle: deposit at epoch 110, fires at 115
+    env.qpi._epoch = 110;
+    env.sendToGate(ALICE, out.gateId, 3000);
+    env.qpi._epoch = 115;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 3000);
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+
+    // Second cycle: deposit at epoch 120, re-anchors to 125
+    // (sendToGate resets qpi transfer tracking)
+    env.qpi._epoch = 120;
+    env.sendToGate(ALICE, out.gateId, 7000);
+    auto cfg = env.state.get()._timeLockConfigs.get(out.gateId - 1);
+    EXPECT_EQ(cfg.unlockEpoch, 125U);
+
+    env.qpi._epoch = 125;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 7000); // second cycle only
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+}
+
+// Auto-reset relative: unlock epoch re-anchors on next deposit
+TEST(QuGateTimeLock, TimeLockAutoResetRelativeReAnchors)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 10, QUGATE_TIME_LOCK_RELATIVE_EPOCHS, 1, 1), QUGATE_SUCCESS);
+
+    // First cycle
+    env.qpi._epoch = 100;
+    env.sendToGate(ALICE, out.gateId, 2000);
+    EXPECT_EQ(env.state.get()._timeLockConfigs.get(out.gateId - 1).unlockEpoch, 110U);
+
+    env.qpi._epoch = 110;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 2000);
+
+    // After reset, unlockEpoch is 0 — waiting for re-anchor
+    auto cfg = env.state.get()._timeLockConfigs.get(out.gateId - 1);
+    EXPECT_EQ(cfg.unlockEpoch, 0U);
+    EXPECT_EQ(cfg.delayEpochs, 10U); // delay preserved
+
+    // New deposit at epoch 200 re-anchors to 210
+    // (sendToGate resets qpi transfer tracking)
+    env.qpi._epoch = 200;
+    env.sendToGate(ALICE, out.gateId, 4000);
+    EXPECT_EQ(env.state.get()._timeLockConfigs.get(out.gateId - 1).unlockEpoch, 210U);
+
+    env.qpi._epoch = 210;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4000); // second cycle only
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+}
+
+// Without auto-reset, gate closes as usual after firing
+TEST(QuGateTimeLock, TimeLockNoAutoResetClosesAsUsual)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 0 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 105, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1, 0), QUGATE_SUCCESS);
+    env.sendToGate(ALICE, out.gateId, 5000);
+    env.qpi._epoch = 105;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 5000);
+    EXPECT_EQ(env.getGate(out.gateId).active, 0);
+
+    auto cfg = env.state.get()._timeLockConfigs.get(out.gateId - 1);
+    EXPECT_EQ(cfg.fired, 1);
+}
+
+// Auto-reset with gate-as-recipient: fires, resets, routes again on next cycle
+TEST(QuGateTimeLock, TimeLockAutoResetGateAsRecipient)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_TIME_LOCK, 1, recips, ratios);
+    GateConfig gate = env.state.get()._gates.get(out.gateId - 1);
+    gate.recipientGateIds.set(0, downstream.gateId);
+    env.state.mut()._gates.set(out.gateId - 1, gate);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 105, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1, 1), QUGATE_SUCCESS);
+
+    env.sendToGate(ALICE, out.gateId, 5000);
+    env.qpi._epoch = 105;
+    env.endEpoch();
+    // Split takes 20% fee, BOB gets 80% of 5000 = 4000
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4000);
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+}
+
+// Auto-reset with chain forward: fires, resets, forwards again on next cycle
+TEST(QuGateTimeLock, TimeLockAutoResetChainForward)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto downstream = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    createGate_input in;
+    memset(&in, 0, sizeof(in));
+    for (uint8 _ri = 0; _ri < 8; _ri++) in.recipientGateIds.set(_ri, -1);
+    in.mode = MODE_TIME_LOCK;
+    in.recipientCount = 0;
+    in.chainNextGateId = downstream.gateId;
+    auto out = env.createGate(ALICE, 100000, in);
+    ASSERT_EQ(out.status, QUGATE_SUCCESS);
+    ASSERT_EQ(env.configureTimeLock(ALICE, out.gateId, 105, QUGATE_TIME_LOCK_ABSOLUTE_EPOCH, 1, 1), QUGATE_SUCCESS);
+
+    env.sendToGate(ALICE, out.gateId, 5000);
+    env.qpi._epoch = 105;
+    env.endEpoch();
+    EXPECT_EQ(env.qpi.totalTransferredTo(BOB), 4000);
+    EXPECT_EQ(env.getGate(out.gateId).active, 1);
+    EXPECT_EQ(env.getGate(out.gateId).totalForwarded, 5000ULL);
+
+    // Verify reset state
+    auto cfg = env.state.get()._timeLockConfigs.get(out.gateId - 1);
+    EXPECT_EQ(cfg.fired, 0);
+    EXPECT_EQ(cfg.unlockEpoch, 0U);
 }

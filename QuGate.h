@@ -218,6 +218,7 @@ struct QUGATE_TimeLockConfig
     uint8  fired;          // 1 once funds have been released
     uint8  cancelled;      // 1 if cancelled by owner
     uint8  active;         // 1 = time lock is configured on this gate
+    uint8  autoReset;      // 1 = after firing, reset and accept new deposits (repeating cycle)
 };
 
 // Per-gate allowed-senders configuration.
@@ -478,6 +479,7 @@ public:
         uint32 delayEpochs;   // relative mode: must be > 0
         uint8  lockMode;      // 0 = absolute epoch, 1 = relative epochs
         uint8  cancellable;   // 1 = allow owner to cancel before unlock
+        uint8  autoReset;     // 1 = after firing, reset and accept new deposits
     };
     struct configureTimeLock_output
     {
@@ -645,6 +647,7 @@ public:
         uint8  fired;
         uint8  cancelled;
         uint8  active;
+        uint8  autoReset;
         sint64 currentBalance;
         uint32 currentEpoch;
         uint32 epochsRemaining;  // 0 if fired or past unlock epoch
@@ -5857,6 +5860,7 @@ public:
         locals.cfg.delayEpochs = input.delayEpochs;
         locals.cfg.lockMode = input.lockMode;
         locals.cfg.cancellable = input.cancellable;
+        locals.cfg.autoReset = input.autoReset;
         locals.cfg.fired = 0;
         locals.cfg.cancelled = 0;
         locals.cfg.active = 1;
@@ -6173,6 +6177,7 @@ public:
         output.fired = locals.cfg.fired;
         output.cancelled = locals.cfg.cancelled;
         output.active = locals.cfg.active;
+        output.autoReset = locals.cfg.autoReset;
         output.currentBalance = (sint64)locals.gate.currentBalance;
         output.currentEpoch = (uint32)qpi.epoch();
         if (locals.cfg.fired == 1 || locals.cfg.unlockEpoch == 0 || (uint32)qpi.epoch() >= locals.cfg.unlockEpoch)
@@ -7927,9 +7932,6 @@ public:
                     continue;
                 }
 
-                locals.tlCfg.fired = 1;
-                state.mut()._timeLockConfigs.set(locals.i, locals.tlCfg);
-
                 // Log fired
                 locals.logger._contractIndex = CONTRACT_INDEX;
                 locals.logger._type = QUGATE_LOG_TIME_LOCK_FIRED;
@@ -7938,15 +7940,28 @@ public:
                 locals.logger.amount = (sint64)locals.gate.totalForwarded;
                 LOG_INFO(locals.logger);
 
-                // Close the gate
-                locals.gate = state.get()._gates.get(locals.i);
-                locals.gate.active = 0;
-                state.mut()._gates.set(locals.i, locals.gate);
-                state.mut()._activeGates -= 1;
+                if (locals.tlCfg.autoReset == 1)
+                {
+                    // Auto-reset: ready for next deposit cycle instead of closing
+                    locals.tlCfg.fired = 0;
+                    locals.tlCfg.unlockEpoch = 0; // relative mode re-anchors on next funding
+                    state.mut()._timeLockConfigs.set(locals.i, locals.tlCfg);
+                }
+                else
+                {
+                    locals.tlCfg.fired = 1;
+                    state.mut()._timeLockConfigs.set(locals.i, locals.tlCfg);
 
-                state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
-                state.mut()._freeCount += 1;
-                state.mut()._gateGenerations.set(locals.i, state.get()._gateGenerations.get(locals.i) + 1);
+                    // Close the gate
+                    locals.gate = state.get()._gates.get(locals.i);
+                    locals.gate.active = 0;
+                    state.mut()._gates.set(locals.i, locals.gate);
+                    state.mut()._activeGates -= 1;
+
+                    state.mut()._freeSlots.set(state.get()._freeCount, locals.i);
+                    state.mut()._freeCount += 1;
+                    state.mut()._gateGenerations.set(locals.i, state.get()._gateGenerations.get(locals.i) + 1);
+                }
             }
         }
     }
