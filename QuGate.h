@@ -7479,10 +7479,9 @@ public:
 
                     state.mut()._gates.set(locals.i, locals.gate);
 
-                    if (locals.gate.currentBalance > 0 || locals.gate.reserve > 0)
-                    {
-                        continue;
-                    }
+                    // If refund transfers failed, the remaining balance/reserve stays
+                    // in the contract. Expire the gate anyway to prevent immortal slots.
+                    // The owner can recover residual funds via a separate mechanism if needed.
 
                     // Clear mode-specific configs on expiry (prevents ghost state in recycled slots)
                     if (locals.gate.mode == QUGATE_MODE_HEARTBEAT)

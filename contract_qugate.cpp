@@ -1722,10 +1722,7 @@ public:
                         }
                     }
                     state.mut()._gates.set(i, gate);
-                    if (gate.currentBalance > 0 || gate.reserve > 0)
-                    {
-                        continue;
-                    }
+                    // Expire even if refund failed — prevent immortal slots
                     gate.active = 0;
                     state.mut()._gates.set(i, gate);
                     state.mut()._activeGates -= 1;
@@ -8627,6 +8624,33 @@ TEST(QuGateRegression, PayingIdleFeeCuresDelinquency)
     EXPECT_EQ(env.state.get()._idleDelinquentEpochs.get(out.gateId - 1), (uint16)0)
         << "Paying idle fee must cure delinquency";
     EXPECT_EQ(env.getGate(out.gateId).active, 1);
+}
+
+// Gate with residual reserve still expires even if refund transfer fails
+TEST(QuGateRegression, ExpiryNotBlockedByFailedRefundTransfer)
+{
+    QuGateTest env;
+    id recips[] = { BOB };
+    uint64 ratios[] = { 100 };
+    auto out = makeSimpleGate(env, ALICE, 100000, MODE_SPLIT, 1, recips, ratios);
+    // Give a small reserve that's below the idle fee
+    ASSERT_EQ(env.fundGate(ALICE, out.gateId, 12500).result, QUGATE_SUCCESS);
+
+    // Make transfer to owner fail (simulates network/contract transfer failure)
+    env.qpi.failTransfersTo(ALICE, 100);
+
+    // Advance to delinquency + grace
+    for (int epoch = 101; epoch <= 120; epoch++)
+    {
+        env.qpi._epoch = epoch;
+        env.endEpoch();
+    }
+
+    env.qpi.clearTransferFailures();
+
+    // Gate must expire even though the reserve refund transfer failed
+    EXPECT_EQ(env.getGate(out.gateId).active, 0)
+        << "Gate must expire even if reserve refund transfer fails";
 }
 
 // Unconfigured HEARTBEAT with no reserve expires via delinquency
